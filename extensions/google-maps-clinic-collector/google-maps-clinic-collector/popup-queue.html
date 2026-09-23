@@ -1,0 +1,13 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>Google Maps Clinic Collector</title><style>
+body{font-family:system-ui,sans-serif;width:620px;margin:0;padding:16px;color:#202124}h1{font-size:20px;margin:0 0 8px}.sub{color:#5f6368;font-size:12px;margin-bottom:12px}.box{border:1px solid #dadce0;border-radius:10px;padding:12px;margin:10px 0}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}button{padding:8px 12px;border:0;border-radius:6px;background:#1a73e8;color:white;cursor:pointer}button.secondary{background:#5f6368}button.danger{background:#c5221f}button:disabled{opacity:.45;cursor:not-allowed}input[type=file]{max-width:100%}.metrics{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}.m{background:#f8f9fa;border-radius:8px;padding:8px;text-align:center}.m b{display:block;font-size:18px}.current{font-weight:600;word-break:break-all}.logs{height:120px;overflow:auto;background:#111;color:#ddd;padding:8px;font:11px monospace;border-radius:6px}.note{font-size:12px;color:#5f6368}.good{color:#188038}.warn{color:#b06000}
+</style></head><body>
+<h1>Google Maps Clinic Collector <span style="font-size:12px;color:#188038">v5.7.0</span></h1>
+<div class="sub">厚生局を母集団に「医院名＋電話番号」で1医院ずつ本人確認。病院・センターは検索前に除外します。</div>
+<div class="box"><b>1. 厚生局/マスターCSVを読み込む</b><p class="note">clinic_name/医院名/名前 と phone/電話番号/Tel1 が必要です。internal_clinic_id・医療機関番号・住所・都道府県があれば精度が上がります。</p><input id="file" type="file" accept=".csv,text/csv"><div id="loadmsg" class="note"></div></div>
+<div class="box"><b>2. Google Maps一括調査</b><div class="row" style="margin-top:8px"><button id="start">開始</button><button id="pause" class="secondary">一時停止</button><button id="resume">続きから再開</button><button id="download" class="secondary">現在までの結果CSV保存</button><button id="reset" class="danger">進捗リセット</button></div><p class="note">速度より精度優先。電話一致を最優先し、失敗時のみ「医院名＋住所」を試します。CAPTCHA/アクセス制限は回避せず一時停止します。</p></div>
+<div class="box"><div id="state">状態: 待機中</div><div class="current" id="current">-</div><div class="metrics" style="margin-top:10px">
+<div class="m">予定<b id="total">0</b></div><div class="m">完了<b id="done">0</b></div><div class="m">Maps一致<b id="matched">0</b></div><div class="m">HP取得<b id="website">0</b></div><div class="m">HPなし<b id="noweb">0</b></div>
+<div class="m">未発見<b id="notfound">0</b></div><div class="m">要確認<b id="amb">0</b></div><div class="m">除外<b id="excluded">0</b></div><div class="m">エラー<b id="error">0</b></div><div class="m">未処理<b id="remaining">0</b></div>
+</div></div>
+<div class="box"><b>ログ</b><div id="logs" class="logs"></div></div>
+<script src="queue-logic.js"></script><script src="popup-queue.js"></script></body></html>

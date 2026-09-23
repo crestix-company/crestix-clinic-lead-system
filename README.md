@@ -54,3 +54,15 @@ py -3.12 -m venv .venv
 ## DB更新
 
 旧DBを削除・初期化しません。初回2.1.0起動時に必要なMaps列・テーブルを後方互換で追加し、更新前DBバックアップを作成します。
+
+## Google Maps Clinic Collector
+
+Google Maps公式HP取得にはChrome拡張
+`extensions/google-maps-clinic-collector/google-maps-clinic-collector`
+を使用します。
+
+Current version: v5.7.0
+
+複数PC運用は
+`extensions/google-maps-clinic-collector/MULTI_PC_SETUP.md`
+を参照してください。

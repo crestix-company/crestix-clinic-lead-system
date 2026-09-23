@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "Google Maps Clinic Collector",
+  "version": "5.7.0",
+  "description": "厚生局クリニックを母集団に、医院名＋電話番号でGoogle Maps本人確認しBusiness ProfileのウェブサイトURLを高精度収集。途中停止・再開・CSV保存対応。",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "unlimitedStorage",
+    "notifications",
+    "downloads",
+    "power",
+    "alarms",
+    "tabs",
+    "offscreen"
+  ],
+  "host_permissions": [
+    "https://www.google.com/maps/*",
+    "https://www.google.co.jp/maps/*"
+  ],
+  "action": {
+    "default_popup": "popup-queue.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "service-worker-v3.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.co.jp/maps/*",
+        "https://www.google.com/maps/*"
+      ],
+      "js": [
+        "content.js"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "config/areas.json",
+        "config/genres.json"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
