@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "version": "2.5.5-research",
+  "passed_at": "2026-09-18T21:48:51+09:00",
+  "source_db_sha256": "2c249dd6d648809174d3d9f4d091c7274f180b696676b456aae12cc53a8934d2",
+  "source_db_modified": false,
+  "test_database": "C:\\Users\\kazum\\OneDrive\\Desktop\\clinic-list-filter-complete\\v255_test_output\\clinics_v255_regression50_20260918_213230.sqlite3",
+  "csv": "C:\\Users\\kazum\\OneDrive\\Desktop\\clinic-list-filter-complete\\v255_test_output\\v255_50_regression_20260918_213230.csv",
+  "tested_count": 50,
+  "tavily_calls": 0
+}

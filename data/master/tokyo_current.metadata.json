@@ -1,0 +1,15 @@
+{
+  "records": 13954,
+  "as_of": [
+    "2026-09-01"
+  ],
+  "status": {
+    "現存": 13898,
+    "休止": 56
+  },
+  "facility_type": {
+    "診療所": 13332,
+    "病院": 622
+  },
+  "source": "https://kouseikyoku.mhlw.go.jp/kantoshinetsu/chousa/shitei.html"
+}

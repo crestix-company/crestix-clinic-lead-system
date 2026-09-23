@@ -1,0 +1,17 @@
+{
+  "updated_files": [
+    "app_v2.py",
+    "src/normalizer/phone.py",
+    "src/master/matching.py",
+    "src/master/store.py",
+    "src/master/filters.py",
+    "src/master/reintegration.py",
+    "README_V2.md",
+    "tests/test_v3_reintegration.py",
+    "scripts/verify_fixed_export.py"
+  ],
+  "new_files": [
+    "src/master/reintegration.py",
+    "tests/test_v3_reintegration.py"
+  ]
+}

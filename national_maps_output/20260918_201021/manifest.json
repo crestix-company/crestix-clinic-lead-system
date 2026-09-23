@@ -1,0 +1,647 @@
+{
+  "created_at": "2026-09-18T11:10:17.492443+00:00",
+  "purpose": "Google Maps Clinic Collector v5.7.0 precollection / 3 PCs",
+  "database_writes": false,
+  "queue_headers": [
+    "internal_clinic_id",
+    "medical_institution_number",
+    "clinic_name",
+    "phone",
+    "address",
+    "prefecture",
+    "facility_type",
+    "status"
+  ],
+  "source_rows": 162254,
+  "target_rows": 151354,
+  "medical_types": [
+    "医科",
+    "歯科"
+  ],
+  "per_medical_type_target": {
+    "医科": 86918,
+    "歯科": 64436
+  },
+  "pc_counts": {
+    "pc1": 50452,
+    "pc2": 50451,
+    "pc3": 50451
+  },
+  "per_prefecture_target": {
+    "三重県": 1964,
+    "京都府": 3385,
+    "佐賀県": 946,
+    "兵庫県": 7404,
+    "北海道": 5235,
+    "千葉県": 6472,
+    "和歌山県": 1335,
+    "埼玉県": 7371,
+    "大分県": 1220,
+    "大阪府": 13473,
+    "奈良県": 1699,
+    "宮城県": 2362,
+    "宮崎県": 1149,
+    "富山県": 989,
+    "山口県": 1533,
+    "山形県": 1099,
+    "山梨県": 970,
+    "岐阜県": 2197,
+    "岡山県": 2187,
+    "岩手県": 1161,
+    "島根県": 761,
+    "広島県": 3506,
+    "徳島県": 915,
+    "愛媛県": 1516,
+    "愛知県": 8424,
+    "新潟県": 2213,
+    "東京都": 22524,
+    "栃木県": 2100,
+    "沖縄県": 1391,
+    "滋賀県": 1474,
+    "熊本県": 1949,
+    "石川県": 1125,
+    "神奈川県": 11225,
+    "福井県": 716,
+    "福岡県": 6941,
+    "福島県": 1766,
+    "秋田県": 927,
+    "群馬県": 2178,
+    "茨城県": 2659,
+    "長崎県": 1646,
+    "長野県": 2155,
+    "青森県": 1048,
+    "静岡県": 3862,
+    "香川県": 1107,
+    "高知県": 696,
+    "鳥取県": 613,
+    "鹿児島県": 1766
+  },
+  "filter_counts": {
+    "input": 162254,
+    "duplicates": 0,
+    "non_medical": 0,
+    "hospital": 8247,
+    "center": 934,
+    "inactive": 810,
+    "missing_identity": 0,
+    "already_maps_completed": 909,
+    "target": 151354
+  },
+  "existing_db_readonly": {
+    "rows": 1847,
+    "completed": 1625
+  },
+  "sources": [
+    {
+      "source_id": "hokkaido_clinic",
+      "bureau": "北海道厚生局",
+      "label": "北海道・医科（診療所）",
+      "url": "https://kouseikyoku.mhlw.go.jp/hokkaido/000499339.xlsx",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/hokkaido/gyomu/gyomu/hoken_kikan/code_ichiran.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "hokkaido_clinic.xlsx",
+      "sha256": "c4509b687f9ec16e6a7bf417bde1ceee5379587d30b889880a0040d04dabf8bb",
+      "rows": 2729,
+      "prefectures": [
+        "北海道"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "tohoku",
+      "bureau": "東北厚生局",
+      "label": "東北6県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/tohoku/shitei-touhoku-ika-r0809.xlsx",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/tohoku/gyomu/gyomu/hoken_kikan/itiran.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "tohoku.xlsx",
+      "sha256": "9b38db9be78bdf98ae214b246b9512d43d07920131f1e2c0cb53bb2226dbdb20",
+      "rows": 5537,
+      "prefectures": [
+        "宮城県",
+        "山形県",
+        "岩手県",
+        "福島県",
+        "秋田県",
+        "青森県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kanto_shinetsu",
+      "bureau": "関東信越厚生局",
+      "label": "関東信越10都県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/kantoshinetsu/shitei_ika_r0809.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kantoshinetsu/chousa/shitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kanto_shinetsu.zip",
+      "sha256": "0ff92e681bfa11a45216ce7a5764acb79a3a8c08aedf54a0d30fe9f037a1126e",
+      "rows": 36451,
+      "prefectures": [
+        "千葉県",
+        "埼玉県",
+        "山梨県",
+        "新潟県",
+        "東京都",
+        "栃木県",
+        "神奈川県",
+        "群馬県",
+        "茨城県",
+        "長野県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "tokai_hokuriku",
+      "bureau": "東海北陸厚生局",
+      "label": "東海北陸6県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/2609-01-01.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/newpage_00287.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "tokai_hokuriku.zip",
+      "sha256": "9541e0585852c3b57747df7291f7ce747343ad4c1d6907623349637f94320da1",
+      "rows": 11815,
+      "prefectures": [
+        "三重県",
+        "富山県",
+        "岐阜県",
+        "愛知県",
+        "石川県",
+        "静岡県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kinki",
+      "bureau": "近畿厚生局",
+      "label": "近畿7府県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/kinki/2026.9_kikanzentai_ika.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kinki/tyousa/shinkishitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kinki.zip",
+      "sha256": "7cfaa6b55dbf601a4103919c2c595371f51c42666d2ca71ff359277a85f67fbc",
+      "rows": 19849,
+      "prefectures": [
+        "京都府",
+        "兵庫県",
+        "和歌山県",
+        "大阪府",
+        "奈良県",
+        "滋賀県",
+        "福井県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "chugoku",
+      "bureau": "中国四国厚生局",
+      "label": "中国5県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/chugokushikoku/000500018.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/chugokushikoku/chousaka/iryoukikanshitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "chugoku.zip",
+      "sha256": "d28cf2ab0c8b1fb23f6b468d0b1a5f43008e8e83cc82123ef0cb139326b0b938",
+      "rows": 5885,
+      "prefectures": [
+        "山口県",
+        "岡山県",
+        "島根県",
+        "広島県",
+        "鳥取県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "shikoku",
+      "bureau": "四国厚生支局",
+      "label": "四国4県・医科",
+      "url": "https://kouseikyoku.mhlw.go.jp/shikoku/000499483.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/shikoku/gyomu/gyomu/hoken_kikan/shitei/",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "shikoku.zip",
+      "sha256": "3336ae154ac336126bd2394dc2e73f23b730fde79c4e24ec00a188a7b396d10d",
+      "rows": 2972,
+      "prefectures": [
+        "徳島県",
+        "愛媛県",
+        "香川県",
+        "高知県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_fukuoka",
+      "bureau": "九州厚生局",
+      "label": "福岡県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500310.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_fukuoka.zip",
+      "sha256": "2ddcc7bfa2f5592c76b764befc3b9a6850f6b232bf3e1e7b6c67f6205380caa1",
+      "rows": 4536,
+      "prefectures": [
+        "福岡県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_saga",
+      "bureau": "九州厚生局",
+      "label": "佐賀県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500311.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_saga.zip",
+      "sha256": "da51a06f38a938e1da705d947788c7bca6630aff6852de67a2977846fb41b7c1",
+      "rows": 662,
+      "prefectures": [
+        "佐賀県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_nagasaki",
+      "bureau": "九州厚生局",
+      "label": "長崎県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500315.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_nagasaki.zip",
+      "sha256": "82e5843d79d322a4d98eebc10131233856f6f13aedd8eb4b3d498da551ad8fd7",
+      "rows": 1157,
+      "prefectures": [
+        "長崎県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_kumamoto",
+      "bureau": "九州厚生局",
+      "label": "熊本県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500316.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_kumamoto.zip",
+      "sha256": "e2b125abe46dd0af6ec0174f4a75ccd14476d314cf3f87c39a04432a9a9970f7",
+      "rows": 1366,
+      "prefectures": [
+        "熊本県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_oita",
+      "bureau": "九州厚生局",
+      "label": "大分県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500317.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_oita.zip",
+      "sha256": "1daaaaf67243ca591ecf12cb8bedad0b71e31fa5614c6fb29b3bf98b4b56f25f",
+      "rows": 917,
+      "prefectures": [
+        "大分県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_miyazaki",
+      "bureau": "九州厚生局",
+      "label": "宮崎県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500318.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_miyazaki.zip",
+      "sha256": "9cf1163aaf1f501492b8933e76dafcd5d3656974c4b2c43b18750234c942af75",
+      "rows": 837,
+      "prefectures": [
+        "宮崎県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_kagoshima",
+      "bureau": "九州厚生局",
+      "label": "鹿児島県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500321.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_kagoshima.zip",
+      "sha256": "9acf66bbe4f0049e3a3e5ac8c39d990fc90b5afd35a7eabd016ca91fae011847",
+      "rows": 1270,
+      "prefectures": [
+        "鹿児島県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_okinawa",
+      "bureau": "九州厚生局",
+      "label": "沖縄県・医科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500320.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_okinawa.zip",
+      "sha256": "cf262bc904f5181c04e2572763f2a0720e8dbd70b03312e931767fbcd9f79ef0",
+      "rows": 919,
+      "prefectures": [
+        "沖縄県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "hokkaido_dental",
+      "bureau": "北海道厚生局",
+      "label": "北海道・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/hokkaido/000499341.xlsx",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/hokkaido/gyomu/gyomu/hoken_kikan/code_ichiran.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "hokkaido_dental.xlsx",
+      "sha256": "11bf8e360b351945ada3344accbd0053016ddddcaf99f43fec68723d7723711a",
+      "rows": 2627,
+      "prefectures": [
+        "北海道"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "tohoku_dental",
+      "bureau": "東北厚生局",
+      "label": "東北6県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/tohoku/shitei-touhoku-shika-r0809.xlsx",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/tohoku/gyomu/gyomu/hoken_kikan/itiran.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "tohoku_dental.xlsx",
+      "sha256": "5feebcd701aa92cc238771420cd68fc311385e4b1330bf998cccd9c52251eede",
+      "rows": 3547,
+      "prefectures": [
+        "宮城県",
+        "山形県",
+        "岩手県",
+        "福島県",
+        "秋田県",
+        "青森県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kanto_shinetsu_dental",
+      "bureau": "関東信越厚生局",
+      "label": "関東信越10都県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/kantoshinetsu/shitei_shika_r0809.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kantoshinetsu/chousa/shitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kanto_shinetsu_dental.zip",
+      "sha256": "6ef116dc621f72f55c7925c440ce3931742c9ab61e171c2ec35d993f5db76dc3",
+      "rows": 27319,
+      "prefectures": [
+        "千葉県",
+        "埼玉県",
+        "山梨県",
+        "新潟県",
+        "東京都",
+        "栃木県",
+        "神奈川県",
+        "群馬県",
+        "茨城県",
+        "長野県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "tokai_hokuriku_dental",
+      "bureau": "東海北陸厚生局",
+      "label": "東海北陸6県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/2609-01-03.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/tokaihokuriku/newpage_00287.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "tokai_hokuriku_dental.zip",
+      "sha256": "eeca18b41332b1db1da05b481ab44607c470fe58b2e31229c812a36b9ce1fad4",
+      "rows": 7832,
+      "prefectures": [
+        "三重県",
+        "富山県",
+        "岐阜県",
+        "愛知県",
+        "石川県",
+        "静岡県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kinki_dental",
+      "bureau": "近畿厚生局",
+      "label": "近畿7府県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/kinki/2026.9_kikanzentai_sika.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kinki/tyousa/shinkishitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kinki_dental.zip",
+      "sha256": "d8ad96e686ec6024cc601544af435e9fc8ab0fe5637958dd12488ebe80f9b97e",
+      "rows": 11666,
+      "prefectures": [
+        "京都府",
+        "兵庫県",
+        "和歌山県",
+        "大阪府",
+        "奈良県",
+        "滋賀県",
+        "福井県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "chugoku_dental",
+      "bureau": "中国四国厚生局",
+      "label": "中国5県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/chugokushikoku/000500019.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/chugokushikoku/chousaka/iryoukikanshitei.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "chugoku_dental.zip",
+      "sha256": "a89c72f41e0342c7f40dad576541c27b4e93c348db4197035b1047e15ca99a1d",
+      "rows": 3485,
+      "prefectures": [
+        "山口県",
+        "岡山県",
+        "島根県",
+        "広島県",
+        "鳥取県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "shikoku_dental",
+      "bureau": "四国厚生支局",
+      "label": "四国4県・歯科",
+      "url": "https://kouseikyoku.mhlw.go.jp/shikoku/000499485.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/shikoku/gyomu/gyomu/hoken_kikan/shitei/",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "shikoku_dental.zip",
+      "sha256": "9c81ed9fc92d3cac5cd6d336e81fdf97abb9f26e6c4c3e5d857d2d352b042076",
+      "rows": 1777,
+      "prefectures": [
+        "徳島県",
+        "愛媛県",
+        "香川県",
+        "高知県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_fukuoka_dental",
+      "bureau": "九州厚生局",
+      "label": "福岡県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500310.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_fukuoka.zip",
+      "sha256": "2ddcc7bfa2f5592c76b764befc3b9a6850f6b232bf3e1e7b6c67f6205380caa1",
+      "rows": 2934,
+      "prefectures": [
+        "福岡県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_saga_dental",
+      "bureau": "九州厚生局",
+      "label": "佐賀県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500311.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_saga.zip",
+      "sha256": "da51a06f38a938e1da705d947788c7bca6630aff6852de67a2977846fb41b7c1",
+      "rows": 387,
+      "prefectures": [
+        "佐賀県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_nagasaki_dental",
+      "bureau": "九州厚生局",
+      "label": "長崎県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500315.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_nagasaki.zip",
+      "sha256": "82e5843d79d322a4d98eebc10131233856f6f13aedd8eb4b3d498da551ad8fd7",
+      "rows": 650,
+      "prefectures": [
+        "長崎県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_kumamoto_dental",
+      "bureau": "九州厚生局",
+      "label": "熊本県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500316.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_kumamoto.zip",
+      "sha256": "e2b125abe46dd0af6ec0174f4a75ccd14476d314cf3f87c39a04432a9a9970f7",
+      "rows": 825,
+      "prefectures": [
+        "熊本県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_oita_dental",
+      "bureau": "九州厚生局",
+      "label": "大分県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500317.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_oita.zip",
+      "sha256": "1daaaaf67243ca591ecf12cb8bedad0b71e31fa5614c6fb29b3bf98b4b56f25f",
+      "rows": 471,
+      "prefectures": [
+        "大分県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_miyazaki_dental",
+      "bureau": "九州厚生局",
+      "label": "宮崎県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500318.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_miyazaki.zip",
+      "sha256": "9cf1163aaf1f501492b8933e76dafcd5d3656974c4b2c43b18750234c942af75",
+      "rows": 476,
+      "prefectures": [
+        "宮崎県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_kagoshima_dental",
+      "bureau": "九州厚生局",
+      "label": "鹿児島県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500321.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_kagoshima.zip",
+      "sha256": "9acf66bbe4f0049e3a3e5ac8c39d990fc90b5afd35a7eabd016ca91fae011847",
+      "rows": 760,
+      "prefectures": [
+        "鹿児島県"
+      ],
+      "status": "PASS"
+    },
+    {
+      "source_id": "kyushu_okinawa_dental",
+      "bureau": "九州厚生局",
+      "label": "沖縄県・歯科エクセルデータ",
+      "url": "https://kouseikyoku.mhlw.go.jp/kyushu/000500320.zip",
+      "index_url": "https://kouseikyoku.mhlw.go.jp/kyushu/gyomu/gyomu/hoken_kikan/index_00006.html",
+      "expected_as_of": "2026-09-01",
+      "mode": "cache",
+      "cache_file": "kyushu_okinawa.zip",
+      "sha256": "cf262bc904f5181c04e2572763f2a0720e8dbd70b03312e931767fbcd9f79ef0",
+      "rows": 596,
+      "prefectures": [
+        "沖縄県"
+      ],
+      "status": "PASS"
+    }
+  ],
+  "sha256": {
+    "maps_queue_all.csv": "338eb378440e6d027bce6bca40a6a88b5099cf3d68468bf37855d0dd585981cc",
+    "maps_queue_pc1.csv": "7847ef161a913bbcf413c610836181609e61c815de5fba80edf434513b546641",
+    "maps_queue_pc2.csv": "31dcffb72c84f50d6f134991a8ea0f6a66585de64b8d8183f22ebd78705fe540",
+    "maps_queue_pc3.csv": "271e1a04aac4dd439ea7fecee748b5eb2420a7aa5875db94b6042d05789205a3",
+    "national_kouseikyoku_master.csv": "7f2d6f635d50f3bb07a67ea283ad67c567f807aa95385513948f135d65cd8e93"
+  }
+}

@@ -1,0 +1,4 @@
+﻿clinic_id,医院名,都道府県,指定年月日,Google Maps HP,解析HP,research_status,hp_status,HPランク,HPスコア,治療カテゴリ,院長名,卒業年,医籍登録年,59歳以下確率,年齢信頼度,年齢根拠,集客シグナル数,集客シグナル,集客根拠,アツさ,HP本人確認理由,crawl_errors,research_error,error
+81,帝国クリニック,東京都,2002-09-15,https://doctorsfile.jp/h/29698/,,NOT_FOUND,NOT_FOUND,NO_HP,0,,,,,,,,0,,,通常,検索した範囲で公式HPを発見できませんでした。,[],,
+514,銀座プリマ・クリニック,東京都,2001-09-01,https://prima-clinic.doctorsfile.jp/,,NOT_FOUND,NOT_FOUND,NO_HP,0,,,,,,,,0,,,通常,検索した範囲で公式HPを発見できませんでした。,[],,
+554,宮下眼科医院,東京都,2009-03-23,https://www.hospita.jp/hospital/110,,NOT_FOUND,NOT_FOUND,NO_HP,0,,,,,,,,0,,,通常,検索した範囲で公式HPを発見できませんでした。,[],,

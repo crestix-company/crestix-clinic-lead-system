@@ -1,0 +1,364 @@
+"""通常の午前・午後診療の間に明記された検査・手術枠を、診療時間表だけから確認。"""
+from dataclasses import dataclass
+import re
+import unicodedata
+from bs4 import BeautifulSoup
+
+SIGNAL_NAME = "昼の検査・手術専用枠"
+WEEKDAYS = "月火水木金土日"
+PROCEDURE = re.compile(r"検査|手術|内視鏡|胃カメラ|大腸カメラ|処置|レーザー|特殊検査")
+ORDINARY = re.compile(r"午前|午後|外来|診察|診療|受付時間")
+NEGATIVE = re.compile(r"行っていません|行っておりません|行いません|行わない|実施していません|実施しておりません|実施しません|対応していません|実施なし|休止|中止|検討中|予定|予約受付|予約の受付|相談|説明|(?:検査|手術|内視鏡|処置)(?:は)?(?:なし|無し|休み|休診)")
+RANGE = re.compile(
+    r"(?P<p1>午前|午後|AM|PM)?\s*(?P<h1>\d{1,2})\s*(?::\s*(?P<m1>\d{2})|時(?:(?P<j1>\d{1,2})分)?)"
+    r"\s*(?:[~〜～\-−‐‑–—―]|から)\s*"
+    r"(?P<p2>午前|午後|AM|PM)?\s*(?P<h2>\d{1,2})\s*(?::\s*(?P<m2>\d{2})|時(?:(?P<j2>\d{1,2})分)?)",
+    re.I,
+)
+SYMBOLS = "★☆●○◯〇◎△▲◇◆■□※＊*"
+
+
+def clean(text):
+    return unicodedata.normalize("NFKC",str(text or "")).strip()
+
+
+def days(text):
+    text=clean(text)
+    result=set()
+    if "平日" in text:
+        result.update(range(5))
+    for match in re.finditer(r"([月火水木金土日])(?:曜日?)?\s*[~〜～-]\s*([月火水木金土日])(?:曜日?)?",text):
+        start,end=(WEEKDAYS.index(x) for x in match.groups())
+        if start<=end:
+            result.update(range(start,end+1))
+    for match in re.finditer(r"([月火水木金土日])曜日?",text):
+        result.add(WEEKDAYS.index(match[1]))
+    if re.fullmatch(r"[月火水木金土日\s・、,/／]+",text):
+        result.update(WEEKDAYS.index(x) for x in text if x in WEEKDAYS)
+    return frozenset(result) if result else None
+
+
+def kind(label,default=""):
+    label=clean(label)
+    if NEGATIVE.search(label):
+        return ""
+    if PROCEDURE.search(label):
+        # 一般診療と並行する検査は、独立した専用枠としない。
+        without_closure=re.sub(r"(?:一般)?(?:外来|診療|診察)(?:は)?(?:休診|なし|を休止|を行わない)","",label)
+        if re.search(r"外来|診療|診察",without_closure):
+            return ""
+        return "procedure"
+    if re.search(r"休診|休憩|昼休|受付のみ|予約のみ",label):
+        return ""
+    return "ordinary" if ORDINARY.search(label) else default
+
+
+@dataclass(frozen=True)
+class Slot:
+    start: int
+    end: int
+    kind: str
+    days: frozenset | None
+    text: str
+
+
+def slots(text,default="",day_set=None):
+    text=clean(text)
+    matches=list(RANGE.finditer(text))
+    previous=0
+    inherited=default
+    found=[]
+    for match in matches:
+        prefix=text[previous:match.start()]
+        label=text if len(matches)==1 else prefix
+        role=kind(label,inherited)
+        period1=(match['p1'] or ("午後" if "午後" in prefix else "午前" if "午前" in prefix else "")).upper()
+        period2=(match['p2'] or period1).upper()
+        values=[]
+        for number,period in [(1,period1),(2,period2)]:
+            hour=int(match[f'h{number}'])
+            minute=int(match[f'm{number}'] or match[f'j{number}'] or 0)
+            if period in {"午後","PM"} and hour<12:
+                hour+=12
+            elif (period=="AM" or (period=="午前" and number==1)) and hour==12:
+                hour=0
+            values.append(hour*60+minute if hour<=24 and minute<60 and (hour<24 or minute==0) else -1)
+        start,end=values
+        if role and 0<=start<end<=24*60:
+            found.append(Slot(start,end,role,day_set if day_set is not None else days(label),label[:300]))
+        previous=match.end()
+        inherited=role
+    return found
+
+
+def grid(table):
+    rows=[r for r in table.find_all('tr') if r.find_parent('table') is table]
+    if len(rows)>80:
+        return []
+    cells={}
+    width=0
+    for y,row in enumerate(rows):
+        x=0
+        for cell in row.find_all(['th','td'],recursive=False):
+            while (y,x) in cells:
+                x+=1
+            try:
+                colspan=max(1,int(cell.get('colspan',1)))
+                rowspan=max(1,int(cell.get('rowspan',1)))
+            except (TypeError,ValueError):
+                return []
+            if x+colspan>24 or rowspan>80:
+                return []
+            for yy in range(y,min(len(rows),y+rowspan)):
+                for xx in range(x,x+colspan):
+                    cells[yy,xx]=clean(cell.get_text(' ',strip=True))
+            x+=colspan
+            width=max(width,x)
+    return [[cells.get((y,x),'') for x in range(width)] for y in range(len(rows))]
+
+
+def symbol_legend(soup):
+    """★=手術、△：検査などの凡例を拾い、診療時間表の記号を意味に戻す。"""
+    result={}
+    # ページ全体を連結すると表の時刻まで凡例に混ざるため、短い独立ブロックだけを見る。
+    for node in soup.find_all(['p','div','li','span','small','caption','td','th']):
+        if node.find('table') is not None:
+            continue
+        text=clean(node.get_text(" ",strip=True))
+        if not text or len(text)>120:
+            continue
+        for symbol in SYMBOLS:
+            if symbol not in text:
+                continue
+            m=re.search(re.escape(symbol)+r"\s*(?:[:：=＝]|は)?\s*([^。;；]{0,60})",text)
+            if not m or NEGATIVE.search(m.group(1)):
+                continue
+            proc=PROCEDURE.search(m.group(1))
+            if proc:
+                result[symbol]=proc.group(0)
+    return result
+
+
+def _expand_symbol(cell,legend):
+    stripped=clean(cell)
+    if stripped in legend:
+        return stripped+" "+legend[stripped]
+    # 「★（火曜）」等でも凡例がある場合だけ意味を付加。
+    for symbol,meaning in legend.items():
+        if symbol in stripped and not PROCEDURE.search(stripped):
+            return stripped+" "+meaning
+    return stripped
+
+
+def table_slots(table,legend=None):
+    legend=legend or {}
+    matrix=grid(table)
+    if not matrix or not any(matrix):
+        return []
+    matrix=[[_expand_symbol(cell,legend) for cell in row] for row in matrix]
+    header=next(((i,{j:days(cell) for j,cell in enumerate(row) if days(cell)})
+                 for i,row in enumerate(matrix) if sum(days(cell) is not None for cell in row)>=2),None)
+    found=[]
+    if header:
+        row_index,columns=header
+        first_day=min(columns)
+        for row in matrix[row_index+1:]:
+            if not row:
+                continue
+            prefix=' '.join(row[:first_day])
+            for column,day_set in columns.items():
+                if column>=len(row):
+                    continue
+                cell=row[column]
+                if not RANGE.search(cell) and not re.fullmatch(r"[○◯〇●◎]+",cell) and not ORDINARY.search(cell) and not PROCEDURE.search(cell):
+                    continue
+                if not PROCEDURE.search(cell) and re.search(r"休診|休み|なし",cell):
+                    continue
+                selected_days=day_set & days(prefix) if days(prefix) else day_set
+                if not selected_days:
+                    continue
+                text=prefix+' '+cell
+                found.extend(slots(text,default='ordinary',day_set=selected_days))
+        return found
+    schedule=bool(re.search(r"診療|外来|午前|午後",table.get_text(' ',strip=True)))
+    headings=matrix[0]
+    for row in matrix:
+        if not row:
+            continue
+        row_days=days(row[0])
+        if row_days:
+            for column,cell in enumerate(row[1:],1):
+                heading=headings[column] if column<len(headings) else ''
+                found.extend(slots((heading+' '+cell).strip(),default='ordinary' if schedule else '',day_set=row_days))
+        else:
+            found.extend(slots(' '.join(row),default='ordinary' if schedule else ''))
+    return found
+
+
+def _explicit_slot(text, role):
+    """1行/1列の時刻が取れる場合だけ代表Slotを返す。"""
+    candidates=slots(text,default=role)
+    same=[x for x in candidates if x.kind==role]
+    return same[0] if same else None
+
+
+def _phase(text):
+    text=clean(text)
+    if not text or NEGATIVE.search(text):
+        return "",None
+    role=kind(text)
+    if role=="procedure":
+        return "procedure",_explicit_slot(text,"procedure")
+    if role=="ordinary":
+        ordinary=_explicit_slot(text,"ordinary")
+        if re.search(r"午前|\bAM\b",text,re.I):
+            return "morning",ordinary
+        if re.search(r"午後|\bPM\b",text,re.I):
+            return "afternoon",ordinary
+        if ordinary:
+            if ordinary.end<=13*60:
+                return "morning",ordinary
+            if ordinary.start>=12*60:
+                return "afternoon",ordinary
+    return "",None
+
+def structural_table_proof(table,legend=None):
+    """午前→検査/手術→午後という診療時間表の構造を拾う。
+
+    手術行自体に時刻がなくても、前後の診療時間に挟まれていれば専用枠として扱う。
+    """
+    legend=legend or {}
+    matrix=grid(table)
+    if not matrix or not any(matrix):
+        return None
+    matrix=[[_expand_symbol(cell,legend) for cell in row] for row in matrix]
+    table_text=clean(table.get_text(" ",strip=True))
+    if not re.search(r"診療|外来|午前|午後",table_text) or not PROCEDURE.search(table_text):
+        return None
+
+    sequences=[]
+    row_texts=[clean(" ".join(cell for cell in row if cell)) for row in matrix]
+    sequences.append(("行",row_texts))
+
+    width=max((len(row) for row in matrix),default=0)
+    if 1<width<=16:
+        col_texts=[]
+        for x in range(width):
+            col_texts.append(clean(" ".join(row[x] for row in matrix if x<len(row) and row[x])))
+        sequences.append(("列",col_texts))
+
+    for orientation,texts in sequences:
+        phases=[]
+        for idx,text in enumerate(texts):
+            phase,slot=_phase(text)
+            if phase:
+                phases.append((idx,phase,slot,text))
+        for pidx,phase,pslot,ptext in phases:
+            if phase!="procedure":
+                continue
+            mornings=[x for x in phases if x[1]=="morning" and x[0]<pidx]
+            afternoons=[x for x in phases if x[1]=="afternoon" and x[0]>pidx]
+            if not mornings or not afternoons:
+                continue
+            before=max(mornings,key=lambda x:x[0])
+            after=min(afternoons,key=lambda x:x[0])
+            bslot=before[2]; aslot=after[2]
+
+            def fmt(slot):
+                if not slot:
+                    return "時間記載なし"
+                return f'{slot.start//60:02}:{slot.start%60:02}～{slot.end//60:02}:{slot.end%60:02}'
+
+            # 明示時刻がある場合は、必ず午前終了後〜午後開始前に完全に収まること。
+            has_range=bool(RANGE.search(ptext))
+            if pslot:
+                if bslot and pslot.start < bslot.end:
+                    continue
+                if aslot and pslot.end > aslot.start:
+                    continue
+                procedure_text=fmt(pslot)
+            elif has_range:
+                # 壊れた時刻・重複時刻を「空き時間」として補完しない。
+                continue
+            elif bslot and aslot and bslot.end<aslot.start:
+                procedure_text=f'{bslot.end//60:02}:{bslot.end%60:02}～{aslot.start//60:02}:{aslot.start%60:02}'
+            else:
+                procedure_text="時間記載なし"
+
+            return {
+                "schedule_day":"診療時間表",
+                "morning_consultation":fmt(bslot),
+                "procedure_slot":procedure_text,
+                "afternoon_consultation":fmt(aslot),
+                "evidence":f'診療時間表：午前 {fmt(bslot)}／{ptext[:80]} {procedure_text}／午後 {fmt(aslot)}',
+                "source_excerpt":ptext[:300],
+                "structure_orientation":orientation,
+            }
+    return None
+
+def proof(found):
+    for day in range(7):
+        same_day=[s for s in found if s.days is None or day in s.days]
+        for procedure in same_day:
+            if procedure.kind!='procedure':
+                continue
+            morning=[s for s in same_day if s.kind=='ordinary' and s.start<12*60 and s.end<=procedure.start]
+            afternoon=[s for s in same_day if s.kind=='ordinary' and s.start>=12*60 and procedure.end<=s.start]
+            if not morning or not afternoon:
+                continue
+            before=max(morning,key=lambda s:s.end)
+            after=min(afternoon,key=lambda s:s.start)
+            def fmt(slot):
+                return f'{slot.start//60:02}:{slot.start%60:02}～{slot.end//60:02}:{slot.end%60:02}'
+            label=WEEKDAYS[day]+'曜' if any(s.days is not None for s in [before,procedure,after]) else '共通時間表'
+            return {'schedule_day':label,'morning_consultation':fmt(before),'procedure_slot':fmt(procedure),
+                    'afternoon_consultation':fmt(after),
+                    'evidence':f'{label}：午前診療 {fmt(before)}／検査・手術 {fmt(procedure)}／午後診療 {fmt(after)}',
+                    'source_excerpt':procedure.text}
+    return None
+
+
+def midday_procedure(html):
+    """診療時間だけから、午前と午後の間に明示された検査・手術・処置専用枠を確認。"""
+    soup=BeautifulSoup(html,'html.parser')
+    for node in soup.select('script,style,noscript,template'):
+        node.decompose()
+    legend=symbol_legend(soup)
+    for table in soup.find_all('table'):
+        if table.find('table') is not None:
+            continue
+        result=proof(table_slots(table,legend))
+        if result:
+            return {**result,'evidence_type':'公式HPの診療時間表で前後の通常診療と専用枠を確認'}
+        structural=structural_table_proof(table,legend)
+        if structural:
+            return {**structural,'evidence_type':'公式HPの診療時間表で午前→検査/手術→午後の構造を確認'}
+    for table in soup.find_all('table'):
+        table.decompose()
+    for br in soup.find_all('br'):
+        br.replace_with('\n')
+    groups={}
+    for node in soup.find_all(['p','li','dd','div']):
+        if node.find(['p','li','dd','div','table']) is not None:
+            continue
+        if node.find_parent(['p','li','dd']) is not None:
+            continue
+        heading=node.find_previous(['h1','h2','h3','h4','h5','h6'])
+        container=node.find_parent(['section','article','div','main','body']) or soup
+        key=(id(container),id(heading))
+        default='ordinary' if heading and re.search(r"診療時間|外来時間|受付時間",heading.get_text()) else ''
+        label=''
+        if node.name=='dd':
+            term=node.find_previous_sibling('dt')
+            label=term.get_text(' ',strip=True) if term else ''
+        raw=node.get_text('',strip=False)
+        for line in raw.splitlines():
+            line=clean(line)
+            if line and len(line)<=1200:
+                expanded=_expand_symbol(line,legend)
+                groups.setdefault(key,[]).extend(slots(label+' '+expanded,default=default))
+    for found in groups.values():
+        result=proof(found)
+        if result:
+            return {**result,'evidence_type':'公式HPの診療時間案内で前後の通常診療と専用枠を確認'}
+    return None

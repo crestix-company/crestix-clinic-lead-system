@@ -1,0 +1,51 @@
+﻿no,clinic_id,clinic_name,required_case,result,reason,old_research_status,new_research_status,old_hp_rank,new_hp_rank,old_categories,new_categories,old_graduation_year,new_graduation_year,new_age_confidence,tavily_search_calls
+1,290,医療法人　優美会　お茶の水美容形成クリニック,お茶の水美容形成クリニック,PASS,,SUCCESS,SUCCESS,A,A,内視鏡 | 男性更年期 | 皮膚科,男性更年期 | 皮膚科,,,REVIEW,0
+2,602,医療法人社団　参英会　岩佐耳鼻咽喉科,岩佐耳鼻咽喉科,PASS,,SUCCESS,SUCCESS,B,B,内視鏡,,,,UNKNOWN,0
+3,437,飯田橋駅マール産婦人科クリニック,飯田橋駅マール産婦人科クリニック,PASS,,SUCCESS,SUCCESS,A,B,内視鏡,,,,UNKNOWN,0
+4,102,名倉クリニック,名倉クリニック,PASS,,SUCCESS,SUCCESS,C,C,,,1919,,REVIEW,0
+5,91,医療法人社団　荘和会　半蔵門胃腸クリニック,半蔵門胃腸クリニック,PASS,,SUCCESS,SUCCESS,D,D,,,1982,1982,MODEL_ESTIMATE,0
+6,69,医療法人財団　駿愛会　駿河台診療所,駿河台診療所,PASS,,SUCCESS,SUCCESS,B,B,内視鏡,内視鏡,1997,1997,MODEL_ESTIMATE,0
+7,83,医療法人社団　慶翔会　飯田橋眼科クリニック,飯田橋眼科クリニック,PASS,,SUCCESS,SUCCESS,B,B,白内障 | 緑内障,白内障 | 緑内障,1994,1994,MODEL_ESTIMATE,0
+8,4,医療法人　明和会　宮田眼科東京,,PASS,,SUCCESS,SUCCESS,A,A,白内障 | 緑内障 | ICL,白内障 | 緑内障 | ICL,1996,1996,MODEL_ESTIMATE,0
+9,54,一口坂クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+10,88,医療法人社団　久信会　日比谷ヒフ科クリニック,,PASS,,SUCCESS,SUCCESS,A,A,皮膚科,皮膚科,1992,1992,MODEL_ESTIMATE,0
+11,114,神田駅西口メンタルクリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,1992,1992,MODEL_ESTIMATE,0
+12,135,ＨＤＣアトラスクリニック,,PASS,,SUCCESS,SUCCESS,B,B,ED,ED,1983,1983,MODEL_ESTIMATE,0
+13,153,医療法人社団　久響会　あいクリニック神田,,PASS,,SUCCESS,SUCCESS,C,C,,,1992,,REVIEW,0
+14,184,ナチュラルアート　クリニック,,PASS,,SUCCESS,SUCCESS,B,B,,,1995,1995,MODEL_ESTIMATE,0
+15,201,医療法人社団　慈仁会　飯田橋小池クリニック,,PASS,,SUCCESS,SUCCESS,D,D,,,,,UNKNOWN,0
+16,220,寺井クリニック,,PASS,,SUCCESS,SUCCESS,A,B,内視鏡,,1986,1986,MODEL_ESTIMATE,0
+17,238,氏家脳神経外科内科クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+18,255,医療法人社団　吉田クリニック　千代田クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+19,282,医療法人社団　渡航者健診クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+20,303,医療法人社団　エス・セットクリニック,,PASS,,SUCCESS,SUCCESS,B,B,男性更年期,男性更年期,,,UNKNOWN,0
+21,329,よつばみらいクリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+22,349,いんしょう日の出クリニック,,PASS,,SUCCESS,SUCCESS,B,B,,,,,UNKNOWN,0
+23,365,半蔵門　渡海消化器・内視鏡クリニック,,PASS,,SUCCESS,SUCCESS,A,A,内視鏡,内視鏡,,,UNKNOWN,0
+24,392,シンクヘルスクリニック,,PASS,,SUCCESS,SUCCESS,A,A,糖尿病 | 皮膚科,糖尿病 | 皮膚科,,,UNKNOWN,0
+25,416,駿河台レディースクリニック,,PASS,,SUCCESS,SUCCESS,B,B,,,2005,2005,MODEL_ESTIMATE,0
+26,436,クリニックファーストエイド,,PASS,,SUCCESS,SUCCESS,B,B,糖尿病 | ED | 皮膚科,糖尿病 | ED | 皮膚科,,,UNKNOWN,0
+27,483,医療法人社団　神和会　銀座富士クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,1996,1996,MODEL_ESTIMATE,0
+28,518,中央みなとクリニック,,PASS,,SUCCESS,SUCCESS,B,B,内視鏡 | 糖尿病 | 泌尿器科 | 循環器内科 | 皮膚科,糖尿病 | 泌尿器科 | 循環器内科 | 皮膚科,,,UNKNOWN,0
+29,534,松本クリニック銀座,,PASS,,SUCCESS,SUCCESS,B,B,,,,,UNKNOWN,0
+30,555,銀座中央通り眼科,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+31,575,勝どき小平眼科,,PASS,,SUCCESS,SUCCESS,C,C,,,,1993,MODEL_ESTIMATE,0
+32,603,八丁堀メンタルクリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+33,625,医療法人社団　兜中央会　中島クリニック,,PASS,,SUCCESS,SUCCESS,A,A,内視鏡 | ED,内視鏡 | ED,,,REVIEW,0
+34,643,医療法人社団　知洋会　勝どき耳鼻咽喉科・内科クリニック,,PASS,,SUCCESS,SUCCESS,D,D,,,1982,1982,MODEL_ESTIMATE,0
+35,660,鈴木整形外科,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+36,680,勝どき駅前耳鼻咽喉科・頭頸部甲状腺クリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,2001,2001,MODEL_ESTIMATE,0
+37,700,ＥＡＳＥ女性のクリニック,,PASS,,SUCCESS,SUCCESS,B,B,,,,,UNKNOWN,0
+38,735,小伝馬町駅前皮膚科,,PASS,,SUCCESS,SUCCESS,B,B,皮膚科,皮膚科,,,UNKNOWN,0
+39,783,医療法人社団　心成会　東京心臓血管・内科クリニック,,PASS,,SUCCESS,SUCCESS,A,A,糖尿病 | 循環器内科,糖尿病 | 循環器内科,,,UNKNOWN,0
+40,823,メディカルクリニック　銀座,,PASS,,SUCCESS,SUCCESS,C,C,,,1986,,REVIEW,0
+41,865,八丁堀いしかわ内科クリニック,,PASS,,SUCCESS,SUCCESS,B,B,内視鏡,内視鏡,,,UNKNOWN,0
+42,910,ルネスクリニック日本橋,,PASS,,SUCCESS,SUCCESS,B,B,,,,,UNKNOWN,0
+43,961,日本橋茅場町ウィメンズクリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,1998,1998,MODEL_ESTIMATE,0
+44,1014,東京駅クリニック,,PASS,,SUCCESS,SUCCESS,B,B,ED | 男性更年期 | 泌尿器科,ED | 男性更年期 | 泌尿器科,,,UNKNOWN,0
+45,1056,岡野内科診療所,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+46,1090,医療法人社団　青南会　青山内科医院,,PASS,,SUCCESS,SUCCESS,A,A,糖尿病 | 循環器内科,糖尿病 | 循環器内科,,,UNKNOWN,0
+47,1111,医療法人社団　谷風会　狸穴診療所,,PASS,,SUCCESS,SUCCESS,D,D,,,,,UNKNOWN,0
+48,1130,とようら小児科,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+49,1155,医療法人社団　神徳会　芝公園かみやまクリニック,,PASS,,SUCCESS,SUCCESS,C,C,,,,,UNKNOWN,0
+50,1180,汐留ガーデンクリニック,,PASS,,SUCCESS,SUCCESS,A,A,内視鏡 | 糖尿病 | ED | 皮膚科,内視鏡 | 糖尿病 | ED | 皮膚科,,,UNKNOWN,0

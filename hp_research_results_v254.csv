@@ -1,0 +1,51 @@
+﻿clinic_id,調査ロジック,医院名,指定年月日,Google Maps HP,解析HP,research_status,hp_status,HPランク,HPスコア,治療カテゴリ,院長名,卒業年,医籍登録年,59歳以下確率,年齢信頼度,年齢根拠,集客シグナル数,集客シグナル,アツさ,HP本人確認理由
+3,v25.4,医療法人社団　佳翔会　武蔵小金井さくら眼科,2019-11-01,http://sakuraganka.jp/,http://sakuraganka.jp/,REVIEW,VERIFIED,UNKNOWN,0,,安田　佳守臣,,,,UNKNOWN,UNKNOWN,1,Doctors File掲載,集客投資シグナルあり,Google Mapsで医院本人確認済みのウェブサイトURLです。サイト側のアクセス制限によりHP内容の自動解析は未完了です。
+4,v25.4,医療法人　明和会　宮田眼科東京,2023-04-01,https://tokyo.miyata-med.ne.jp/,https://tokyo.miyata-med.ne.jp/,SUCCESS,VERIFIED,A,14,白内障 / 緑内障 / ICL,髙瀨　博,1996,,96.9%,MODEL_ESTIMATE,https://tokyo.miyata-med.ne.jp/clinic/,4,Doctors File掲載 / Medical DOC掲載 / Instagram公式運用 / LINE公式運用,かなりアツい,電話番号一致 / 医院名がページ見出しに一致
+6,v25.4,医療法人社団　高瀬会　たかせ眼科,2002-04-01,http://www5a.biglobe.ne.jp/~gannka,https://www5a.biglobe.ne.jp/~gannka/,SUCCESS,VERIFIED,B,10,白内障 / 緑内障 / ICL,髙瀨　正郎,,,,UNKNOWN,厚生局指定年月日 2002-04-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+11,v25.4,Ｔｅｎｖｉ　Ｃｌｉｎｉｃ　Ｇｉｎｚａ,2025-05-01,https://tenviclinic.com/,https://tenviclinic.com/,SUCCESS,VERIFIED,C,7,,　喬繁,,,,UNKNOWN,厚生局指定年月日 2025-05-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+33,v25.4,有楽町電気ビルクリニック,1976-09-01,http://www.jckpf.or.jp/index.html,https://www.jckpf.or.jp/,SUCCESS,VERIFIED,C,7,,北　嘉昭,,,,UNKNOWN,厚生局指定年月日 1976-09-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+34,v25.4,大森胃腸科,1979-02-01,http://oomori-i.jp/,http://oomori-i.jp/,SUCCESS,VERIFIED,C,7,内視鏡 / 皮膚科,大森　孝文,,,,REVIEW,UNKNOWN,1,HP制作会社の制作実績,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+36,v25.4,奥田医院,1983-01-01,https://okuda.clinic/,https://okuda.clinic/,SUCCESS,VERIFIED,C,5,,奥田　博昭,,,,UNKNOWN,厚生局指定年月日 1983-01-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+37,v25.4,パレスクリニック,1983-05-01,https://www.palaceclinictokyo.com/,https://www.palaceclinictokyo.com/,SUCCESS,VERIFIED,B,9,皮膚科,春山　喜一,,,,UNKNOWN,厚生局指定年月日 1983-05-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+39,v25.4,広川眼科,1984-08-01,https://hirokawaganka.com/,https://hirokawaganka.com/,SUCCESS,VERIFIED,C,4,,広川　正泰,1984,,0.0%,MODEL_ESTIMATE,HP院長経歴の大学卒業年,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+41,v25.4,医療法人社団　鈴森内科クリニック,1988-06-01,http://www.suzumori-cl.com/,https://www.suzumori-cl.com/,SUCCESS,VERIFIED,B,8,糖尿病,重本　幸子,,,,UNKNOWN,厚生局指定年月日 1988-06-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+43,v25.4,医療法人社団　みどり会　神田眼科診療所,1990-11-05,http://www.kanda-eye.jp/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+44,v25.4,医療法人社団　聖水会　小笠原クリニック,1991-01-23,https://ogasawara-cl2.com/,https://ogasawara-cl2.com/,SUCCESS,VERIFIED,C,6,,柳　智貴,,,,UNKNOWN,厚生局指定年月日 1991-01-23 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+46,v25.4,医療法人社団　西端耳鼻咽喉科,1991-10-01,http://www.nishihata-ent.or.jp/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+47,v25.4,医療法人社団　滝医院,1992-04-01,http://www.nt.pial.jp/taki-iin/,http://www.nt.pial.jp/taki-iin/,SUCCESS,VERIFIED,B,8,内視鏡 / 糖尿病 / 皮膚科,瀧　正彦,,,,UNKNOWN,厚生局指定年月日 1992-04-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+48,v25.4,一般財団法人　健康医学協会　附属東都クリニック,1994-02-01,https://tohto.kenkoigaku.or.jp/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+49,v25.4,市ヶ谷駅前診療所,1994-11-01,https://ichigaya-shinryosyo.com/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+50,v25.4,医療法人社団　正誠会　林医院,1995-06-01,https://www.hayashi-clinic.com/,https://www.hayashi-clinic.com/,SUCCESS,VERIFIED,C,5,,林　久太佳,1994,1994,89.8%,MODEL_ESTIMATE,厚生局/取込済み医籍登録年,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+52,v25.4,医療法人社団　緑和会　ストレスケア日比谷クリニック,1996-09-01,https://strescue.com/,https://strescue.com/ws/,SUCCESS,VERIFIED,B,9,ED / 男性更年期,酒井　和夫,,,,UNKNOWN,厚生局指定年月日 1996-09-01 を確認（年齢は直接算出不可）,2,Doctors File掲載 / YouTube公式運用,アツい,電話番号一致 / 医院名がページ見出しに一致
+53,v25.4,麹町クリニック,1997-01-01,http://www.kojimachiclinic.com/,https://www.kojimachiclinic.com/,SUCCESS,VERIFIED,C,6,,増森　興治,,,,UNKNOWN,厚生局指定年月日 1997-01-01 を確認（年齢は直接算出不可）,1,Doctors File掲載,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致
+54,v25.4,一口坂クリニック,1997-01-01,http://hitokuchizaka.com/,https://hitokuchizaka.com/,SUCCESS,VERIFIED,C,6,,作田　優子,,,,UNKNOWN,厚生局指定年月日 1997-01-01 を確認（年齢は直接算出不可）,1,Doctors File掲載,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+55,v25.4,山王グランドビル薬師堂クリニック,1997-01-01,http://yakushido-clinic.com/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+56,v25.4,医療法人社団　高典会　飯田橋クリニック,1997-01-23,http://www.iidabashi-cl.com/,https://www.iidabashi-cl.com/,SUCCESS,VERIFIED,B,10,ED,高橋　典大,,,,UNKNOWN,厚生局指定年月日 1997-01-23 を確認（年齢は直接算出不可）,1,Instagram公式運用,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致
+57,v25.4,医療法人社団　順真会　しのみやクリニック,1997-03-01,http://shinomiya-clinic.jp/,https://shinomiya-clinic.jp/,SUCCESS,VERIFIED,D,2,,鈴木　聡彦,1993,,82.8%,MODEL_ESTIMATE,https://shinomiya-clinic.jp/doctor-shift,1,Doctors File掲載,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致
+58,v25.4,医療法人社団　爽和会　お茶の水駿河台クリニック,1998-02-10,https://gazo.or.jp/,https://gazo.or.jp/,SUCCESS,VERIFIED,B,10,内視鏡,山田　篤生,,,,REVIEW,UNKNOWN,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+59,v25.4,医療法人社団　互酬会　水道橋東口クリニック,1998-02-20,https://www.suidobashi-e-cl.jp/,https://www.suidobashi-e-cl.jp/,SUCCESS,VERIFIED,C,6,,辻　彼南雄,1984,,0.0%,MODEL_ESTIMATE,https://www.suidobashi-e-cl.jp/contents/about.html,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+60,v25.4,医療法人社団　和平会　坪井医院,1998-03-02,http://www.tsuboi-clinic.org/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+61,v25.4,公益財団法人　神経研究所　附属睡眠呼吸障害クリニック,1999-11-01,http://www.suiminclinic.com/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+62,v25.4,一般財団法人　小峰研究所　番町小峰クリニック,2000-01-01,https://komine-labo.info/komineclinic,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+64,v25.4,医療法人社団　医新会　神田医新クリニック,2000-04-01,https://www.ishin-kanda.jp/,https://www.ishin-kanda.jp/,SUCCESS,VERIFIED,B,8,ED / 男性更年期 / 泌尿器科,藤原　博通,,,,REVIEW,UNKNOWN,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+65,v25.4,大島眼科医院,2000-04-01,http://www.oshima-eye.com/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+67,v25.4,医療法人社団　神田診療所,2000-04-01,https://www.kanda-shinryojo.com/,https://www.kanda-shinryojo.com/,SUCCESS,VERIFIED,C,4,,髙橋　泰人,1992,,65.7%,MODEL_ESTIMATE,https://www.kanda-shinryojo.com/,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+69,v25.4,医療法人財団　駿愛会　駿河台診療所,2000-09-01,https://www.sunaikai.jp/,https://www.sunaikai.jp/,SUCCESS,VERIFIED,B,10,内視鏡,塩澤　宏和,1997,,98.2%,MODEL_ESTIMATE,https://www.sunaikai.jp/hospital/,4,Doctors File掲載 / Medical DOC掲載 / 地域ドクターズ掲載 / オンライン診療,かなりアツい,電話番号一致 / 医院名がページ見出しに一致 / 住所一致 / 院長名一致
+70,v25.4,医療法人社団　小川耳鼻咽喉科,2000-12-01,http://www.ogawa-ent.com/,http://www.ogawa-ent.com/,SUCCESS,VERIFIED,D,3,,飯ケ谷　七重,,,,UNKNOWN,厚生局指定年月日 2000-12-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 住所一致
+72,v25.4,医療法人社団　山岡クリニック,2001-04-01,http://www.yamaoka-clinic.com/,https://www.yamaoka-clinic.com/,SUCCESS,VERIFIED,A,13,糖尿病 / 皮膚科,山岡　周平,,,,UNKNOWN,厚生局指定年月日 2001-04-01 を確認（年齢は直接算出不可）,3,Doctors File掲載 / HP制作会社の制作実績 / LINE公式運用,かなりアツい,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+73,v25.4,医療法人社団　司洋会　有楽町駅日比谷口眼科,2001-09-01,https://www.biccamera.co.jp/bic_contact/shop/index.html#shop014,,ERROR,ERROR,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+74,v25.4,エムアンドエム　スキンケアクリニック,2001-10-01,http://skincare-clinic.jp/,https://skincare-clinic.jp/,SUCCESS,VERIFIED,A,13,皮膚科,鈴木　みね子,2011,,100.0%,MODEL_ESTIMATE,HP院長経歴の大学卒業年,2,YouTube公式運用 / LINE公式運用,アツい,電話番号一致 / 医院名がページ見出しに一致
+75,v25.4,九段嵐山クリニック,2001-10-01,http://www.wellclinics.com/arashiyama/in.html,,ERROR,ERROR,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+77,v25.4,スバル医院,2002-04-01,http://www.subaru-clinic.com/,http://www.subaru-clinic.com/,SUCCESS,VERIFIED,C,7,ED / 泌尿器科 / 皮膚科,中村　憲司,1970,,0.0%,MODEL_ESTIMATE,http://www.subaru-clinic.com/profile/index.html,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+78,v25.4,医療法人社団　遠藤クリニック,2002-02-25,https://endo.or.jp/,https://endo.or.jp/,SUCCESS,VERIFIED,C,6,,遠藤　素夫,1982,,0.0%,MODEL_ESTIMATE,https://endo.or.jp/staff.html,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+80,v25.4,医療法人社団　大政クリニック,2002-05-01,http://www.omasa-clinic.com/,http://www.omasa-clinic.com/,SUCCESS,VERIFIED,C,7,内視鏡,大政　良二,,,,UNKNOWN,厚生局指定年月日 2002-05-01 を確認（年齢は直接算出不可）,1,Doctors File掲載,集客投資シグナルあり,電話番号一致 / 医院名がページ見出しに一致
+81,v25.4,帝国クリニック,2002-09-15,https://doctorsfile.jp/h/29698/,,NOT_FOUND,NOT_FOUND,NO_HP,0,,,,,,,,0,,通常,検索した範囲で公式HPを発見できませんでした。
+83,v25.4,医療法人社団　慶翔会　飯田橋眼科クリニック,2003-04-01,http://www.iidabashi-eye.com/,https://www.iidabashi-eye.com/,SUCCESS,VERIFIED,B,11,白内障 / 緑内障,吉野　真未,1994,1994,89.8%,MODEL_ESTIMATE,厚生局/取込済み医籍登録年,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+85,v25.4,半蔵門モロオカクリニック,2003-04-25,http://www.morooka-clinic.jp/,http://www.morooka-clinic.jp/,SUCCESS,VERIFIED,C,4,,額田　えりの,,,,UNKNOWN,厚生局指定年月日 2003-04-25 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+86,v25.4,日本医科大学呼吸ケアクリニック,2003-12-01,https://www.nms.ac.jp/rcc/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+88,v25.4,医療法人社団　久信会　日比谷ヒフ科クリニック,2004-09-01,https://www.hibiya-skin.com/hibiya/,https://www.hibiya-skin.com/hibiya/,SUCCESS,VERIFIED,A,12,皮膚科,松本　真理子,1992,,65.7%,MODEL_ESTIMATE,https://www.hibiya-skin.com/doctor/,5,Medical DOC掲載 / マイナビ記事掲載 / 地域ドクターズ掲載 / Instagram公式運用 / LINE公式運用,かなりアツい,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+91,v25.4,医療法人社団　荘和会　半蔵門胃腸クリニック,2004-10-01,http://hanzomon-icho-clinic.com/,https://hanzomon-icho-clinic.com/,SUCCESS,VERIFIED,D,2,,掛谷　和俊,1982,,0.0%,MODEL_ESTIMATE,https://hanzomon-icho-clinic.com/,0,,通常,電話番号一致 / 医院名がページ見出しに一致 / 院長名一致
+92,v25.4,永田町つばさクリニック,2004-11-01,http://tousyoukai.com/aeccaaaaafafaffa/,http://tousyoukai.com/aeccaaaaafafaffa/,SUCCESS,VERIFIED,C,6,,戸頃　もえ,,,,UNKNOWN,厚生局指定年月日 2004-11-01 を確認（年齢は直接算出不可）,0,,通常,電話番号一致 / 医院名がページ見出しに一致
+93,v25.4,ホテルニューオータニ診療所,2004-10-26,https://www.newotani.co.jp/tokyo/facility/clinic-newotani/,,REVIEW,REVIEW,UNKNOWN,0,,,,,,,,0,,通常,候補ページの本人確認・取得を完了できませんでした。
+96,v25.4,医療法人社団　ＩＬＣ会　一番町レディースクリニック,2005-03-14,http://www.1-ilc.com/,https://www.1-ilc.com/,SUCCESS,VERIFIED,A,12,皮膚科,飯田　晋也,,,,UNKNOWN,厚生局指定年月日 2005-03-14 を確認（年齢は直接算出不可）,3,Doctors File掲載 / HP制作会社の制作実績 / Instagram公式運用,かなりアツい,電話番号一致 / 医院名がページ見出しに一致
+97,v25.4,中田クリニック,2005-09-01,http://www.nakata-clinic.jp/,https://nakata-clinic.jp/,SUCCESS,VERIFIED,C,7,,中田　紘一郎,1968,,0.0%,MODEL_ESTIMATE,https://nakata-clinic.jp/message/,0,,通常,電話番号一致 / 医院名がページ見出しに一致

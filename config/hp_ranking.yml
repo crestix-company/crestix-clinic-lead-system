@@ -1,0 +1,15 @@
+# HTMLから確認できる機能・内容の評価。見た目の美しさを画像認識した評価ではありません。
+version: hp-content-1
+weights:
+  HTTPS: 1
+  スマホviewport: 1
+  Web予約導線: 2
+  LINE導線: 1
+  治療専用ページ: 3
+  院長プロフィール: 2
+  写真: 1
+  料金情報: 1
+  問合せCTA: 1
+  SNS導線: 1
+  独自LP・専門サイト: 2
+thresholds: {A: 12, B: 8, C: 4, D: 0}

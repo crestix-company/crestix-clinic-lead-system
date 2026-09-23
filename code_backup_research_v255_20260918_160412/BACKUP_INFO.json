@@ -1,0 +1,38 @@
+{
+  "created_at": "20260918_160412",
+  "from_version": "2.5.4-research",
+  "files": {
+    "VERSION_RESEARCH": {
+      "existed": true,
+      "sha256": "929c547305381f1275202f4e67799916fe66c602119251b8d8cd1125c25a8de4"
+    },
+    "src/scoring/research_scoring.py": {
+      "existed": true,
+      "sha256": "6b3f00f84cef959e22390c55e371f9803e542f5da42a6873c1dd0b325c938691"
+    },
+    "src/enrichment/profiles.py": {
+      "existed": true,
+      "sha256": "30dabc0c85a618d90ee4778d02c6a3fd41b0769d9af3bf5e15c5dc53f8816b96"
+    },
+    "src/master/samples.py": {
+      "existed": true,
+      "sha256": "399527ab62a3520d59a62b5fdb26dc48b374fb765af748c8de821bb99e81a390"
+    },
+    "config/treatment_keywords.yml": {
+      "existed": true,
+      "sha256": "8bd92acd24e4917430b9ea4596a35c4985e0d476ce080c824bf83ca47d02cfa5"
+    },
+    "tests/test_v255_regression.py": {
+      "existed": false,
+      "sha256": null
+    },
+    "tests/test_v2_scoring.py": {
+      "existed": true,
+      "sha256": "554ba2ecd08295f46432bf04a3c5e1e023754799e4b87c6bd3c9704c87d80720"
+    },
+    "tests/test_v3_hp_false_positives.py": {
+      "existed": true,
+      "sha256": "ed1f3e5f4da1f5895620d6887b933a494928592014144f1fdbe6633ff05fe2d9"
+    }
+  }
+}

@@ -1,0 +1,65 @@
+app:
+  title: クリニック営業リスト選別ツール
+  timezone: Asia/Tokyo
+  max_upload_mb: 50
+  max_rows: 100000
+prefectures:
+  東京都:
+    adapter: kanto_excel
+    current_list_url: https://kouseikyoku.mhlw.go.jp/kantoshinetsu/chousa/shitei.html
+    master_path: data/master/tokyo_current.csv
+matching:
+  fuzzy_threshold: 92
+  ambiguity_margin: 6
+  fuzzy_name_weight: 0.65
+  max_candidates: 10
+  minimum_name_similarity: 80
+  minimum_address_similarity: 80
+  max_master_age_days: 62
+lead:
+  recent_years: 10
+  require_recent: true
+  require_young: true
+  require_owner_manager: true
+  include_succession: true
+  epark_enabled: true
+  include_review_in_final: false
+succession:
+  threshold: 50
+  require_strong_evidence: true
+  weights:
+    inheritance_reason: 50
+    change_reason: 25
+    same_surname: 10
+    young_manager: 10
+    profile_inheritance: 40
+    profile_family: 20
+    profile_appointment: 15
+    age_gap: 15
+    family_business: 5
+  inheritance_reasons: [継承, 承継]
+  change_reasons: [交代, 管理者変更, 開設者変更]
+  profile_inheritance_keywords: [継承, 承継, 二代目, "2代目", 三代目]
+  profile_family_keywords: [父, 母, 親子, 息子, 娘]
+  profile_appointment_keywords: [副院長, 院長就任, 院長に就任]
+  minimum_age_gap: 20
+doctor_license:
+  cache_path: data/cache/doctor_license_cache.csv
+  search_url: https://licenseif.mhlw.go.jp/search_isei/jsp/top.jsp
+  minimum_confidence: 0.8
+epark:
+  cache_path: data/cache/epark_cache.csv
+  cache_ttl_days: 90
+  blocked_ttl_days: 7
+  timeout_seconds: 15
+  minimum_interval_seconds: 3
+  max_requests_per_run: 30
+  max_html_bytes: 5000000
+  allowed_hosts: [epark.jp, www.epark.jp]
+  # 403により未検証。予約や写真の有無だけでは契約の有無を断定しない。
+  rules_version: "unverified-1"
+  validated_rules: []
+  # 有料専用要素が複数サイトで検証できたら追加する例（初期状態では無効）
+  # - selector: '[data-confirmed-plan="paid"]'
+  #   label: 課金済み
+  #   reason: 契約種別を示す要素を確認

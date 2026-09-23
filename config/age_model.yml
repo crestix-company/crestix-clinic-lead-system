@@ -1,0 +1,29 @@
+# 業務上の仮定値。観測データで校正された個人の年齢確率ではありません。
+model_version: "mvp-assumption-1"
+source: "ユーザー提示の仮定分布。末尾カテゴリの内訳はMVPの追加仮定"
+school_years: 6
+age_limit: 59
+threshold: 0.50
+minimum_registration_year: 1900
+interval_quantiles: [0.05, 0.95]
+# 0.999という丸め差だけを許容し、計算時には合計1に正規化。
+sum_tolerance: 0.005
+medical_school_entry_age_distribution:
+  age_18: 0.365
+  age_19: 0.360
+  age_20: 0.144
+  age_21: 0.057
+  age_22_or_more: 0.073
+medical_school_delay_distribution:
+  delay_0: 0.855
+  delay_1: 0.100
+  delay_2_or_more: 0.045
+national_exam_delay_distribution:
+  delay_0: 0.947
+  delay_1: 0.040
+  delay_2_or_more: 0.013
+# 「以上」を単一の最小値に丸めない。ここも編集可能な仮定。
+tail_distributions:
+  age_22_or_more: {22: 0.40, 23: 0.25, 24: 0.15, 26: 0.10, 30: 0.07, 35: 0.03}
+  school_delay_2_or_more: {2: 0.70, 3: 0.20, 4: 0.10}
+  exam_delay_2_or_more: {2: 0.75, 3: 0.20, 4: 0.05}

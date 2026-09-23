@@ -1,0 +1,12 @@
+# 動作確認済みの直接依存。Python 3.12で検証。
+streamlit==1.63.0
+pandas==2.2.3
+openpyxl==3.1.5
+xlrd==2.0.1
+PyYAML==6.0.3
+requests==2.34.2
+beautifulsoup4==4.15.0
+rapidfuzz==3.14.6
+filelock==3.32.6
+pytest==9.1.1
+tzdata==2026.3
