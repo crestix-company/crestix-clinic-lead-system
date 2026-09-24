@@ -507,7 +507,7 @@ def simple_workflow_ui(store, demo):
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
-        st.write("Tavily検索：0回 / 最大HPページ数：20ページ")
+        st.write("最大HPページ数：20ページ")
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
 
     st.subheader("4. 営業対象を絞ってComdesk形式で出力")
@@ -612,28 +612,18 @@ def research_ui(store,demo):
     reset_message = st.session_state.pop("research_reset_message", None)
     if reset_message:
         st.success(reset_message)
-    st.write("HP・EPARK・外部媒体を分けて調査します。APIキーはこの画面の利用中だけ保持します。")
-    api_key = st.text_input("Tavily APIキー（Google MapsでHP取得済みの医院だけなら不要）",type="password",key="tavily_api_key",placeholder="HP発見検索が必要な場合のみ入力。環境変数 TAVILY_API_KEY でも設定できます",disabled=demo)
-    st.caption("Google Mapsの確認済みウェブサイトURLがある医院は、Tavilyを使わずそのURLから直接HP内容を調査します。")
+    st.write("HP・EPARK・外部媒体を分けて調査します。")
+    api_key = ""
     if demo:
         st.info("サンプルは調査済みです。営業対象フィルターから出力を試してください。")
-    with store.connect() as c:
-        used = c.execute("SELECT count(*) FROM search_usage WHERE month=?",(today_japan().strftime("%Y-%m"),)).fetchone()[0]
-    st.metric("今月の検索試行数",used)
-    limit = st.number_input("月間検索上限",0,100000,int(store.setting("monthly_limit",900)),key="monthly_limit_input")
-    reserve = st.number_input("他のアプリ等で使用済みの検索数（控除）",0,100000,int(store.setting("external_usage_reserve",0)),key="reserve_input")
-    if st.button("月間上限を保存"):
-        store.set_setting("monthly_limit",limit);store.set_setting("external_usage_reserve",reserve)
-        st.success("上限を保存しました。")
-    st.caption("失敗した検索も1回として数えます。このDB以外の使用量は自動取得しないため、上の控除欄に入力してください。")
     with st.expander("調査対象を絞る",expanded=False):
         f = filters_ui(store,"research",Filters(active_only=True,hp_only=False))
     kind_label = st.selectbox("調査内容",["公式HPの発見・内容調査","EPARK掲載ページ調査","外部媒体調査"])
     kind = {"公式HPの発見・内容調査":"hp","EPARK掲載ページ調査":"epark","外部媒体調査":"media"}[kind_label]
-    cols = st.columns(3)
+    cols = st.columns(2)
     count = cols[0].number_input("今回の医院数",1,500,100)
-    max_search = cols[1].number_input("今回の検索上限",0,1000,100)
-    max_pages = cols[2].number_input("1医院の最大HPページ数",1,30,20)
+    max_search = 100
+    max_pages = cols[1].number_input("1医院の最大HPページ数",1,30,20)
     force = st.checkbox("強制再調査（調査済みも対象・新しい検索を行う）")
     st.caption("「今回の医院数」は新しい調査を開始した時点で固定されます。実行中の30件を50件に変更しても、その調査は30件のままです。やり直す場合は『一時停止 → この調査をリセット → 医院数を設定 → 新規開始』の順です。")
     runner = runner_for(str(store.path))
@@ -648,7 +638,7 @@ def research_ui(store,demo):
         selected = st.selectbox("調査履歴・再開する調査",options,format_func=lambda jid:next(f"{j['created_at'][:16]}｜{dict(hp='HP',epark='EPARK',media='外部媒体')[j['kind']]}｜{JOB_LABELS.get(j['status'],j['status'])}" for j in jobs if j["id"]==jid))
         current = job_status(store,selected)
         st.caption(f"この調査は開始時点で {current['total']} 医院に固定されています。上の『今回の医院数』を変更しても、この調査の件数は変わりません。")
-        increased = st.number_input("この調査の検索上限（再開用）",0,10000,int(current["max_searches"]),key="resume_limit_"+selected)
+        increased = int(current["max_searches"])
         cols = st.columns(3)
         if cols[0].button("続きから再開",disabled=runner.running() or current["status"]=="COMPLETED"):
             provider = TavilySearchProvider(api_key)
@@ -675,7 +665,7 @@ def show_job_progress(store,jid):
     done = job["counts"].get("DONE",0)
     st.progress(done/max(1,job["total"]),text=f"完了 {done} / {job['total']}件　｜　{JOB_LABELS.get(job['status'],job['status'])}")
     result = job["results"]
-    st.write(f"調査成功 {result.get('SUCCESS',0)} ／ 未発見 {result.get('NOT_FOUND',0)} ／ 要確認 {result.get('REVIEW',0)} ／ エラー {result.get('ERROR',0)} ／ Tavily検索 {job['search_count']}回")
+    st.write(f"調査成功 {result.get('SUCCESS',0)} ／ 未発見 {result.get('NOT_FOUND',0)} ／ 要確認 {result.get('REVIEW',0)} ／ エラー {result.get('ERROR',0)}")
     st.caption("停止はページ取得の区切りで反映されます。画面を更新しても完了済みの医院は再処理しません。")
 
 
