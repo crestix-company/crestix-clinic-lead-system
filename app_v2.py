@@ -21,7 +21,8 @@ from src.master.store import ClinicStore
 from src.master.filters import Filters
 from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
 from src.master.samples import load_demo
-from src.scoring.research_scoring import SIGNAL_NAMES
+from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
+from src.master.filters import AD_COUNT_SQL
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -38,6 +39,17 @@ def store_for(path):
 @st.cache_resource
 def runner_for(path):
     return JobRunner()
+
+
+def ad_count_options(store):
+    # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
+    with store.connect() as c:
+        top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
+    return [0]+list(range(2,top+1))
+
+
+def ad_count_label(n):
+    return "指定なし" if n==0 else f"{n}施策以上"
 
 
 def filters_ui(store,prefix="sales",defaults=None):
@@ -64,16 +76,16 @@ def filters_ui(store,prefix="sales",defaults=None):
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
         treatments = st.multiselect("治療カテゴリ",treatment_names,default=defaults.treatments,key=key("treatments"))
-        minimum = st.number_input("集客投資シグナル数の下限",0,len(SIGNAL_NAMES),defaults.signal_min,key=key("min"))
-        hot = st.multiselect("アツさ",["通常","集客投資シグナルあり","アツい","かなりアツい"],default=defaults.hot,key=key("hot"))
+        ad_options = ad_count_options(store)
+        ad_min = st.selectbox("広告・集客施策数",ad_options,index=ad_options.index(defaults.ad_min) if defaults.ad_min in ad_options else 0,format_func=ad_count_label,key=key("ad_min"))
         new = st.checkbox("前回の厚生局更新から追加された医院",value=defaults.new_only,key=key("new"))
         opening = st.checkbox("新規開業候補（1年以内・新規指定）",value=defaults.recent_opening,key=key("opening"))
-    signals = st.multiselect("必須の集客投資シグナル（選んだものすべて）",SIGNAL_NAMES,default=defaults.signals,key=key("signals"))
+    signals = st.multiselect("集客投資シグナル（いずれか）",SIGNAL_NAMES,default=defaults.signals,key=key("signals"))
     keyword = st.text_input("医院名・電話番号・UUIDで検索",value=defaults.keyword,key=key("keyword"))
     st.caption("条件同士はAND。診療科・治療カテゴリなど同じ項目の複数選択はORです。HP未発見は「存在しない」と断定した状態ではありません。")
     return Filters(active_only=active,hp_only=hp,recent_only=recent,age_min=age/100 if age is not None else None,
                    medical_types=medical,prefectures=pref,departments=deps,ranks=ranks,treatments=treatments,
-                   signal_min=minimum,hot=hot,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword)
+                   ad_min=ad_min,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword)
 
 
 def show_funnel(store,filters):
@@ -537,12 +549,14 @@ def simple_sales_ui(store):
     treatment_options = list(dict.fromkeys(t for d in deps for t in dept_treatments.get(d, []))) if deps else treatment_names
     treatments = st.multiselect("治療カテゴリ", treatment_options, key="simple_sales_treatments")
     treatments = [t for t in treatments if t in treatment_options]
+    ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
+    ad_min = st.selectbox("広告・集客施策数", ad_count_options(store), format_func=ad_count_label, key="simple_sales_ad_min")
+    companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
 
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
     age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
     rank_ab = cols[2].checkbox("HPランク A/B", key="simple_sales_rank")
-    hot = cols[3].checkbox("アツい", help="集客シグナル2個以上", key="simple_sales_hot")
 
     keyword = st.text_input("医院名・電話番号で検索", key="simple_sales_keyword")
 
@@ -556,7 +570,9 @@ def simple_sales_ui(store):
         departments=deps,
         treatments=treatments,
         ranks=["A","B"] if rank_ab else [],
-        signal_min=2 if hot else 0,
+        signals=ads,
+        ad_min=ad_min,
+        production_companies=companies,
         keyword=keyword,
     )
 

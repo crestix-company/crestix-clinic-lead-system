@@ -228,7 +228,7 @@ def test_filter_combination_funnel_and_half_boundary(store):
 
 
 @pytest.mark.parametrize("updates,count",[
-    ({"signals":["YouTube公式運用","AIチャット導入"]},1),
+    ({"signals":["YouTube公式運用","AIチャット導入"]},3),({"signals":["AIチャット導入"]},1),
     ({"treatments":["内視鏡","白内障"]},2),
     ({"uuid_mode":"あり"},1),({"owner_equal":"不一致のみ"},0),({"ranks":["NO_HP"],"hp_only":False},1),
     ({"keyword":"青空"},1),({"keyword":"00000001"},1),({"keyword":"%"},0)])

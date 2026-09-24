@@ -1,5 +1,9 @@
 from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
+from src.scoring.research_scoring import AD_SIGNAL_NAMES
+
+# 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
+AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
 
 
 @dataclass
@@ -14,6 +18,8 @@ class Filters:
     departments: list[str] = field(default_factory=list)
     treatments: list[str] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
+    ad_min: int = 0
+    production_companies: list[str] = field(default_factory=list)
     signal_min: int = 0
     hot: list[str] = field(default_factory=list)
     owner_equal: str = "指定なし"
@@ -50,8 +56,13 @@ def clauses(f, as_of=None):
             add(label, f"EXISTS(SELECT 1 FROM json_each({col}) WHERE value IN ({','.join('?' for _ in values)}))", *values)
     if f.signal_min:
         add(f"集客投資シグナル{f.signal_min}個以上", "signal_count>=?", f.signal_min)
-    for signal in f.signals:
-        add(signal, "EXISTS(SELECT 1 FROM json_each(signals_json) WHERE value=?)", signal)
+    # 広告・集客施策の複数選択は同一項目内OR。施策数は別項目（AND）。
+    if f.signals:
+        add("広告・集客施策", f"EXISTS(SELECT 1 FROM json_each(signals_json) WHERE value IN ({','.join('?' for _ in f.signals)}))", *f.signals)
+    if f.ad_min:
+        add(f"広告・集客施策{f.ad_min}個以上", AD_COUNT_SQL+">=?", f.ad_min)
+    if f.production_companies:
+        add("HP制作会社", f"EXISTS(SELECT 1 FROM json_each(json_extract(effective_json,'$.hp_production_companies')) WHERE value IN ({','.join('?' for _ in f.production_companies)}))", *f.production_companies)
     if f.owner_equal != "指定なし":
         add("開設者＝管理者", "owner_equal=?", int(f.owner_equal == "一致のみ"))
     if f.uuid_mode != "指定なし":
