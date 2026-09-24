@@ -3,6 +3,7 @@
   python scripts/perf/replay.py capture          # ライブ取得しながらHTTP応答を .perf-replay/replay/ に記録
   python scripts/perf/replay.py replay --write-expected   # 記録を再生し、期待値JSON(golden/expected.json)を作成
   python scripts/perf/replay.py replay           # 記録を再生し、期待値と完全一致するか確認（高速化の採用判定）
+  python scripts/perf/replay.py replay --profile # 上記に加え、HTML解析回数・解析時間・判定時間を計測
 
 記録するのは requested URL / HTTP status / final URL（location）/ content-type / 本文だけ。
 Cookie・認証情報・送信ヘッダーは保存しない。記録はGit管理外（.perf-replay/）。
@@ -30,6 +31,59 @@ RESPONSES = REPLAY_DIR / "responses.pkl.gz"
 META = REPLAY_DIR / "meta.json"
 KEEP_HEADERS = {"content-type", "location"}
 state = {"cid": None}
+prof = {"bs_calls": collections.Counter(), "bs_sec": collections.Counter(), "clinic_sec": {}, "scoring_sec": 0.0, "page_post_init_sec": 0.0}
+
+
+def _install_profiler():
+    """BeautifulSoup生成回数・時間（呼び出し元関数別）、判定時間、医院別時間を計測する（判定には影響しない）。"""
+    import bs4
+    from src.enrichment import hp_analysis
+    orig_bs = bs4.BeautifulSoup.__init__
+
+    def bs_init(self, *a, **k):
+        caller = sys._getframe(1)
+        key = f"{caller.f_code.co_filename.rsplit('/src/', 1)[-1]}:{caller.f_code.co_name}"
+        t = time.perf_counter()
+        orig_bs(self, *a, **k)
+        prof["bs_calls"][key] += 1
+        prof["bs_sec"][key] += time.perf_counter() - t
+    bs4.BeautifulSoup.__init__ = bs_init
+    orig_analyze = researcher_mod.analyze
+
+    def analyze(record, pages, results=()):
+        t = time.perf_counter()
+        try:
+            return orig_analyze(record, pages, results)
+        finally:
+            prof["scoring_sec"] += time.perf_counter() - t
+    researcher_mod.analyze = analyze
+    orig_post = hp_analysis.Page.__post_init__
+
+    def post(self):
+        t = time.perf_counter()
+        orig_post(self)
+        prof["page_post_init_sec"] += time.perf_counter() - t
+    hp_analysis.Page.__post_init__ = post
+    orig_run = researcher_mod.Researcher.run
+
+    def run(self, kind, record, force=False):
+        t = time.perf_counter()
+        try:
+            return orig_run(self, kind, record, force)
+        finally:
+            prof["clinic_sec"][record.get("id")] = time.perf_counter() - t
+    researcher_mod.Researcher.run = run
+
+
+def _profile_report():
+    from perf_common import percentile
+    secs = list(prof["clinic_sec"].values())
+    return {"bs_parse_calls": sum(prof["bs_calls"].values()), "bs_parse_sec": round(sum(prof["bs_sec"].values()), 2),
+            "scoring_sec": round(prof["scoring_sec"], 2), "page_post_init_sec": round(prof["page_post_init_sec"], 2),
+            "clinic_total_sec": round(sum(secs), 2), "clinic_avg_sec": round(sum(secs) / len(secs), 3),
+            "clinic_p50_sec": round(percentile(secs, 50), 3), "clinic_p95_sec": round(percentile(secs, 95), 3),
+            "bs_calls_by_caller": dict(prof["bs_calls"].most_common()),
+            "bs_sec_by_caller": {k: round(v, 2) for k, v in prof["bs_sec"].most_common()}}
 
 
 def _track_clinic():
@@ -144,7 +198,9 @@ def diff(expected, actual):
     return out
 
 
-def replay(write_expected=False):
+def replay(write_expected=False, profile=False):
+    if profile:
+        _install_profiler()
     meta = json.loads(META.read_text(encoding="utf-8"))
     with gzip.open(RESPONSES, "rb") as f:
         ReplayTransport.data = pickle.load(f)
@@ -172,6 +228,12 @@ def replay(write_expected=False):
         report.update({"accuracy_diffs": len(d), "diff_examples": [list(map(str, x))[:4] for x in d[:20]],
                        "expected_status": dict(e_status), "actual_status": dict(a_status),
                        "accuracy_regression_zero": not d and not ReplayTransport.misses})
+    report["requests_replayed"] = sum(ReplayTransport.cursor.values())
+    report["request_pattern"] = sorted(f"{k[0]}|{k[1]}|{n}" for k, n in ReplayTransport.cursor.items())
+    if profile:
+        report["profile"] = _profile_report()
+    pattern = report.pop("request_pattern")
+    (PERF_DIR / "replay" / "last_request_pattern.json").write_text(json.dumps(pattern, ensure_ascii=False), encoding="utf-8")
     print(json.dumps(report, ensure_ascii=False))
     return report
 
@@ -181,6 +243,6 @@ if __name__ == "__main__":
     if cmd == "capture":
         capture()
     elif cmd == "replay":
-        replay("--write-expected" in sys.argv)
+        replay("--write-expected" in sys.argv, "--profile" in sys.argv)
     else:
         print(__doc__)

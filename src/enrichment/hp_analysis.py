@@ -66,6 +66,20 @@ class Page:
         return {"url":self.url,"title":self.title,"headings":self.headings[:2000],"text":self.main_text[:15000]}
 
 
+def page_soup(page):
+    """読み取り専用の解析結果。同じPageの同じHTMLは html.parser で1回だけ解析して使い回す。
+
+    キャッシュはPageオブジェクト自身に持つため、その医院の調査中だけ有効（医院を跨がない）。
+    HTMLが差し替わった場合は解析し直す。返したsoupを変更（decompose等）する処理には渡さないこと。
+    """
+    cached = page.__dict__.get("_readonly_soup")
+    if cached is not None and cached[0] is page.html:
+        return cached[1]
+    soup = BeautifulSoup(page.html,"html.parser")
+    page.__dict__["_readonly_soup"] = (page.html,soup)
+    return soup
+
+
 def identity(record, page, official=True):
     if official and not is_official_candidate(page.url):
         return {"verified":False,"score":0,"reasons":["外部媒体・口コミ・SNSは公式HPとして採用しない"]}
@@ -76,7 +90,7 @@ def identity(record, page, official=True):
     name_ok = bool(name and len(name)>=3 and name in normalize_clinic_name(name_scope))
     phone = normalize_phone(record.get("phone"))
     found_phones = {normalize_phone(m[0]) for m in re.finditer(r"(?<!\d)0\d[\d()\s\-－ー]{6,18}\d(?!\d)",text)}
-    soup = BeautifulSoup(page.html,"html.parser")
+    soup = page_soup(page)
     found_phones.update(normalize_phone(x.get("href","")[4:]) for x in soup.select('a[href^="tel:"]'))
     exact_phone_pattern = r"(?<!\d)"+r"[\s()\-－ー]*".join(re.escape(d) for d in phone)+r"(?!\d)" if phone else r"(?!)"
     phone_ok = bool(phone and len(phone)>=9 and (phone in found_phones or re.search(exact_phone_pattern,text)))
