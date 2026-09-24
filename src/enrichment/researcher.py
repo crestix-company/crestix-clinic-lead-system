@@ -58,6 +58,7 @@ def empty_hp_result(status,record=None):
             "hp_rank":"NO_HP" if status=="NOT_FOUND" else "UNKNOWN","hp_score":0,"hp_rank_reasons":[],
             "hp_match_score":0,"hp_match_reason":[],"hp_identity_pages":[],"hp_candidates":[],"crawl_errors":[],
             "treatment_categories":[],"treatment_evidence":[],"treatment_confidence":{},
+            "hp_production_companies":[],"hp_production_evidence":[],
             "marketing_signals":signals,"marketing_signal_count":len(signals),"hot_status":hot_status(len(signals)),"research_status":status}
 
 

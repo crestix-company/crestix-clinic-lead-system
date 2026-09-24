@@ -14,6 +14,16 @@ SIGNAL_NAMES = [
     "AIチャット導入","YouTube公式運用","TikTok公式運用","Instagram公式運用","LINE公式運用","オンライン診療",
     "漫画コンテンツ","治療専用LP","治療専門サイト","その他有料施策・集客ツール",MIDDAY_SIGNAL
 ]
+# 営業抽出用の「広告・集客施策」。HP制作会社（別属性）と昼の検査・手術専用枠（診療体制）は数えない。
+AD_SIGNAL_NAMES = [n for n in SIGNAL_NAMES if n not in {"HP制作会社の制作実績",MIDDAY_SIGNAL}]
+# 営業画面の表示名（表示順）。内部keyword・検出パターンは画面に出さない。
+AD_SIGNAL_LABELS = {
+    "Doctors File掲載":"Doctors File","Medical DOC掲載":"Medical DOC","地域ドクターズ掲載":"地域ドクターズ",
+    "Instagram公式運用":"Instagram","LINE公式運用":"LINE","YouTube公式運用":"YouTube","TikTok公式運用":"TikTok",
+    "オンライン診療":"オンライン診療","AIチャット導入":"AIチャット","漫画コンテンツ":"漫画","治療専門サイト":"専門サイト","治療専用LP":"独自LP",
+    "マイナビ記事掲載":"マイナビ記事","Caloo Plus":"Caloo Plus","眼科Doc等専門媒体":"眼科Doc等専門媒体",
+    "Googleスポンサー広告確認済み":"Googleスポンサー広告","EPARK課金済み確認":"EPARK課金","その他有料施策・集客ツール":"その他有料施策",
+}
 MEDIA = {
     "doctorsfile.jp":"Doctors File掲載","medicaldoc.jp":"Medical DOC掲載","mynavi.jp":"マイナビ記事掲載",
     "mynavi-ms.jp":"マイナビ記事掲載","tokyo-doctors.com":"地域ドクターズ掲載","kanagawa-doctors.com":"地域ドクターズ掲載",
@@ -367,6 +377,56 @@ def _production_signal_allowed(url, context, direct_media_name=None):
         context, re.I
     ))
 
+PRODUCTION_CREDIT = re.compile(r"制作|produced\s+by|designed\s+by|web\s*design|created\s+by|powered\s+by",re.I)
+CREDIT_AREA = re.compile(r"footer|copyright|credit",re.I)
+
+
+def _company_named(names, text):
+    return any(keyword_match(n, text) for n in names)
+
+
+def _credit_near_name(names, text):
+    """社名の前後40字以内に制作クレジット表記がある（本文の謝辞などは対象外の短い範囲だけ見る）。"""
+    for n in names:
+        for m in re.finditer(r"\s*".join(map(re.escape, n.split())), text, re.I):
+            if PRODUCTION_CREDIT.search(text[max(0,m.start()-40):m.end()+40]):
+                return True
+    return False
+
+
+def production_companies(pages, config=None):
+    """HP制作会社名。広告・集客施策ではない別属性なので marketing_signals には入れない。
+
+    根拠: フッター/クレジット領域の制作表記、制作会社公式サイトへのクレジットリンク。
+    本文中の会社名への言及（謝辞など）は根拠にしない。
+    """
+    cfg = config or read_config(ROOT/"config/production_companies.yml")
+    found = {}
+    for page in pages:
+        if not is_official_candidate(page.url):
+            continue
+        soup = BeautifulSoup(page.html,"html.parser")
+        for a in soup.select("a[href]"):
+            url = urljoin(page.url,a.get("href",""))
+            if not host(url) or host(url)==host(page.url):
+                continue
+            context = (_anchor_label(a)+" "+_link_context(a)).strip()
+            footer = a.find_parent("footer") is not None
+            for name,c in cfg.items():
+                if any(domain_is(url,d) for d in c.get("domains",[])) and (
+                        footer or PRODUCTION_CREDIT.search(context) or _company_named(c.get("names",[]),context)):
+                    found.setdefault(name,{"company":name,"url":page.url,"evidence":f"{context[:160]} → {url}"})
+        areas = soup.select("footer") + [el for el in soup.find_all(True) if el.name != "footer" and
+                 CREDIT_AREA.search(" ".join(el.get("class",[]))+" "+str(el.get("id","")))]
+        for el in areas:
+            text = re.sub(r"\s+"," ",el.get_text(" ",strip=True))
+            for name,c in cfg.items():
+                if _credit_near_name(c.get("names",[]),text):
+                    found.setdefault(name,{"company":name,"url":page.url,"evidence":text[:160]})
+    return {"hp_production_companies":[n for n in cfg if n in found],
+            "hp_production_evidence":[found[n] for n in cfg if n in found]}
+
+
 def hp_signals(record,pages):
     found=[]
     online_terminated=_online_service_terminated(pages)
@@ -477,7 +537,7 @@ def analyze(record,pages,results=()):
     from src.enrichment.profiles import estimate_profile_age
     treatment=treatments(pages,record=record)
     signals=dedupe_signals(hp_signals(record,pages)+media_signals(record,results))
-    return {**treatment,**rank_hp(pages,treatment,signals),**estimate_profile_age(record,pages),
+    return {**treatment,**rank_hp(pages,treatment,signals),**estimate_profile_age(record,pages),**production_companies(pages),
             "marketing_signals":signals,"marketing_signal_count":len(signals),"hot_status":hot_status(len(signals))}
 
 

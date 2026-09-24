@@ -1,0 +1,9 @@
+# HP制作会社（広告・集客施策数には含めない別属性）。
+# domains: 制作会社公式サイトのドメイン（実データまたは公式情報で確認済みのものだけ）。
+# names: 制作クレジットで使われる社名表記（確認済みのものだけ。推測の別名は追加しない）。
+DR.BRIDGE: {domains: [dr-bridge.co.jp], names: [DR.BRIDGE]}
+DEPOC: {domains: [medical.depoc.jp, depoc-medical.jp], names: [DEPOC]}
+ゼロメディカル: {domains: [zeromedical.tv], names: [ゼロメディカル]}
+grits: {domains: [grits.co.jp, medical-grits.jp], names: [grits, グリッツ]}
+HERO innovation: {domains: [clinic-promotion.com], names: [HERO innovation, ヒーローイノベーション]}
+Method Innovation: {domains: [method-innovation.co.jp], names: [Method Innovation, メソッドイノベーション]}
