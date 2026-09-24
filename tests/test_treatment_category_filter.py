@@ -102,8 +102,13 @@ def test_endoscopy_polyp_context():
     assert "内視鏡" not in cats("婦人科サンプル", "子宮鏡下内膜ポリープ切除術")
     assert "内視鏡" not in cats("婦人科サンプル", "ポリープ切除")
     assert "内視鏡" in cats("テストクリニック", "大腸ポリープ切除")
+    # 医院名・診療科は条件にしない。keyword周辺の文脈だけで判定する。
     assert "内視鏡" in cats("消化器クリニック", "日帰りポリープ切除")
-    assert "内視鏡" not in cats("婦人科サンプル", "日帰りポリープ切除")
+    assert "内視鏡" in cats("テストクリニック", "日帰りポリープ切除")
+    assert "内視鏡" in cats("女性と消化器のクリニック", "日帰りポリープ切除", record={"departments": "婦"})
+    assert "内視鏡" not in cats("テストクリニック", "婦人科 日帰りポリープ切除")
+    assert "内視鏡" not in cats("テストクリニック", "鼻茸（鼻ポリープ）日帰りポリープ切除")
+    assert "内視鏡" not in cats("テストクリニック", "子宮内膜ポリープ 日帰りポリープ切除")
 
 
 def test_gynecology_endoscopy_and_gastroscopy_are_true_for_clinic():
@@ -126,6 +131,13 @@ def test_diabetes_positive_by_keyword_and_by_department():
     assert any(e["source"] == "DEPARTMENT" for e in by_dept["treatment_evidence"])
 
 
+def test_diabetes_clinic_name_is_strong_evidence():
+    assert "糖尿病" in cats("小川内科・糖尿病クリニック", "風邪", record={"departments": "内"})
+    assert "糖尿病" in cats("浦上小児内分泌・糖尿病クリニック", "診療案内")
+    assert "糖尿病" not in cats("一般内科クリニック", "高血圧・脂質異常症・糖尿病などに対応", record={"departments": "内"})
+    assert "糖尿病" not in cats("糖尿病網膜症眼科", "白内障")
+
+
 def test_diabetic_retinopathy_is_still_not_diabetes():
     assert "糖尿病" not in cats("眼科サンプル", "糖尿病網膜症")
 
@@ -134,17 +146,22 @@ def test_diabetic_retinopathy_is_still_not_diabetes():
 def test_acne_requires_selfpay_or_beauty_dermatology_not_price():
     plain = {"clinic_name": "一般皮膚科クリニック", "departments": "皮"}
     assert "ニキビ・ニキビ跡" not in cats("一般皮膚科クリニック", "ニキビ治療（保険診療）", record=plain)
-    assert "ニキビ・ニキビ跡" not in cats("一般皮膚科クリニック", "ダーマペン", record=plain)
+    assert "ニキビ・ニキビ跡" not in cats("一般皮膚科クリニック", "ニキビにも対応", record=plain)
+    assert "ニキビ・ニキビ跡" not in cats("一般皮膚科クリニック", "ニキビ跡治療", record=plain)
+    assert "ニキビ・ニキビ跡" not in cats("一般皮膚科クリニック", "クレーター治療", record=plain)
+    for label in ["ポテンツァ", "ダーマペン", "サブシジョン", "フラクショナルレーザー", "イソトレチノイン"]:
+        assert "ニキビ・ニキビ跡" in cats("一般皮膚科クリニック", label, record=plain), label
+    assert "ニキビ・ニキビ跡" in cats("美容皮膚科クリニック", "ニキビ跡治療", record={"departments": "皮"})
     assert "ニキビ・ニキビ跡" in cats("美容皮膚科クリニック", "美容皮膚科", "ポテンツァ", record={"departments": "皮"})
     assert "ニキビ・ニキビ跡" in cats("テストクリニック", "自由診療", "ダーマペン", record={"departments": "皮"})
     assert "ニキビ・ニキビ跡" in cats("テストクリニック", "ダーマペン", record={"departments": "美容皮膚科"})
 
 
 def test_acne_selfpay_from_dedicated_page_body():
-    home = menu_page("テスト皮膚科", "ポテンツァ")
-    detail = Page("https://clinic.example/t0", "<title>ポテンツァ</title><h1>ポテンツァ</h1><p>ニキビ跡に。自費診療です。</p>")
+    home = menu_page("テスト皮膚科", "ニキビ跡治療")
+    detail = Page("https://clinic.example/t0", "<title>ニキビ跡治療</title><h1>ニキビ跡治療</h1><p>自費診療です。</p>")
     assert "ニキビ・ニキビ跡" in treatments([home, detail], record={"clinic_name": "テスト皮膚科"})["treatment_categories"]
-    detail2 = Page("https://clinic.example/t0", "<title>ポテンツァ</title><h1>ポテンツァ</h1><p>ニキビ跡に。</p>")
+    detail2 = Page("https://clinic.example/t0", "<title>ニキビ跡治療</title><h1>ニキビ跡治療</h1><p>保険診療です。</p>")
     assert "ニキビ・ニキビ跡" not in treatments([home, detail2], record={"clinic_name": "テスト皮膚科"})["treatment_categories"]
 
 
@@ -289,3 +306,58 @@ def test_sales_ui_keeps_selected_treatment_valid_after_department_change(tmp_pat
     assert not at.exception
     tr = next(m for m in at.multiselect if m.label == "治療カテゴリ")
     assert tr.options == ["矯正", "インプラント"]
+
+
+# ---- 実医院52件回帰で見つかったケース（全カテゴリ共通の記事・告知除外、糖尿病表記揺れ） ----
+def _home(name, *links):
+    body = "".join(f"<a href='{html.escape(h)}'>{html.escape(t)}</a>" for h, t in links)
+    return Page("https://clinic.example/", f"<title>{html.escape(name)}</title><h1>{html.escape(name)}</h1>{body}")
+
+
+def _cats_links(name, *links, record=None):
+    return treatments([_home(name, *links)], record={"clinic_name": name, **(record or {})})["treatment_categories"]
+
+
+def test_column_article_link_is_not_treatment_evidence():
+    # 京野アート型: /column/ の記事リンクだけでは睡眠時無呼吸にしない
+    assert "睡眠時無呼吸" not in _cats_links("不妊クリニック", ("/column/post-8886", "病気のはなし⑧ 睡眠時無呼吸症候群は精液所見や性機能に影響するか"))
+    # 水道橋型: /blog/ の記事リンクだけではニキビにしない
+    assert "ニキビ・ニキビ跡" not in _cats_links("皮フ科", ("/blog/isotretinoin", "【皮膚科専門医解説・監修】脂腺増殖症にイソトレチノインの内服は効果ある？"))
+    assert "内視鏡" not in _cats_links("消化器クリニック", ("/topics/123/", "胃カメラ検査の新機器を導入しました"))
+    assert "白内障" not in _cats_links("眼科", ("/notice/1/", "白内障手術"))
+
+
+def test_same_treatment_on_menu_page_is_still_positive():
+    assert "睡眠時無呼吸" in _cats_links("内科", ("/sas/", "睡眠時無呼吸症候群"), ("/column/1", "コラム一覧"))
+    assert "ニキビ・ニキビ跡" in _cats_links("皮フ科", ("/beauty/isotretinoin/", "イソトレチノイン"), ("/blog/x", "イソトレチノインの解説"))
+
+
+def test_ended_or_suspended_treatment_is_not_positive():
+    # 中島クリニック型: 終了告知はED・泌尿器科の根拠にしない
+    result = _cats_links("内科クリニック", ("/outpatient/ed/", "ED治療終了のご案内"))
+    assert "ED" not in result and "泌尿器科" not in result
+    for label in ["オンラインED治療は休止しています", "ED治療を中止しました", "現在ED治療は行っていません"]:
+        assert "ED" not in _cats_links("内科クリニック", ("/ed/", label)), label
+    # 否定はその根拠だけを除外し、医院全体をFalseにしない
+    both = _cats_links("内科クリニック", ("/ed-end/", "ED治療終了のご案内"), ("/aga/", "AGA・ED治療"))
+    assert "ED" in both
+
+
+def test_diabetes_department_variants_and_outpatient_are_positive():
+    for label in ["糖尿病・内分泌内科", "糖尿病・代謝内科", "糖尿病代謝内科", "糖尿病外来", "糖尿病・内分泌内科についてを見る"]:
+        assert "糖尿病" in cats("テストクリニック", label), label
+    assert "糖尿病" in cats("○○糖尿病クリニック", "診療案内")
+
+
+def test_diabetes_general_page_without_specialty_is_false():
+    # 青栁クリニック型: 糖尿病メニュー＋一般解説（HbA1c・インスリンの説明）だけではFalse
+    home = _home("内科・循環器クリニック", ("/diabetes.html", "糖尿病"), ("/hypertension.html", "高血圧"))
+    detail = Page("https://clinic.example/diabetes.html",
+                  "<title>糖尿病</title><h1>糖尿病</h1><p>糖尿病の原因は？HbA1cは過去1〜2か月の血糖の平均です。"
+                  "進行するとインスリン注射が必要になることがあります。糖尿病の治療なら当院へ。</p>")
+    record = {"clinic_name": "内科・循環器クリニック", "departments": "内 循環器内科"}
+    assert "糖尿病" not in treatments([home, detail], record=record)["treatment_categories"]
+    # 三好クリニック型: 他院の専門外来への紹介はPositiveにしない
+    home2 = _home("内科クリニック", ("/dm/index.html", "糖尿病"), ("/dm/1.html", "糖尿病1"))
+    assert "糖尿病" not in treatments([home2], record={"clinic_name": "内科クリニック", "departments": "内"})["treatment_categories"]
+    assert "糖尿病" not in cats("一般内科クリニック", "高血圧・脂質異常症・糖尿病", record={"departments": "内"})
