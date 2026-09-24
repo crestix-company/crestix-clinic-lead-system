@@ -24,7 +24,10 @@ INTRO_HEADING = re.compile(r"医院紹介|クリニック紹介|当院につい�
 INTRO_PATH = re.compile(r"/(?:about(?:[-_]?us)?|clinic|medical|service|treatment|guide|shinryo|department)(?:/|$)",re.I)
 GENERIC_DEDICATED_HEADING = re.compile(r"サイトマップ|院長(?:の)?ご?紹介|医師紹介|スタッフ紹介|当院について|医院紹介|クリニック紹介|初めての方|はじめての方|アクセス|交通|料金|費用|お問い合わせ|問い合わせ|診療時間",re.I)
 GENERIC_DEDICATED_PATH = re.compile(r"/(?:sitemap|introduce|about(?:[-_]?us)?|access|contact|inquiry|price|fee|staff|doctor|greeting)(?:/|$)",re.I)
-NEGATIVE_TREATMENT_LABEL = re.compile(r"学会|ガイドライン|論文|採用|求人|ニュース|お知らせ|ブログ|コラム|他院|紹介状")
+NEGATIVE_TREATMENT_LABEL = re.compile(r"学会|ガイドライン|論文|採用|求人|ニュース|お知らせ|ブログ|コラム|他院|紹介状|"
+                                      r"終了|休止|中止|行っていません|行っておりません|実施していません|取り扱っていません")
+# 記事・告知系のリンク先（実データ確認: /column/ /topics/ /notice/ /blog/）は治療提供の根拠にしない。
+NOTICE_PATH = re.compile(r"/notice(?:/|$)",re.I)
 
 # v25.5: 営業カテゴリの「内視鏡」は消化器内視鏡だけを対象にする。
 # 単独の「内視鏡」や、耳鼻科・婦人科・美容外科等の内視鏡は根拠にしない。
@@ -36,11 +39,11 @@ GI_ENDOSCOPY_STRONG = re.compile(
     re.I,
 )
 # 「ポリープ切除」単独は消化器の根拠にしない（子宮鏡下内膜ポリープ切除術など）。
-# 同じラベルに消化管の語がある場合、または「日帰りポリープ切除」で医院が消化器系の場合だけ採用する。
+# keyword周辺（同じラベル/見出し）の文脈で判定し、医院名・診療科は条件にしない。
+# 大腸ポリープ切除・日帰りポリープ切除は、周辺に非消化器の文脈がなければ採用する。
 POLYP_TERM = re.compile(r"(日帰り\s*)?ポリープ切除")
 POLYP_GI_LABEL = re.compile(r"大腸|消化|胃|腸|カメラ")
-POLYP_NON_GI = re.compile(r"子宮|婦人科|膀胱|鼻|喉|声帯|耳")
-GI_CLINIC = re.compile(r"消化器|胃腸|内視鏡|大腸|消化")
+POLYP_NON_GI = re.compile(r"子宮|婦人科|膀胱|鼻|喉|声帯|耳|美容|形成")
 
 # カテゴリ名そのものは検索語にしないカテゴリ。単独語は付随診療・別領域の誤検出になる。
 CATEGORY_NAME_NOT_KEYWORD = {"糖尿病","矯正","インプラント","ニキビ・ニキビ跡","日帰り手術","アトピー・乾癬","睡眠時無呼吸"}
@@ -52,6 +55,10 @@ GENERIC_TERM_CONTEXT = {
 # ニキビ・ニキビ跡は価格ではなく「自費診療または美容皮膚科」であることを条件にする。
 SELFPAY_GATED = {"ニキビ・ニキビ跡"}
 SELFPAY_CONTEXT = re.compile(r"美容皮膚科|自費|自由診療")
+# 自費系の施術名そのもの。主要メニュー・見出しで確認できれば「自費」の文字がなくても採用する。
+# （ニキビ跡治療・クレーター治療は保険/自費を区別できないため、美容皮膚科・自費の根拠を必要とする）
+SELFPAY_TREATMENTS = {"ポテンツァ","ダーマペン","サブシジョン","フラクショナルレーザー","イソトレチノイン"}
+DIABETES_NAME = re.compile(r"糖尿病")
 # 歯科の矯正・インプラントは歯科文脈を必須にし、非歯科の同名治療を除外する。
 DENTAL_LABEL = re.compile(r"歯|口腔|デンタル|インビザ")
 DENTAL_CLINIC = re.compile(r"歯科|デンタル")
@@ -115,7 +122,7 @@ def _category_term(category, text, terms, ctx=None):
         polyp = POLYP_TERM.search(text)
         if not polyp or POLYP_NON_GI.search(text):
             return None
-        if not (POLYP_GI_LABEL.search(text) or (polyp.group(1) and ctx.get("gi_clinic"))):
+        if not (POLYP_GI_LABEL.search(text) or polyp.group(1)):
             return None
 
     if category == "矯正":
@@ -199,7 +206,6 @@ def treatments(pages, record=None, config=None):
     departments = normalize_departments(raw_departments)
     ctx = {
         "dental": bool(DENTAL_CLINIC.search(clinic_name) or "歯科" in departments or (record or {}).get("medical_type") == "歯科"),
-        "gi_clinic": bool(GI_CLINIC.search(clinic_name) or "消化器内科" in departments),
         "selfpay": bool(SELFPAY_CONTEXT.search(clinic_name+" "+raw_departments)),
     }
     if not ctx["selfpay"]:
@@ -209,13 +215,19 @@ def treatments(pages, record=None, config=None):
             for a in BeautifulSoup(page.html,"html.parser").select("a[href]"):
                 if a.find_parent("footer") is None and SELFPAY_CONTEXT.search(_anchor_label(a)[:100]):
                     ctx["selfpay"] = True
+    def selfpay_ok(category,term):
+        return category not in SELFPAY_GATED or ctx["selfpay"] or term in SELFPAY_TREATMENTS
+
+    if DIABETES_NAME.search(clinic_name) and not re.search(r"糖尿病網膜症",clinic_name):
+        # 医院名に「糖尿病」を掲げる医院は、糖尿病を主要診療とする強い根拠。
+        add("糖尿病",home_url,"糖尿病",1.0,"医院名に治療・診療名を含む（最優先）","CLINIC_NAME",True,clinic_name)
     if "糖尿病内科" in departments:
         # 診療科として糖尿病内科を登録している医院は、糖尿病を主要診療とみなす。
         add("糖尿病",home_url,"診療科：糖尿病内科",.96,"厚生局の診療科に糖尿病内科を登録","DEPARTMENT",False,"糖尿病内科")
     if clinic_name:
         for category,keywords in cfg.items():
             term=_category_term(category,clinic_name,_treatment_terms(category,keywords),ctx)
-            if term and (category not in SELFPAY_GATED or ctx["selfpay"]):
+            if term and selfpay_ok(category,term):
                 add(category,home_url,term,1.0,"医院名に治療・診療名を含む（最優先）","CLINIC_NAME",True,clinic_name)
 
     # HOME / 医院紹介 / 診療案内の実リンクだけを見る。
@@ -233,11 +245,14 @@ def treatments(pages, record=None, config=None):
             # 治療カテゴリは公式サイト内部の導線に限定。
             if host(href) and host(href)!=host(page.url):
                 continue
+            href_path=urlparse(href).path
+            if ARTICLE_PATH.search(href_path) or NOTICE_PATH.search(href_path):
+                continue
             for category,keywords in cfg.items():
                 term=_category_term(category,label,_treatment_terms(category,keywords),ctx)
                 if not term:
                     continue
-                if category in SELFPAY_GATED and not ctx["selfpay"]:
+                if not selfpay_ok(category,term):
                     # 自費・美容皮膚科の根拠がない間は、リンク先ページ本文の根拠確認だけに回す。
                     linked.setdefault(_canonical_url(href),set()).add(category)
                     continue
@@ -260,7 +275,7 @@ def treatments(pages, record=None, config=None):
             term=_category_term(category,heading,_treatment_terms(category,keywords),ctx)
             if not term:
                 continue
-            if category in SELFPAY_GATED and not ctx["selfpay"] and not SELFPAY_CONTEXT.search(page.main_text):
+            if not selfpay_ok(category,term) and not SELFPAY_CONTEXT.search(page.main_text):
                 continue
             negative=any(
                 keyword_match(term,sentence) and re.search(r"行っていません|実施していません|対応していません|取り扱っていません|他院をご紹介|他院に紹介",sentence)

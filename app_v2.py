@@ -535,7 +535,7 @@ def simple_sales_ui(store):
     deps = st.multiselect("診療科", DEPARTMENTS, key="simple_sales_departments")
     dept_treatments = read_config(ROOT/"config/treatment_departments.yml")
     treatment_options = list(dict.fromkeys(t for d in deps for t in dept_treatments.get(d, []))) if deps else treatment_names
-    treatments = st.multiselect("治療カテゴリ", treatment_options, key="simple_sales_treatments", help="未選択なら診療科全体を対象にします。")
+    treatments = st.multiselect("治療カテゴリ", treatment_options, key="simple_sales_treatments")
     treatments = [t for t in treatments if t in treatment_options]
 
     cols = st.columns(4)
