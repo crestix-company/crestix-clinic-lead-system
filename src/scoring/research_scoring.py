@@ -3,7 +3,7 @@ from copy import deepcopy
 from urllib.parse import urlparse, urljoin
 import re
 from bs4 import BeautifulSoup
-from src.enrichment.hp_analysis import identity, Page, host, domain_is, keyword_match, is_official_candidate
+from src.enrichment.hp_analysis import identity, Page, host, domain_is, keyword_match, is_official_candidate, page_soup
 from src.enrichment.consultation_schedule import SIGNAL_NAME as MIDDAY_SIGNAL,midday_procedure
 from src.utils.config import ROOT, read_config
 from src.normalizer.departments import normalize_departments
@@ -177,7 +177,7 @@ def _canonical_url(url):
 
 
 def _primary_heading(page):
-    soup=BeautifulSoup(page.html,"html.parser")
+    soup=page_soup(page)
     node=soup.find("h1") or soup.find("h2")
     if node:
         return re.sub(r"\s+"," ",node.get_text(" ",strip=True)).strip()
@@ -222,7 +222,7 @@ def treatments(pages, record=None, config=None):
         for index,page in enumerate(pages):
             if not _intro_page(page,index):
                 continue
-            for a in BeautifulSoup(page.html,"html.parser").select("a[href]"):
+            for a in page_soup(page).select("a[href]"):
                 if a.find_parent("footer") is None and SELFPAY_CONTEXT.search(_anchor_label(a)[:100]):
                     ctx["selfpay"] = True
     def selfpay_ok(category,term):
@@ -244,7 +244,7 @@ def treatments(pages, record=None, config=None):
     for index,page in enumerate(pages):
         if not _intro_page(page,index):
             continue
-        soup=BeautifulSoup(page.html,"html.parser")
+        soup=page_soup(page)
         for a in soup.select("a[href]"):
             if a.find_parent("footer") is not None:
                 continue
@@ -405,7 +405,7 @@ def production_companies(pages, config=None):
     for page in pages:
         if not is_official_candidate(page.url):
             continue
-        soup = BeautifulSoup(page.html,"html.parser")
+        soup = page_soup(page)
         for a in soup.select("a[href]"):
             url = urljoin(page.url,a.get("href",""))
             if not host(url) or host(url)==host(page.url):
@@ -433,7 +433,7 @@ def hp_signals(record,pages):
     for index,page in enumerate(pages):
         if not is_official_candidate(page.url):
             continue
-        soup=BeautifulSoup(page.html,"html.parser")
+        soup=page_soup(page)
         midday=midday_procedure(page.html)
         if midday:
             found.append(signal(MIDDAY_SIGNAL,page.url,midday["evidence_type"],midday["evidence"],
