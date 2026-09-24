@@ -532,7 +532,11 @@ def simple_sales_ui(store):
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
     sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
     pref = st.multiselect("都道府県", prefs, default=pref_default, key="simple_sales_pref")
-    treatments = st.multiselect("治療カテゴリ", treatment_names, key="simple_sales_treatments")
+    deps = st.multiselect("診療科", DEPARTMENTS, key="simple_sales_departments")
+    dept_treatments = read_config(ROOT/"config/treatment_departments.yml")
+    treatment_options = list(dict.fromkeys(t for d in deps for t in dept_treatments.get(d, []))) if deps else treatment_names
+    treatments = st.multiselect("治療カテゴリ", treatment_options, key="simple_sales_treatments", help="未選択なら診療科全体を対象にします。")
+    treatments = [t for t in treatments if t in treatment_options]
 
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
@@ -549,6 +553,7 @@ def simple_sales_ui(store):
         recent_only=recent,
         age_min=.5 if age else None,
         prefectures=pref,
+        departments=deps,
         treatments=treatments,
         ranks=["A","B"] if rank_ab else [],
         signal_min=2 if hot else 0,
