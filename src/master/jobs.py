@@ -1,5 +1,6 @@
 """永続ジョブ＋1医院単位の確定。プロセス間ロックで二重実行を防ぐ。"""
 from threading import Thread,Lock
+from concurrent.futures import ThreadPoolExecutor
 import uuid
 import json
 from filelock import FileLock,Timeout
@@ -7,6 +8,14 @@ from src.master.store import now,dumps
 from src.master.filters import where
 from src.enrichment.search_provider import CachedSearch,BudgetReached,SearchError
 from src.enrichment.researcher import Researcher,Stopped,empty_hp_result
+from src.enrichment.hp_analysis import host
+from src.enrichment.safe_web import _host_key
+
+# HP調査を同時に進める医院数。最初は2並列固定（4並列は2並列の安全性確認後）。
+# 同じサイトの医院は必ず同じ処理がclinic_id順に続けて調べるため、サイトごとの
+# 取得間隔・Crawl-delay・robots.txt・アクセス制限の扱いは順次処理と同じになる。
+PARALLEL_WORKERS = 2
+_WRITE_LOCK = Lock()
 
 
 def create_job(store,filters,kind="hp",limit=100,max_searches=100,force=False,max_pages=20):
@@ -88,48 +97,105 @@ def _run_locked(store,jid,provider,fetcher):
         c.execute("UPDATE research_job_items SET state='PENDING' WHERE state='RUNNING'")
         c.execute("UPDATE research_jobs SET status='PAUSED' WHERE status='RUNNING'")
         c.execute("UPDATE research_jobs SET status='RUNNING',updated_at=? WHERE id=?",(now(),jid))
-    search = CachedSearch(store,provider,jid)
     options = json.loads(job["options_json"])
     def stopped():
         return job_status(store,jid)["status"]!="RUNNING"
-    researcher = Researcher(search,fetcher,max_pages=options.get("max_pages",20),should_stop=stopped)
-    while not stopped():
-        with store.connect() as c:
-            c.execute("BEGIN IMMEDIATE")
-            row = c.execute("SELECT clinic_id FROM research_job_items WHERE job_id=? AND state='PENDING' ORDER BY clinic_id LIMIT 1",(jid,)).fetchone()
-            if row is None:
-                c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=?",(now(),jid))
+    def new_researcher():
+        return Researcher(CachedSearch(store,provider,jid),fetcher,max_pages=options.get("max_pages",20),should_stop=stopped)
+    # 並列はHP調査で、通信部品を医院ごとに新しく作れる通常経路だけ（渡されたfetcherは共有できないため順次）。
+    if job["kind"]!="hp" or fetcher is not None or PARALLEL_WORKERS<=1:
+        researcher = new_researcher()
+        while not stopped():
+            with store.connect() as c:
+                c.execute("BEGIN IMMEDIATE")
+                row = c.execute("SELECT clinic_id FROM research_job_items WHERE job_id=? AND state='PENDING' ORDER BY clinic_id LIMIT 1",(jid,)).fetchone()
+                if row is None:
+                    c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=?",(now(),jid))
+                    return
+                cid = row[0]
+                c.execute("UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=?",(jid,cid))
+            if not _research_one(store,jid,job,options,researcher,cid):
                 return
-            cid = row[0]
-            c.execute("UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=?",(jid,cid))
-        record = {}
-        try:
-            record = store.get(cid)
-            # 手動値は解析入力としては使うが、自動シグナルの保存に手動値をコピーしない。
+        return
+    while not stopped():
+        lanes = _site_lanes(store,jid)
+        if not lanes:
             with store.connect() as c:
-                auto = c.execute("SELECT result_json FROM research_results WHERE clinic_id=?",(cid,)).fetchone()
-                record["marketing_signals"] = json.loads(auto[0]).get("marketing_signals",[]) if auto else []
-            result,pages = researcher.run(job["kind"],record,options.get("force",False))
-            store.save_research(cid,result,pages)
-            status,note = result.get("research_status","SUCCESS"),""
-        except (BudgetReached,Stopped) as exc:
-            with store.connect() as c:
-                c.execute("UPDATE research_job_items SET state='PENDING',note=? WHERE job_id=? AND clinic_id=?",(str(exc),jid,cid))
-                c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?",("BUDGET" if isinstance(exc,BudgetReached) else "PAUSED",now(),jid))
+                c.execute("BEGIN IMMEDIATE")
+                if c.execute("SELECT 1 FROM research_job_items WHERE job_id=? AND state IN ('PENDING','RUNNING') LIMIT 1",(jid,)).fetchone() is None:
+                    c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=? AND status='RUNNING'",(now(),jid))
             return
-        except Exception as exc:
-            # 接続の秘密や生Tracebackを画面/DBへ残さない。
-            status = "ERROR"
-            note = str(exc) if isinstance(exc,SearchError) else "この医院の調査でエラーが発生しました。再調査または手動確認を行ってください。"
-            safe_result = {"research_status":"ERROR","research_error":note}
-            if job["kind"]=="hp":
-                safe_result.update(empty_hp_result("ERROR",record))
-            else:
-                safe_result[job["kind"]+"_checked_at"] = now()
-            store.save_research(cid,safe_result,[] if job["kind"]=="hp" else None)
+        queue,queue_lock = list(lanes),Lock()
+        def worker():
+            # 1つの処理は専用の通信部品（Researcher/SafeFetcher）を持ち、割り当てられたサイトの医院をclinic_id順に調べる。
+            researcher = new_researcher()
+            while not stopped():
+                with queue_lock:
+                    if not queue:
+                        return
+                    lane = queue.pop(0)
+                for cid in lane:
+                    if stopped():
+                        return
+                    with _WRITE_LOCK, store.connect() as c:
+                        c.execute("BEGIN IMMEDIATE")
+                        claimed = c.execute("UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=? AND state='PENDING'",(jid,cid)).rowcount
+                    if claimed and not _research_one(store,jid,job,options,researcher,cid):
+                        return
+        with ThreadPoolExecutor(max_workers=min(PARALLEL_WORKERS,len(lanes))) as pool:
+            futures = [pool.submit(worker) for _ in range(min(PARALLEL_WORKERS,len(lanes)))]
+        for f in futures:
+            f.result()  # 想定外の例外は順次処理と同様に呼び出し元へ伝える（全処理の終了後）
+
+
+def _site_lanes(store,jid):
+    """未調査の医院を、調査対象サイト（www有無は同一）ごとにclinic_id順でまとめる。"""
+    lanes = {}
+    with store.connect() as c:
+        rows = c.execute("""SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url,
+                                   json_extract(c.effective_json,'$.hp_url'),json_extract(c.effective_json,'$.hp_candidate_url')
+                            FROM research_job_items i JOIN clinics c ON c.id=i.clinic_id
+                            WHERE i.job_id=? AND i.state='PENDING' ORDER BY i.clinic_id""",(jid,)).fetchall()
+    for cid,maps_status,maps_url,hp_url,candidate in rows:
+        url = maps_url if maps_status=="MAPS_MATCHED_WEBSITE" and maps_url else (hp_url or candidate or "")
+        key = _host_key(host(url)) if url else ""
+        lanes.setdefault(key or "(サイト不明)",[]).append(cid)
+    return list(lanes.values())
+
+
+def _research_one(store,jid,job,options,researcher,cid):
+    """1医院の調査と確定。続行してよければTrue、一時停止・上限で止める場合はFalse。"""
+    record = {}
+    try:
+        record = store.get(cid)
+        # 手動値は解析入力としては使うが、自動シグナルの保存に手動値をコピーしない。
         with store.connect() as c:
-            c.execute("UPDATE research_job_items SET state='DONE',result=?,note=? WHERE job_id=? AND clinic_id=?",(status,note,jid,cid))
-            c.execute("UPDATE research_jobs SET updated_at=? WHERE id=?",(now(),jid))
+            auto = c.execute("SELECT result_json FROM research_results WHERE clinic_id=?",(cid,)).fetchone()
+            record["marketing_signals"] = json.loads(auto[0]).get("marketing_signals",[]) if auto else []
+        result,pages = researcher.run(job["kind"],record,options.get("force",False))
+        with _WRITE_LOCK:
+            store.save_research(cid,result,pages)
+        status,note = result.get("research_status","SUCCESS"),""
+    except (BudgetReached,Stopped) as exc:
+        with _WRITE_LOCK, store.connect() as c:
+            c.execute("UPDATE research_job_items SET state='PENDING',note=? WHERE job_id=? AND clinic_id=?",(str(exc),jid,cid))
+            c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?",("BUDGET" if isinstance(exc,BudgetReached) else "PAUSED",now(),jid))
+        return False
+    except Exception as exc:
+        # 接続の秘密や生Tracebackを画面/DBへ残さない。
+        status = "ERROR"
+        note = str(exc) if isinstance(exc,SearchError) else "この医院の調査でエラーが発生しました。再調査または手動確認を行ってください。"
+        safe_result = {"research_status":"ERROR","research_error":note}
+        if job["kind"]=="hp":
+            safe_result.update(empty_hp_result("ERROR",record))
+        else:
+            safe_result[job["kind"]+"_checked_at"] = now()
+        with _WRITE_LOCK:
+            store.save_research(cid,safe_result,[] if job["kind"]=="hp" else None)
+    with _WRITE_LOCK, store.connect() as c:
+        c.execute("UPDATE research_job_items SET state='DONE',result=?,note=? WHERE job_id=? AND clinic_id=?",(status,note,jid,cid))
+        c.execute("UPDATE research_jobs SET updated_at=? WHERE id=?",(now(),jid))
+    return True
 
 
 class JobRunner:

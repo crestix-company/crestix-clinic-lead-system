@@ -16,7 +16,11 @@ from src.master import store as store_mod
 TIMEOUT_SEC = 10          # SafeFetcher の既定 timeout
 per = collections.defaultdict(lambda: collections.defaultdict(float))
 reqs = collections.defaultdict(list)
-state = {"cid": None}
+class _ThreadState(__import__("threading").local):
+    cid = None
+
+
+state = _ThreadState()   # 並列時も医院ごとに正しく記録・再生するため、処理中の医院IDはスレッドごとに持つ
 
 
 class MeteredTransport:
@@ -24,7 +28,7 @@ class MeteredTransport:
         self.inner = inner
 
     def get(self, url, timeout, max_bytes):
-        cid = state["cid"]
+        cid = state.cid
         t = time.monotonic()
         rec = {"url": url, "status": None, "error": None}
         try:
@@ -51,7 +55,7 @@ def _init(self, *a, **k):
     real_sleep = self.sleep
 
     def sleep(sec):
-        per[state["cid"]]["rate_limit_sleep_sec"] += sec
+        per[state.cid]["rate_limit_sleep_sec"] += sec
         real_sleep(sec)
     self.sleep = sleep
 
@@ -64,8 +68,8 @@ _orig_post = hp_analysis.Page.__post_init__
 def _post(self):
     t = time.monotonic()
     _orig_post(self)
-    per[state["cid"]]["page_parse_sec"] += time.monotonic() - t
-    per[state["cid"]]["page_objects"] += 1
+    per[state.cid]["page_parse_sec"] += time.monotonic() - t
+    per[state.cid]["page_objects"] += 1
 
 
 hp_analysis.Page.__post_init__ = _post
@@ -78,8 +82,8 @@ def _analyze(record, pages, results=()):
     try:
         return _orig_analyze(record, pages, results)
     finally:
-        per[state["cid"]]["scoring_sec"] += time.monotonic() - t
-        per[state["cid"]]["pages_analyzed"] = len(pages)
+        per[state.cid]["scoring_sec"] += time.monotonic() - t
+        per[state.cid]["pages_analyzed"] = len(pages)
 
 
 researcher_mod.analyze = _analyze
@@ -88,12 +92,12 @@ _orig_run = researcher_mod.Researcher.run
 
 
 def _run(self, kind, record, force=False):
-    state["cid"] = record.get("id")
+    state.cid = record.get("id")
     t = time.monotonic()
     try:
         return _orig_run(self, kind, record, force)
     finally:
-        per[state["cid"]]["research_sec"] += time.monotonic() - t
+        per[state.cid]["research_sec"] += time.monotonic() - t
 
 
 researcher_mod.Researcher.run = _run
@@ -106,7 +110,7 @@ def _save(self, cid, result, pages=None):
     try:
         return _orig_save(self, cid, result, pages)
     finally:
-        per[state["cid"]]["db_write_sec"] += time.monotonic() - t
+        per[state.cid]["db_write_sec"] += time.monotonic() - t
 
 
 store_mod.ClinicStore.save_research = _save
