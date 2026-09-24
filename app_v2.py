@@ -760,14 +760,20 @@ def main():
         advanced_ui(store, demo)
 
 
+def user_error_text(exc):
+    if isinstance(exc,SearchError) or "tavily" in str(exc).lower():
+        return "外部検索を実行できませんでした。Google MapsのHP取得状況をご確認ください。"
+    return str(exc)
+
+
 if __name__=="__main__":
     try:
         main()
     except (ValueError,SearchError,WebError) as exc:
-        st.error(str(exc))
+        st.error(user_error_text(exc))
     except sqlite3.OperationalError:
         st.error("データファイルが使用中か、保存先に書き込めません。別ウィンドウの処理が終わってから再操作してください。")
     except Exception as exc:
         import traceback
         traceback.print_exc()
-        st.error(f"処理を完了できませんでした。ファイル形式・入力列・保存先を確認してください。エラー詳細: {exc}")
+        st.error(f"処理を完了できませんでした。ファイル形式・入力列・保存先を確認してください。エラー詳細: {user_error_text(exc)}")
