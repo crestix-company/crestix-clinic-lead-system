@@ -30,7 +30,12 @@ SNAPSHOT = REPLAY_DIR / "db_snapshot.sqlite3"
 RESPONSES = REPLAY_DIR / "responses.pkl.gz"
 META = REPLAY_DIR / "meta.json"
 KEEP_HEADERS = {"content-type", "location"}
-state = {"cid": None}
+class _ThreadState(__import__("threading").local):
+    cid = None
+
+
+state = _ThreadState()   # 並列時も医院ごとに正しく記録・再生するため、処理中の医院IDはスレッドごとに持つ
+prof_lock = __import__("threading").Lock()
 prof = {"bs_calls": collections.Counter(), "bs_sec": collections.Counter(), "clinic_sec": {}, "scoring_sec": 0.0, "page_post_init_sec": 0.0}
 
 
@@ -45,8 +50,9 @@ def _install_profiler():
         key = f"{caller.f_code.co_filename.rsplit('/src/', 1)[-1]}:{caller.f_code.co_name}"
         t = time.perf_counter()
         orig_bs(self, *a, **k)
-        prof["bs_calls"][key] += 1
-        prof["bs_sec"][key] += time.perf_counter() - t
+        with prof_lock:
+            prof["bs_calls"][key] += 1
+            prof["bs_sec"][key] += time.perf_counter() - t
     bs4.BeautifulSoup.__init__ = bs_init
     orig_analyze = researcher_mod.analyze
 
@@ -55,14 +61,16 @@ def _install_profiler():
         try:
             return orig_analyze(record, pages, results)
         finally:
-            prof["scoring_sec"] += time.perf_counter() - t
+            with prof_lock:
+                prof["scoring_sec"] += time.perf_counter() - t
     researcher_mod.analyze = analyze
     orig_post = hp_analysis.Page.__post_init__
 
     def post(self):
         t = time.perf_counter()
         orig_post(self)
-        prof["page_post_init_sec"] += time.perf_counter() - t
+        with prof_lock:
+            prof["page_post_init_sec"] += time.perf_counter() - t
     hp_analysis.Page.__post_init__ = post
     orig_run = researcher_mod.Researcher.run
 
@@ -90,7 +98,7 @@ def _track_clinic():
     orig = researcher_mod.Researcher.run
 
     def run(self, kind, record, force=False):
-        state["cid"] = record.get("id")
+        state.cid = record.get("id")
         return orig(self, kind, record, force)
     researcher_mod.Researcher.run = run
 
@@ -113,7 +121,7 @@ class RecordingTransport:
         self.inner = inner
 
     def get(self, url, timeout, max_bytes):
-        key = (state["cid"], url)
+        key = (state.cid, url)
         try:
             resp = self.inner.get(url, timeout, max_bytes)
         except WebError as exc:
@@ -129,18 +137,22 @@ class ReplayTransport:
     data = {}
     cursor = collections.Counter()
     misses = []
+    lock = __import__("threading").Lock()
 
     def __init__(self, inner):
         pass
 
     def get(self, url, timeout, max_bytes):
-        key = (state["cid"], url)
+        key = (state.cid, url)
         entries = ReplayTransport.data.get(key)
+        with ReplayTransport.lock:
+            if not entries:
+                ReplayTransport.misses.append(key)
+            else:
+                i = min(ReplayTransport.cursor[key], len(entries) - 1)
+                ReplayTransport.cursor[key] += 1
         if not entries:
-            ReplayTransport.misses.append(key)
             raise WebError(f"REPLAY_MISS {url}")
-        i = min(ReplayTransport.cursor[key], len(entries) - 1)
-        ReplayTransport.cursor[key] += 1
         e = entries[i]
         if "error" in e:
             raise WebError(e["error"])
