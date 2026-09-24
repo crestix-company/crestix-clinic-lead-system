@@ -1,0 +1,980 @@
+{
+ "description": "Performance Phase Golden Dataset: Phase1(52) + Phase2(50) の実医院回帰で確認済みの医院（重複除外）",
+ "clinics": [
+  {
+   "clinic_id": 4,
+   "uuid": "de95c306-5691-11f1-a4dc-0a958250a515",
+   "clinic_name": "医療法人　明和会　宮田眼科東京",
+   "phone": "03-5315-4334",
+   "maps_website_url": "https://tokyo.miyata-med.ne.jp/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 34,
+   "uuid": "",
+   "clinic_name": "大森胃腸科",
+   "phone": "03-3234-6226",
+   "maps_website_url": "http://oomori-i.jp/",
+   "groups": [
+    "phase2:制作会社その他"
+   ]
+  },
+  {
+   "clinic_id": 64,
+   "uuid": "",
+   "clinic_name": "医療法人社団　医新会　神田医新クリニック",
+   "phone": "03-5833-3240",
+   "maps_website_url": "https://www.ishin-kanda.jp/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 72,
+   "uuid": "",
+   "clinic_name": "医療法人社団　山岡クリニック",
+   "phone": "03-3264-5160",
+   "maps_website_url": "http://www.yamaoka-clinic.com/",
+   "groups": [
+    "phase1:糖尿病"
+   ]
+  },
+  {
+   "clinic_id": 80,
+   "uuid": "",
+   "clinic_name": "医療法人社団　大政クリニック",
+   "phone": "03-3556-7875",
+   "maps_website_url": "http://www.omasa-clinic.com/",
+   "groups": [
+    "phase2:ポータル"
+   ]
+  },
+  {
+   "clinic_id": 88,
+   "uuid": "",
+   "clinic_name": "医療法人社団　久信会　日比谷ヒフ科クリニック",
+   "phone": "03-5220-1200",
+   "maps_website_url": "https://www.hibiya-skin.com/hibiya/",
+   "groups": [
+    "phase2:施策数多"
+   ]
+  },
+  {
+   "clinic_id": 96,
+   "uuid": "",
+   "clinic_name": "医療法人社団　ＩＬＣ会　一番町レディースクリニック",
+   "phone": "03-3261-2255",
+   "maps_website_url": "http://www.1-ilc.com/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 97,
+   "uuid": "",
+   "clinic_name": "中田クリニック",
+   "phone": "03-5511-7770",
+   "maps_website_url": "http://www.nakata-clinic.jp/",
+   "groups": [
+    "phase2:施策なし"
+   ]
+  },
+  {
+   "clinic_id": 98,
+   "uuid": "",
+   "clinic_name": "医療法人社団　大森会　クリニカ市ヶ谷",
+   "phone": "03-3237-8661",
+   "maps_website_url": "https://clinica-ichigaya.com/",
+   "groups": [
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 99,
+   "uuid": "",
+   "clinic_name": "水道橋メディカルクリニック",
+   "phone": "03-3518-6127",
+   "maps_website_url": "http://www.suidoubashimedical.com/",
+   "groups": [
+    "phase2:施策なし"
+   ]
+  },
+  {
+   "clinic_id": 107,
+   "uuid": "",
+   "clinic_name": "医療法人社団　松伯会　山王クリニック",
+   "phone": "03-3580-5001",
+   "maps_website_url": "https://www.sannoclinic.jp/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 146,
+   "uuid": "",
+   "clinic_name": "神田医院",
+   "phone": "03-3252-8896",
+   "maps_website_url": "https://kanda-iin.com/",
+   "groups": [
+    "phase1:糖尿病"
+   ]
+  },
+  {
+   "clinic_id": 147,
+   "uuid": "",
+   "clinic_name": "医療法人社団　みすまるのさと会　アイ・ローズクリニック",
+   "phone": "03-3503-3900",
+   "maps_website_url": "http://www.misumarunosato.or.jp/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 158,
+   "uuid": "",
+   "clinic_name": "大手町フィナンシャルシティ西山クリニック",
+   "phone": "03-3270-2986",
+   "maps_website_url": "http://www.kouko-nishiyama-clinic.com/",
+   "groups": [
+    "phase1:糖尿病"
+   ]
+  },
+  {
+   "clinic_id": 185,
+   "uuid": "",
+   "clinic_name": "飯田橋レディースクリニック",
+   "phone": "03-3556-8333",
+   "maps_website_url": "http://www.iidabashi-ladies-clinic.com/index.html",
+   "groups": [
+    "phase2:施策なし"
+   ]
+  },
+  {
+   "clinic_id": 201,
+   "uuid": "",
+   "clinic_name": "医療法人社団　慈仁会　飯田橋小池クリニック",
+   "phone": "03-3221-8858",
+   "maps_website_url": "http://www.koikeclinic.net/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 213,
+   "uuid": "",
+   "clinic_name": "飯田橋駅前さくら坂クリニック",
+   "phone": "03-3239-1112",
+   "maps_website_url": "http://iidabashi-hifuka.com/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 221,
+   "uuid": "",
+   "clinic_name": "医療法人社団　安緑会　秋葉原内科内視鏡クリニック",
+   "phone": "03-5823-4232",
+   "maps_website_url": "http://www.ikamera.net/",
+   "groups": [
+    "phase2:制作会社その他"
+   ]
+  },
+  {
+   "clinic_id": 224,
+   "uuid": "",
+   "clinic_name": "東京シーサイドクリニック",
+   "phone": "03-6272-6616",
+   "maps_website_url": "https://www.ts-clinic.jp/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 239,
+   "uuid": "",
+   "clinic_name": "医療法人財団　福音医療会　神田キリスト教診療所",
+   "phone": "03-3294-0808",
+   "maps_website_url": "https://www.fukuin.net/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 247,
+   "uuid": "",
+   "clinic_name": "九段下さくら形成外科・皮膚科",
+   "phone": "03-3222-8341",
+   "maps_website_url": "https://sakura-skin.jp/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 281,
+   "uuid": "",
+   "clinic_name": "神保町整形外科",
+   "phone": "03-5577-7997",
+   "maps_website_url": "https://jimbocho-seikei.com/",
+   "groups": [
+    "phase2:オンライン診療"
+   ]
+  },
+  {
+   "clinic_id": 290,
+   "uuid": "",
+   "clinic_name": "医療法人　優美会　お茶の水美容形成クリニック",
+   "phone": "03-6811-7148",
+   "maps_website_url": "https://www.ochanomizubiyou.com/",
+   "groups": [
+    "phase1:既知誤判定/糖尿病名"
+   ]
+  },
+  {
+   "clinic_id": 303,
+   "uuid": "",
+   "clinic_name": "医療法人社団　エス・セットクリニック",
+   "phone": "03-6262-0745",
+   "maps_website_url": "https://sset-clinic.com/",
+   "groups": [
+    "phase1:泌尿器科"
+   ]
+  },
+  {
+   "clinic_id": 306,
+   "uuid": "",
+   "clinic_name": "北原皮膚科クリニック",
+   "phone": "03-3251-3666",
+   "maps_website_url": "https://kitahara-hifuka-cl.com/",
+   "groups": [
+    "phase2:SNS"
+   ]
+  },
+  {
+   "clinic_id": 309,
+   "uuid": "",
+   "clinic_name": "浦上小児内分泌・糖尿病クリニック",
+   "phone": "03-3518-9157",
+   "maps_website_url": "https://www.urakami-clinic.com/",
+   "groups": [
+    "phase1:既知誤判定/糖尿病名"
+   ]
+  },
+  {
+   "clinic_id": 323,
+   "uuid": "",
+   "clinic_name": "九段下駅前ココクリニック",
+   "phone": "03-5212-5551",
+   "maps_website_url": "https://kudanshita.clinic/",
+   "groups": [
+    "phase2:ポータル"
+   ]
+  },
+  {
+   "clinic_id": 340,
+   "uuid": "",
+   "clinic_name": "千代田こころのクリニック",
+   "phone": "03-6261-7125",
+   "maps_website_url": "https://chiyoda-kokoro.com/",
+   "groups": [
+    "phase2:施策なし"
+   ]
+  },
+  {
+   "clinic_id": 347,
+   "uuid": "",
+   "clinic_name": "お茶の水頭痛めまいクリニック",
+   "phone": "03-5577-2291",
+   "maps_website_url": "https://ocha-zutsu.com/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 348,
+   "uuid": "",
+   "clinic_name": "水道橋駅前こばやし皮フ科形成外科",
+   "phone": "03-6272-4838",
+   "maps_website_url": "https://www.suidobashi-hifuka.com/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 361,
+   "uuid": "",
+   "clinic_name": "東京ビジネスクリニック　グランスタ丸の内",
+   "phone": "03-6259-1605",
+   "maps_website_url": "https://www.businessclinic.tokyo/gransta-marunouchi",
+   "groups": [
+    "phase1:泌尿器科"
+   ]
+  },
+  {
+   "clinic_id": 362,
+   "uuid": "",
+   "clinic_name": "Ｂｒｉｌｌｉａｎｔ　Ｃｌｉｎｉｃ　Ｔｏｋｙｏ",
+   "phone": "03-5213-4355",
+   "maps_website_url": "https://brilliant-clinic.jp/",
+   "groups": [
+    "phase2:SNS"
+   ]
+  },
+  {
+   "clinic_id": 365,
+   "uuid": "",
+   "clinic_name": "半蔵門　渡海消化器・内視鏡クリニック",
+   "phone": "03-6261-6645",
+   "maps_website_url": "https://www.tokai-naishikyo.com/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 390,
+   "uuid": "",
+   "clinic_name": "まいにちメンタルクリニック神田駅前院",
+   "phone": "03-3252-1310",
+   "maps_website_url": "http://mainichi-mentalclinic.jp/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 404,
+   "uuid": "",
+   "clinic_name": "麹町駅前クリニック",
+   "phone": "03-5213-4892",
+   "maps_website_url": "https://kojimachi-ekimaecl.com/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 405,
+   "uuid": "",
+   "clinic_name": "神田メンタルクリニック",
+   "phone": "03-3253-5560",
+   "maps_website_url": "https://www.kanda-mental.com/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 419,
+   "uuid": "",
+   "clinic_name": "大手町ＡＲＴクリニック",
+   "phone": "03-6257-5110",
+   "maps_website_url": "https://www.tokyo-womens.clinic/",
+   "groups": [
+    "phase1:内視鏡Positive"
+   ]
+  },
+  {
+   "clinic_id": 436,
+   "uuid": "",
+   "clinic_name": "クリニックファーストエイド",
+   "phone": "03-5256-5505",
+   "maps_website_url": "https://clinic-first-aid.com/",
+   "groups": [
+    "phase2:SNS"
+   ]
+  },
+  {
+   "clinic_id": 437,
+   "uuid": "",
+   "clinic_name": "飯田橋駅マール産婦人科クリニック",
+   "phone": "03-6261-8977",
+   "maps_website_url": "https://www.mar-womens.com/",
+   "groups": [
+    "phase1:既知誤判定/糖尿病名"
+   ]
+  },
+  {
+   "clinic_id": 448,
+   "uuid": "",
+   "clinic_name": "健康増進クリニック",
+   "phone": "03-3237-1777",
+   "maps_website_url": "http://www.kenkou-zoushin.com/",
+   "groups": [
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 491,
+   "uuid": "",
+   "clinic_name": "医療法人社団　頌栄会　上田診療所",
+   "phone": "03-3271-2775",
+   "maps_website_url": "http://www.ueda.com/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 512,
+   "uuid": "",
+   "clinic_name": "信州会クリニック",
+   "phone": "03-3662-1166",
+   "maps_website_url": "https://www.nk-clinic.info/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 518,
+   "uuid": "",
+   "clinic_name": "中央みなとクリニック",
+   "phone": "03-5565-9955",
+   "maps_website_url": "https://www.minatokai.jp/chuo_minato/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 523,
+   "uuid": "",
+   "clinic_name": "医療法人社団　浩仁医会　水天宮藤田眼科",
+   "phone": "03-5623-0271",
+   "maps_website_url": "http://www.cojin.org/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 533,
+   "uuid": "",
+   "clinic_name": "三井タワークリニック",
+   "phone": "03-3510-9955",
+   "maps_website_url": "http://www.mt-cl.jp/",
+   "groups": [
+    "phase1:泌尿器科",
+    "phase2:SNS"
+   ]
+  },
+  {
+   "clinic_id": 534,
+   "uuid": "",
+   "clinic_name": "松本クリニック銀座",
+   "phone": "03-3544-8171",
+   "maps_website_url": "https://matsumoto-clinic-ginza.com/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 538,
+   "uuid": "",
+   "clinic_name": "医療法人社団　隆風会　藤井隆広クリニック",
+   "phone": "03-3544-6266",
+   "maps_website_url": "https://www.tf-clinic.jp/",
+   "groups": [
+    "phase2:制作会社その他"
+   ]
+  },
+  {
+   "clinic_id": 542,
+   "uuid": "",
+   "clinic_name": "医療法人社団　久信会　やえす日本橋ヒフ科",
+   "phone": "03-6202-1200",
+   "maps_website_url": "https://www.hibiya-skin.com/yaesu/",
+   "groups": [
+    "phase2:施策数多"
+   ]
+  },
+  {
+   "clinic_id": 566,
+   "uuid": "",
+   "clinic_name": "医療法人社団　すずらん　せいこレディースクリニック銀座",
+   "phone": "03-5568-3128",
+   "maps_website_url": "https://seikoginza.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative"
+   ]
+  },
+  {
+   "clinic_id": 567,
+   "uuid": "",
+   "clinic_name": "岡添耳鼻咽喉科クリニック",
+   "phone": "03-3573-5487",
+   "maps_website_url": "http://www.okazoe-jibika.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative"
+   ]
+  },
+  {
+   "clinic_id": 589,
+   "uuid": "",
+   "clinic_name": "弓削医院",
+   "phone": "03-3666-3979",
+   "maps_website_url": "https://yuge-iin.com/",
+   "groups": [
+    "phase1:泌尿器科"
+   ]
+  },
+  {
+   "clinic_id": 602,
+   "uuid": "",
+   "clinic_name": "医療法人社団　参英会　岩佐耳鼻咽喉科",
+   "phone": "03-3567-8733",
+   "maps_website_url": "https://kyobashi-ent.com/",
+   "groups": [
+    "phase1:既知誤判定/糖尿病名"
+   ]
+  },
+  {
+   "clinic_id": 618,
+   "uuid": "",
+   "clinic_name": "鼻のクリニック東京",
+   "phone": "03-5205-2220",
+   "maps_website_url": "http://nose-clinic.jp/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 622,
+   "uuid": "",
+   "clinic_name": "医療法人社団　ＢＯＨ　細野クリニック",
+   "phone": "03-3563-0577",
+   "maps_website_url": "https://www.hosono-clinic.com/",
+   "groups": [
+    "phase2:制作会社その他"
+   ]
+  },
+  {
+   "clinic_id": 625,
+   "uuid": "",
+   "clinic_name": "医療法人社団　兜中央会　中島クリニック",
+   "phone": "03-3666-0880",
+   "maps_website_url": "https://www.nakajimaclinic.com/",
+   "groups": [
+    "phase1:内視鏡Positive"
+   ]
+  },
+  {
+   "clinic_id": 636,
+   "uuid": "",
+   "clinic_name": "こやまレディースクリニック",
+   "phone": "03-5859-5975",
+   "maps_website_url": "http://koyama-lc.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative"
+   ]
+  },
+  {
+   "clinic_id": 638,
+   "uuid": "",
+   "clinic_name": "アレジオ銀座クリニック",
+   "phone": "03-5148-1187",
+   "maps_website_url": "https://www.ginza-clinic.com/",
+   "groups": [
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 639,
+   "uuid": "",
+   "clinic_name": "医療法人社団　実直会　冨田実アイクリニック銀座",
+   "phone": "03-6228-4200",
+   "maps_website_url": "https://www.tomita-ginza.com/",
+   "groups": [
+    "phase2:施策数多"
+   ]
+  },
+  {
+   "clinic_id": 676,
+   "uuid": "",
+   "clinic_name": "医療法人社団　フェリオス　東京日帰り手術クリニック",
+   "phone": "03-3567-2555",
+   "maps_website_url": "https://higaeriope.jp/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 678,
+   "uuid": "",
+   "clinic_name": "銀座しまだ内科クリニック",
+   "phone": "03-3574-9103",
+   "maps_website_url": "https://w-naika.com/",
+   "groups": [
+    "phase1:内視鏡Positive"
+   ]
+  },
+  {
+   "clinic_id": 698,
+   "uuid": "",
+   "clinic_name": "八丁堀かず内科外科クリニック",
+   "phone": "03-5542-0737",
+   "maps_website_url": "https://www.kazu-cl.com/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 699,
+   "uuid": "",
+   "clinic_name": "原井クリニック",
+   "phone": "03-3538-6055",
+   "maps_website_url": "https://www.harai.net/",
+   "groups": [
+    "phase2:ポータル"
+   ]
+  },
+  {
+   "clinic_id": 706,
+   "uuid": "",
+   "clinic_name": "銀座リプロ外科",
+   "phone": "03-5159-2240",
+   "maps_website_url": "https://ginzarepro.jp/",
+   "groups": [
+    "phase2:施策数多"
+   ]
+  },
+  {
+   "clinic_id": 736,
+   "uuid": "",
+   "clinic_name": "医療法人社団　ミッドタウンクリニック　日本橋室町三井タワー　ミッドタウンクリニック",
+   "phone": "03-3231-2071",
+   "maps_website_url": "https://www.mtc-nihonbashi.jp/",
+   "groups": [
+    "phase1:糖尿病",
+    "phase2:オンライン診療"
+   ]
+  },
+  {
+   "clinic_id": 741,
+   "uuid": "",
+   "clinic_name": "ｍａｍｍａｒｉａ　ｔｓｕｋｉｊｉ",
+   "phone": "03-3545-0880",
+   "maps_website_url": "https://mammaria.jp/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 763,
+   "uuid": "",
+   "clinic_name": "Ｇクリニック",
+   "phone": "03-3572-3860",
+   "maps_website_url": "https://gclinic.jp/",
+   "groups": [
+    "phase1:複数カテゴリ"
+   ]
+  },
+  {
+   "clinic_id": 799,
+   "uuid": "",
+   "clinic_name": "銀座ヒカリクリニック",
+   "phone": "03-6879-9875",
+   "maps_website_url": "https://ginza-hikari.jp/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 807,
+   "uuid": "",
+   "clinic_name": "勝どきウィメンズクリニック",
+   "phone": "03-3536-7723",
+   "maps_website_url": "http://www.kachidoki-women.com/",
+   "groups": [
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 823,
+   "uuid": "",
+   "clinic_name": "メディカルクリニック　銀座",
+   "phone": "03-6260-6475",
+   "maps_website_url": "https://www.medical-clinic-ginza.com/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 845,
+   "uuid": "",
+   "clinic_name": "青栁クリニック",
+   "phone": "03-5148-0865",
+   "maps_website_url": "https://aoyagi-clinic.com/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 875,
+   "uuid": "",
+   "clinic_name": "ウェルエイジング日本橋クリニック",
+   "phone": "03-6281-9151",
+   "maps_website_url": "http://www.well-aging.or.jp/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 882,
+   "uuid": "",
+   "clinic_name": "晴海ウィメンズクリニック",
+   "phone": "03-6204-2307",
+   "maps_website_url": "https://www.harumi-women.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative",
+    "phase2:制作会社DR.BRIDGE/DEPOC"
+   ]
+  },
+  {
+   "clinic_id": 886,
+   "uuid": "",
+   "clinic_name": "東京晴海胃と大腸の消化器内視鏡・内科クリニック中央区院",
+   "phone": "03-5166-8633",
+   "maps_website_url": "https://www.harumiflag-naishikyo.com/",
+   "groups": [
+    "phase2:施策数多"
+   ]
+  },
+  {
+   "clinic_id": 887,
+   "uuid": "",
+   "clinic_name": "医療法人社団　晴月会　晴海耳鼻咽喉科",
+   "phone": "03-5548-3387",
+   "maps_website_url": "https://www.harumi-ent.com/",
+   "groups": [
+    "phase2:ポータル"
+   ]
+  },
+  {
+   "clinic_id": 891,
+   "uuid": "",
+   "clinic_name": "日本橋人形町消化器・内視鏡クリニック",
+   "phone": "03-6810-9115",
+   "maps_website_url": "https://ningyocho-naishikyo.jp/",
+   "groups": [
+    "phase1:内視鏡Positive",
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 901,
+   "uuid": "",
+   "clinic_name": "水天宮前小児科",
+   "phone": "03-3639-0021",
+   "maps_website_url": "https://www.suiten-shouni.com/",
+   "groups": [
+    "phase2:オンライン診療"
+   ]
+  },
+  {
+   "clinic_id": 910,
+   "uuid": "",
+   "clinic_name": "ルネスクリニック日本橋",
+   "phone": "03-6665-0888",
+   "maps_website_url": "https://biken-kai.com/renais-nihonbashi/",
+   "groups": [
+    "phase1:泌尿器科"
+   ]
+  },
+  {
+   "clinic_id": 916,
+   "uuid": "",
+   "clinic_name": "銀座内科",
+   "phone": "03-5568-0315",
+   "maps_website_url": "https://ginza-naika.com/",
+   "groups": [
+    "phase1:糖尿病"
+   ]
+  },
+  {
+   "clinic_id": 944,
+   "uuid": "",
+   "clinic_name": "ＴＨＩＲＤ　ＣＬＩＮＩＣ　ＧＩＮＺＡ",
+   "phone": "03-6263-2231",
+   "maps_website_url": "https://thirdclinic.jp/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 968,
+   "uuid": "",
+   "clinic_name": "ＢＩＪＯＵ　ＣＬＩＮＩＣ",
+   "phone": "03-5915-4888",
+   "maps_website_url": "https://bijou-clinic.com/",
+   "groups": [
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 983,
+   "uuid": "",
+   "clinic_name": "恵友クリニック",
+   "phone": "03-3241-6088",
+   "maps_website_url": "https://keiyu-clinic.net/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 995,
+   "uuid": "",
+   "clinic_name": "東京ＡＲＴクリニック",
+   "phone": "03-6262-6210",
+   "maps_website_url": "https://tokyoart-clinic.com/",
+   "groups": [
+    "phase2:SNS"
+   ]
+  },
+  {
+   "clinic_id": 1020,
+   "uuid": "",
+   "clinic_name": "築地駅前内科・婦人科クリニック",
+   "phone": "03-6278-8841",
+   "maps_website_url": "https://tsukiji-ekimae-clinic.com/",
+   "groups": [
+    "phase2:ポータル"
+   ]
+  },
+  {
+   "clinic_id": 1102,
+   "uuid": "",
+   "clinic_name": "喜島クリニック",
+   "phone": "03-5791-3424",
+   "maps_website_url": "https://kijima-cl.jp/",
+   "groups": [
+    "phase1:内視鏡Positive"
+   ]
+  },
+  {
+   "clinic_id": 1133,
+   "uuid": "",
+   "clinic_name": "医療法人社団　たくみ会　細川内科クリニック",
+   "phone": "03-5777-5331",
+   "maps_website_url": "http://www.hosokawa-clinic.com/",
+   "groups": [
+    "phase1:糖尿病"
+   ]
+  },
+  {
+   "clinic_id": 1150,
+   "uuid": "",
+   "clinic_name": "医療法人社団　星美会　青山ヒフ科クリニック",
+   "phone": "03-3499-1214",
+   "maps_website_url": "https://aoyamahihuka.com/",
+   "groups": [
+    "phase2:AI/漫画"
+   ]
+  },
+  {
+   "clinic_id": 1155,
+   "uuid": "",
+   "clinic_name": "医療法人社団　神徳会　芝公園かみやまクリニック",
+   "phone": "03-6414-5641",
+   "maps_website_url": "https://www.s-kamiyamaclinic.com/",
+   "groups": [
+    "phase1:泌尿器科"
+   ]
+  },
+  {
+   "clinic_id": 1170,
+   "uuid": "",
+   "clinic_name": "医療法人財団　玉川会　エムオーエー新高輪クリニック",
+   "phone": "03-5421-0321",
+   "maps_website_url": "https://tokyoryoin.net/facilities/new_takanawa",
+   "groups": [
+    "phase2:施策なし"
+   ]
+  },
+  {
+   "clinic_id": 1184,
+   "uuid": "",
+   "clinic_name": "シーエスケー・クリニック",
+   "phone": "03-5157-5121",
+   "maps_website_url": "http://www.cskclinic.com/",
+   "groups": [
+    "phase2:制作会社その他"
+   ]
+  },
+  {
+   "clinic_id": 1187,
+   "uuid": "",
+   "clinic_name": "東京港診療所",
+   "phone": "03-3451-4620",
+   "maps_website_url": "http://tokyokoushinryoujo.com/",
+   "groups": [
+    "phase1:眼科"
+   ]
+  },
+  {
+   "clinic_id": 1192,
+   "uuid": "",
+   "clinic_name": "三好クリニック",
+   "phone": "03-5468-6363",
+   "maps_website_url": "http://www.clinic-miyoshi.com/",
+   "groups": [
+    "phase1:循環器・血管系"
+   ]
+  },
+  {
+   "clinic_id": 1193,
+   "uuid": "",
+   "clinic_name": "芝大門クリニック",
+   "phone": "03-6435-6930",
+   "maps_website_url": "https://www.ne.jp/asahi/shiba-daimon-clinic/kubi-kata/",
+   "groups": [
+    "phase2:専門サイト/LP"
+   ]
+  },
+  {
+   "clinic_id": 1208,
+   "uuid": "",
+   "clinic_name": "京野アートクリニック高輪",
+   "phone": "03-6408-4124",
+   "maps_website_url": "http://www.ivf-kyono.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative",
+    "phase2:オンライン診療"
+   ]
+  },
+  {
+   "clinic_id": 1210,
+   "uuid": "",
+   "clinic_name": "医療法人社団　慶響会　東京ボイスクリニック品川耳鼻いんこう科",
+   "phone": "03-6712-9772",
+   "maps_website_url": "http://www.tokyo-voice.com/",
+   "groups": [
+    "phase1:婦人科混在/内視鏡Negative"
+   ]
+  },
+  {
+   "clinic_id": 1224,
+   "uuid": "",
+   "clinic_name": "医療法人社団　行基会　川村総合診療院",
+   "phone": "03-3478-1146",
+   "maps_website_url": "http://www.g-clinic.net/",
+   "groups": [
+    "phase2:オンライン診療"
+   ]
+  },
+  {
+   "clinic_id": 1225,
+   "uuid": "",
+   "clinic_name": "青山エミ・セントクリニック",
+   "phone": "03-6427-6562",
+   "maps_website_url": "http://www.aoyama-emisent.com/",
+   "groups": [
+    "phase1:皮膚科"
+   ]
+  },
+  {
+   "clinic_id": 1239,
+   "uuid": "",
+   "clinic_name": "三田医院",
+   "phone": "03-3451-7652",
+   "maps_website_url": "https://mita-iin.com/",
+   "groups": [
+    "phase1:内視鏡Positive"
+   ]
+  }
+ ]
+}
