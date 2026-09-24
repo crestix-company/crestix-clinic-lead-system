@@ -149,18 +149,24 @@ def _run_locked(store,jid,provider,fetcher):
 
 
 def _site_lanes(store,jid):
-    """未調査の医院を、調査対象サイト（www有無は同一）ごとにclinic_id順でまとめる。"""
-    lanes = {}
+    """未調査の医院を、調査対象サイト（www有無は同一）ごとにclinic_id順でまとめる。
+
+    MapsのウェブサイトURLがある医院は検索せず、そのサイト内だけを取得する（別サイトへの
+    リダイレクトは取得前に停止）ため、サイトごとに並列にできる。URLがない医院は検索結果の
+    別サイトを取得し得るため、並列の処理がすべて終わった後に単独・clinic_id順で調べる。
+    """
+    lanes,alone = {},[]
     with store.connect() as c:
-        rows = c.execute("""SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url,
-                                   json_extract(c.effective_json,'$.hp_url'),json_extract(c.effective_json,'$.hp_candidate_url')
+        rows = c.execute("""SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url
                             FROM research_job_items i JOIN clinics c ON c.id=i.clinic_id
                             WHERE i.job_id=? AND i.state='PENDING' ORDER BY i.clinic_id""",(jid,)).fetchall()
-    for cid,maps_status,maps_url,hp_url,candidate in rows:
-        url = maps_url if maps_status=="MAPS_MATCHED_WEBSITE" and maps_url else (hp_url or candidate or "")
-        key = _host_key(host(url)) if url else ""
-        lanes.setdefault(key or "(サイト不明)",[]).append(cid)
-    return list(lanes.values())
+    for cid,maps_status,maps_url in rows:
+        key = _host_key(host(maps_url)) if maps_status=="MAPS_MATCHED_WEBSITE" and maps_url else ""
+        if key:
+            lanes.setdefault(key,[]).append(cid)
+        else:
+            alone.append(cid)
+    return list(lanes.values()) if lanes else ([alone] if alone else [])
 
 
 def _research_one(store,jid,job,options,researcher,cid):

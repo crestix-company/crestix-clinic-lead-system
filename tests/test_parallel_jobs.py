@@ -47,12 +47,12 @@ def _store(tmp_path, name="p.db"):
 class FakeFetcher:
     """医院ごとの架空HP。取得ごとに(サイト, 医院, 開始, 終了, スレッド)を記録する。"""
     log, lock = [], threading.Lock()
-    delay, fail, on_fetch = 0.02, set(), None
+    delay, fail, on_fetch, slow = 0.02, set(), None, {}
 
     def fetch(self, url, allowed_host=None):
         site = host(url).removeprefix("www.")
         start = time.monotonic()
-        time.sleep(FakeFetcher.delay)
+        time.sleep(FakeFetcher.delay + FakeFetcher.slow.get(site, 0))
         name, rec = next(((n, r) for (n, u), r in zip(SITES, _records()) if url.startswith(u)), (None, None))
         with FakeFetcher.lock:
             FakeFetcher.log.append((site, name, start, time.monotonic(), threading.get_ident()))
@@ -66,7 +66,7 @@ class FakeFetcher:
 
 @pytest.fixture(autouse=True)
 def fake_fetcher(monkeypatch):
-    FakeFetcher.log, FakeFetcher.fail, FakeFetcher.on_fetch, FakeFetcher.delay = [], set(), None, 0.02
+    FakeFetcher.log, FakeFetcher.fail, FakeFetcher.on_fetch, FakeFetcher.delay, FakeFetcher.slow = [], set(), None, 0.02, {}
     monkeypatch.setattr(researcher_mod, "SafeFetcher", FakeFetcher)
 
 
@@ -156,4 +156,51 @@ def test_explicit_fetcher_and_non_hp_jobs_stay_sequential(tmp_path, monkeypatch)
     jid = create_job(store, ALL, force=True)
     run_job(store, jid, provider=None, fetcher=FakeFetcher())
     assert len({t for *_, t in FakeFetcher.log}) == 1
+    assert job_status(store, jid)["status"] == "COMPLETED"
+
+
+# ---- 別サイトへの到達（リダイレクト・検索結果）で並列の処理が同じサイトを共有しないこと ----
+def test_cross_site_redirect_is_stopped_before_any_request_to_other_site():
+    from src.enrichment.safe_web import SafeFetcher, WebResponse
+    requested = []
+
+    class Transport:
+        def get(self, url, timeout, max_bytes):
+            requested.append(host(url))
+            if url.endswith("/robots.txt"):
+                return WebResponse(404, {}, b"")
+            return WebResponse(301, {"location": "https://shared.example/landing/"}, b"")
+    fetcher = SafeFetcher(transport=Transport(), sleeper=lambda s: None)
+    with pytest.raises(WebError, match="別ドメイン"):
+        fetcher.fetch("https://other.example/")
+    assert "shared.example" not in requested        # 別サイトへはrobots.txtも本体も取得しない
+    assert set(requested) == {"other.example"}
+
+
+def test_www_redirect_stays_in_same_lane():
+    assert jobs._host_key("https://www.shared.example/x") == jobs._host_key("https://shared.example/")
+
+
+def test_clinic_without_maps_url_runs_alone_after_parallel_lanes(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs, "PARALLEL_WORKERS", 2)
+    store, ids = _store(tmp_path)
+    extra = {**_records()[0], "clinic_id": "p-nomaps", "clinic_name": "検索内科", "phone": "03-3333-9999",
+             "address": "東京都千代田区並列町99-1-1"}
+    store.import_master([extra])
+    SITES.append(("検索内科", "https://shared.example/kensaku/"))
+    FakeFetcher.slow = {"shared.example": 0.2}   # 並列レーン（shared.example）が長く動いている状況
+    try:
+        class Provider:
+            def search(self, query):
+                return [{"url": "https://shared.example/kensaku/", "title": "検索内科", "content": extra["phone"]}]
+        jid = create_job(store, ALL, force=True)
+        run_job(store, jid, provider=Provider())
+    finally:
+        SITES.pop()
+    log = FakeFetcher.log
+    alone = [x for x in log if x[1] == "検索内科"]
+    others = [x for x in log if x[1] != "検索内科"]
+    assert alone and others
+    # 検索で見つけた別サイト（並列レーンと同じ shared.example）は、並列の処理が全部終わってから単独で取得する
+    assert min(a[2] for a in alone) >= max(o[3] for o in others)
     assert job_status(store, jid)["status"] == "COMPLETED"
