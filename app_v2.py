@@ -398,11 +398,12 @@ def simple_workflow_ui(store, demo):
     st.header("上から順に進めるだけ")
     st.caption("普段使う操作だけを4ステップにまとめました。細かい設定・手動修正は「詳細設定」にあります。")
 
-    st.subheader("1. 基本データを準備")
-    cols = st.columns(3)
+    st.subheader("現在のデータ状況")
+    cols = st.columns(4)
     cols[0].metric("厚生局データ", f"{metrics.get('厚生局取込レコード',0):,}件")
-    cols[1].metric("Google Maps HP取得", f"{metrics.get('Google Maps HP取得',0):,}件")
-    cols[2].metric("HP確認済み", f"{metrics.get('HP確認済み',0):,}件")
+    cols[1].metric("既存UUIDあり", f"{metrics.get('既存UUIDあり',0):,}件")
+    cols[2].metric("Google Maps HP取得", f"{metrics.get('Google Maps HP取得',0):,}件")
+    cols[3].metric("HP確認済み", f"{metrics.get('HP確認済み',0):,}件")
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
@@ -412,21 +413,12 @@ def simple_workflow_ui(store, demo):
                 result = store.import_master(frame)
             report_import(result)
             st.rerun()
-    else:
-        st.success("基本データは準備済みです。")
-    st.caption("既存Comdeskの取込、全国の厚生局更新、再統合は「詳細設定」で行えます。")
 
-    st.subheader("2. Google MapsでHPを集める")
-    st.write("① キューをダウンロード → ② Google Maps Collectorで調査 → ③ 結果CSVをここへ戻します。")
+    st.subheader("1. 厚生局データを取り込む")
 
-    st.download_button(
-        "① Google Maps調査キューCSVをダウンロード",
-        store.google_maps_queue_csv(),
-        "google_maps_research_queue.csv",
-        disabled=demo,
-        key="simple_maps_queue",
-        use_container_width=True,
-    )
+    st.subheader("2. 別途の拡張機能（Google Maps Collector）で、1.で取り込んだデータを入れる（手動）")
+
+    st.subheader("3. 拡張機能で抽出したデータを戻す")
 
     maps_upload = st.file_uploader(
         "③ Google Maps収集結果CSVをアップロード",
@@ -449,7 +441,7 @@ def simple_workflow_ui(store, demo):
             )
             st.rerun()
 
-    st.subheader("3. HP内容を自動調査")
+    st.subheader("4. HP内容を自動調査")
     with store.connect() as c:
         prefs = [r[0] for r in c.execute(
             "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
@@ -522,12 +514,61 @@ def simple_workflow_ui(store, demo):
         st.write("最大HPページ数：20ページ")
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
 
-    st.subheader("4. 営業対象を絞ってComdesk形式で出力")
-    st.write("HP調査が終わったら、営業条件を選んでA〜ABの28列固定で出力します。")
-    def go_to_sales():
-        st.session_state["navigation"] = "営業対象・出力"
-    
-    st.button("営業対象・出力へ進む", type="primary", key="simple_to_sales", use_container_width=True, on_click=go_to_sales)
+    st.subheader("5. Comdesk形式で出力")
+    st.caption("HP確認済みで、まだUUIDが付いていない医院を、営業条件で絞らずComdesk形式で出力します。")
+
+    step5_filters = Filters(active_only=False, hp_only=True, uuid_mode="なし")
+    step5_count = store.count(step5_filters)
+    st.write(f"対象：{step5_count:,}件")
+
+    step5_signature = json.dumps(
+        [str(store.path), asdict(step5_filters), COMDESK_HEADERS, store.revision()],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if st.button("CSV・Excelを作成", type="primary", key="simple_step5_export", disabled=step5_count == 0, use_container_width=True):
+        st.session_state["simple_step5_export_files"] = {
+            "signature": step5_signature,
+            "files": store.export(step5_filters),
+        }
+
+    step5_output = st.session_state.get("simple_step5_export_files")
+    if step5_output and step5_output["signature"] == step5_signature:
+        for name, content in step5_output["files"].items():
+            st.download_button(
+                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
+                content,
+                name,
+                key="simple_step5_download_" + name,
+                use_container_width=True,
+            )
+
+    st.subheader("6. 5.で出したデータを手動でComdeskに入れる（＝UUIDを付与）")
+
+    st.subheader("7. 6.でUUIDが付与されたデータをこのアプリに取り込む")
+
+    step7_upload = st.file_uploader("コムデスクCSV・Excel", type=["csv", "xlsx", "xls"], key="simple_comdesk_upload", disabled=demo)
+    if step7_upload:
+        table = upload_table(step7_upload, "simple_comdesk")
+        inferred = infer_comdesk_columns(table)
+        mapping = {}
+        labels = {"uuid":"UUID・案件ID","clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
+                  "address":"住所・住所１","address2":"住所２・建物名","postal_code":"郵便番号",
+                  "manager_name":"院長名","url":"HP URL","epark_url":"EPARK URL"}
+        with st.expander("列の対応を確認", expanded=True):
+            st.caption("28列形式の「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
+            for field, label in labels.items():
+                choices = [None] + list(range(len(table.headers)))
+                mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(inferred.get(field)), format_func=lambda i:"未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key="simple_comdesk_map_"+field)
+            preview = table.data.head(5).copy()
+            preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
+            st.dataframe(preview, hide_index=True)
+            st.caption("出力プレビュー（A〜AB列・28項目）")
+            st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
+        if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
+            with st.spinner("既存案件を登録しています…"):
+                result = store.import_comdesk(table, mapping)
+            report_import(result)
 
 
 def simple_sales_ui(store):
