@@ -31,10 +31,36 @@ def sha256(path):
     return h.hexdigest()
 
 
+PROTECTED_DATA_DIR = (Path(__file__).resolve().parents[1] / "data")
+
+
+def assert_staging_is_safe(prod_path, staging_path):
+    """staging_pathが本番DB（またはdata/配下の他の本番ファイル）を指していないことを保証する。
+
+    コマンドの指定ミス1つで本番DBへ直接INSERTしてしまう事故を防ぐための必須ガード。
+    書き込み先(staging_path)が本番ファイルそのもの、もしくはリポジトリのdata/配下
+    （clinics.sqlite3・demo.sqlite3など本番相当のファイルが置かれる場所）を指す場合は
+    無条件で中止する。回避オプションは提供しない。
+    """
+    prod_resolved = Path(prod_path).resolve()
+    staging_resolved = Path(staging_path).resolve()
+    if staging_resolved == prod_resolved:
+        raise SystemExit(f"ABORT: staging_pathが本番DBと同一パスです({staging_resolved})。処理を中止しました。")
+    try:
+        staging_resolved.relative_to(PROTECTED_DATA_DIR.resolve())
+        raise SystemExit(
+            f"ABORT: staging_pathがdata/配下（本番DB用ディレクトリ: {PROTECTED_DATA_DIR}）を指しています"
+            f"({staging_resolved})。staging用のパスは必ずdata/の外（例: /tmp配下）を指定してください。"
+        )
+    except ValueError:
+        pass  # data/配下ではない -> 安全
+
+
 def run(prod_path, staging_path, csv_path, expected_hash=None, test_unique_index=True, reset_staging=True):
     """reset_staging=False で既存のstaging_pathをそのまま使う（本番からの再コピーをしない）。
     同一importをもう一度実行してidempotency（2回目のnew_insert=0）を確認する用途に使う。
     """
+    assert_staging_is_safe(prod_path, staging_path)
     report = {}
 
     before_hash = sha256(prod_path)

@@ -12,7 +12,7 @@ from src.master.filters import Filters
 from src.master.samples import sample_records
 from src.io.input_loader import load_table
 from src.io.output_writer import csv_bytes
-from scripts.national_append_only_import import run
+from scripts.national_append_only_import import run, assert_staging_is_safe, PROTECTED_DATA_DIR
 
 TODAY = date.today().replace(day=1).isoformat()
 
@@ -167,3 +167,39 @@ def test_ambiguous_no_key_row_goes_to_review_not_duplicate(tmp_path, seeded_prod
     assert report["duplicate"] == 0
     assert report["review"] == 1
     assert len(review_rows) == 1
+
+
+def test_safety_guard_blocks_staging_pointed_at_production(tmp_path, seeded_prod):
+    # (8) staging_pathを間違えて本番DBそのものと同じパスに指定した場合、即座に中止する。
+    with pytest.raises(SystemExit, match="ABORT"):
+        assert_staging_is_safe(seeded_prod, seeded_prod)
+
+
+def test_safety_guard_blocks_staging_inside_protected_data_dir():
+    # (8) staging_pathがdata/配下（本番DBの置き場所）を指している場合、パスが本番と
+    # 一致していなくても中止する。
+    fake_prod = PROTECTED_DATA_DIR / "clinics.sqlite3"
+    fake_staging_inside_data_dir = PROTECTED_DATA_DIR / "some_other_copy.sqlite3"
+    with pytest.raises(SystemExit, match="ABORT"):
+        assert_staging_is_safe(fake_prod, fake_staging_inside_data_dir)
+
+
+def test_safety_guard_allows_tmp_staging_path(tmp_path, seeded_prod):
+    # data/配下でなければガードは発火しない(通常の /tmp staging運用が阻害されないことの確認)。
+    assert_staging_is_safe(seeded_prod, tmp_path / "staging.sqlite3")
+
+
+def test_run_aborts_before_any_write_when_staging_is_production(tmp_path, seeded_prod):
+    # run()全体を通しても、production自身をstagingに指定したら書き込みの前に中止すること。
+    before_hash = None
+    import hashlib
+    before_hash = hashlib.sha256(seeded_prod.read_bytes()).hexdigest()
+
+    csv_path = tmp_path / "master.csv"
+    write_master_csv(csv_path, [base_row()])
+
+    with pytest.raises(SystemExit, match="ABORT"):
+        run(seeded_prod, seeded_prod, csv_path)
+
+    after_hash = hashlib.sha256(seeded_prod.read_bytes()).hexdigest()
+    assert after_hash == before_hash  # 中止前に一切書き込まれていない
