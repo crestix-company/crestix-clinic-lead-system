@@ -26,22 +26,24 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert not app.exception and not app.error
     app.toggle[0].set_value(True).run()
     assert not app.exception and not app.error
-    assert any(m.label=="HP確認済み" and m.value=="3" for m in app.metric)
-    app.radio[0].set_value("営業対象フィルター").run()
+    assert any(m.label=="HP確認済み" and m.value=="3件" for m in app.metric)
+    app.radio[0].set_value("営業対象・出力").run()
     assert not app.exception and not app.error
-    next(b for b in app.button if b.label=="この条件でExcel・CSVを作成").click().run()
+    next(b for b in app.button if b.label=="CSV・Excelを作成").click().run()
     assert not app.exception and not app.error
-    assert "final_comdesk_import.xlsx" in app.session_state["export_v2"]["files"]
-    for filename, content in app.session_state["export_v2"]["files"].items():
+    assert "final_comdesk_import.xlsx" in app.session_state["simple_export_files"]["files"]
+    for filename, content in app.session_state["simple_export_files"]["files"].items():
         assert load_table(content,filename).headers==COMDESK_HEADERS
     detail=next(s for s in app.selectbox if s.label=="詳細を確認する医院")
     detail.set_value(1).run()
     assert not app.exception and not app.error
-    app.radio[0].set_value("要確認・設定").run()
+    app.radio[0].set_value("詳細設定").run()
+    section=next(s for s in app.selectbox if s.label=="開く画面")
+    section.set_value("要確認・設定").run()
     assert not app.exception and not app.error
     next(b for b in app.button if b.label=="バックアップを作成").click().run()
     assert not app.exception and not app.error
-    app.radio[0].set_value("マスター管理").run()
+    next(s for s in app.selectbox if s.label=="開く画面").set_value("マスター管理").run()
     assert not app.exception and not app.error
-    app.radio[0].set_value("自動情報収集").run()
+    next(s for s in app.selectbox if s.label=="開く画面").set_value("自動情報収集（詳細）").run()
     assert not app.exception and not app.error
