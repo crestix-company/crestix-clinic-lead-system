@@ -146,7 +146,10 @@ class ClinicStore:
             if version < 3:
                 conn.executemany("UPDATE clinics SET tel_match_key=? WHERE id=?",
                                  [(tel_match_key(row["phone"]), row["id"]) for row in conn.execute("SELECT id,phone FROM clinics")])
-            conn.execute("PRAGMA user_version=4")
+            # PRAGMA user_version=N は値が既に同じでも無条件にヘッダを書き込む（SQLiteの仕様）。
+            # 既に最新版なら何も書き込まない設計にするため、実際に上げる必要があるときだけ実行する。
+            if version < 4:
+                conn.execute("PRAGMA user_version=4")
 
     @contextmanager
     def connect(self):
