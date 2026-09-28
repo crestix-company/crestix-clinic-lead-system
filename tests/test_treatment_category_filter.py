@@ -273,7 +273,9 @@ def test_multiple_departments_and_treatments_per_clinic(filter_store):
 
 # ---- UI ----------------------------------------------------------------
 def _sales_app(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLINIC_DB_PATH", str(tmp_path / "ui.db"))
+    db_path = tmp_path / "ui.db"
+    ClinicStore(db_path)  # CLINIC_DB_PATH必須化に対応し、事前に空のスキーマだけ用意する
+    monkeypatch.setenv("CLINIC_DB_PATH", str(db_path))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     at = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()
     at.session_state["navigation"] = "営業対象・出力"

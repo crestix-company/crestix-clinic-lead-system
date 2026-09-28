@@ -59,7 +59,7 @@ py -3.12 -m venv .venv
 
 **Production DBはリポジトリ内の`data/clinics.sqlite3`ではありません。** 可変データをGit管理すると、`git switch`/`restore`/`reset`/古いbranchへの移動などでDBが巻き戻る・削除される事故が起きるため、Production DBはリポジトリ外に置いて運用します。
 
-起動前に環境変数`CLINIC_DB_PATH`でリポジトリ外の実DBを指定してください（未設定時は`data/clinics.sqlite3`にフォールバックしますが、これは開発・テスト用の空/サンプルDBとして扱ってください。Production用データを置かないでください）。
+**リポジトリをclone/pullしただけではProduction DBは含まれません。** 起動には環境変数`CLINIC_DB_PATH`でリポジトリ外の実DBを明示的に指定する必要があります。`CLINIC_DB_PATH`が未設定、指定先が存在しない、SQLiteとして開けない、`clinics`テーブルが無い場合はアプリはエラーを表示して起動を停止します（**空DBの自動生成やrepo内の古いDBへの自動fallbackは一切しません**）。
 
 ```powershell
 set CLINIC_DB_PATH=C:\path\to\external\clinics.sqlite3
@@ -71,9 +71,15 @@ export CLINIC_DB_PATH=~/CrestixData/clinic-lead/clinics.sqlite3
 .venv/bin/python scripts/launch_v2.py
 ```
 
+Macでは`scripts/launch_v2_mac.sh`を使うと、`CLINIC_DB_PATH`未設定時に既定の配置場所（`$HOME/CrestixData/clinic-lead/clinics.sqlite3`。ユーザー固有の絶対パスをリポジトリにハードコードしないよう`$HOME`基準にしています）を使い、起動前にDBの存在・`clinics`テーブルの有無を確認してから起動します。
+
+```bash
+./scripts/launch_v2_mac.sh
+```
+
 古いbranch（`data/clinics.sqlite3`がGit LFSで追跡されていた履歴）へ切り替えても、`CLINIC_DB_PATH`を設定していればProduction DBそのものには影響しません。
 
-`start_v2_windows.bat`をダブルクリックして起動する運用の場合は、事前に`CLINIC_DB_PATH`をWindowsのシステム環境変数として設定しておくか、ローカルの`start_v2_windows.bat`に`set CLINIC_DB_PATH=...`の行を追加してください（このファイル自体はGit管理下のため、パスを書き込む場合は各PCでの手元編集にとどめ、リポジトリへcommitしないでください）。
+`start_v2_windows.bat`をダブルクリックして起動する運用の場合は、事前に`CLINIC_DB_PATH`をWindowsのシステム環境変数として設定しておくか、ローカルの`start_v2_windows.bat`に`set CLINIC_DB_PATH=...`の行を追加してください（このファイル自体はGit管理下のため、パスを書き込む場合は各PCでの手元編集にとどめ、リポジトリへcommitしないでください）。Windowsでも、Production DBは各PCのローカルデータ領域（例：`C:\Users\<ユーザー名>\CrestixData\clinic-lead\clinics.sqlite3`）に配置し、`CLINIC_DB_PATH`で指定してください。
 
 ### 複数PC運用について
 
