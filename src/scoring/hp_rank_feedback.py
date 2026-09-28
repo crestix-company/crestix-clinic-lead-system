@@ -125,7 +125,10 @@ def resolve_final_rank(machine_rank, manual_rank):
     return manual_rank if manual_rank else machine_rank
 
 
-REVIEW_MARGIN = 1  # Stage1閾値±1を「境界」とみなす
+REVIEW_MARGIN = 0  # Stage1閾値ちょうどのみを「境界」とみなす。
+# 検証: margin=1だとスコア域が0-6と狭いPhase2 candidateでは300件中177件(59%)が
+# HIGHになり「全件確認しない」の趣旨に反したため、margin=0（300件中105件=35%）へ調整した。
+# 特徴量のスコア域が広がった場合は、しきい値からの相対距離で再検討すること。
 
 
 def review_priority(machine_rank, machine_score, features, *, threshold=5, manual_rank=None):

@@ -81,9 +81,16 @@ def test_latest_feedback_returns_none_when_unknown(conn):
 
 
 def test_review_priority_flags_boundary_score():
-    result = review_priority("C", machine_score=4, features={}, threshold=5)
+    result = review_priority("C", machine_score=5, features={}, threshold=5)
     assert result["priority"] == "HIGH"
     assert "境界" in result["reason"]
+
+
+def test_review_priority_does_not_flag_score_one_away_from_threshold():
+    # margin=0: 閾値からわずかに離れているだけなら「境界」扱いにしない
+    # （スコア域が狭いモデルで大半がHIGHになってしまうのを防ぐための調整）。
+    result = review_priority("C", machine_score=4, features={}, threshold=5)
+    assert result["priority"] == "NORMAL"
 
 
 def test_review_priority_flags_a_candidate():
