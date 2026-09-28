@@ -232,12 +232,17 @@ def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", required=True, help="clinics.sqlite3の絶対パス")
     parser.add_argument("--out", default="/tmp/clinic_legacy13k_reproject", help="dry-run成果物の出力先ディレクトリ")
-    parser.add_argument("--expected-candidates", type=int, default=8086,
-                         help="candidate_updates期待値。dry-runでも不一致はFAIL CLOSEDで警告する。")
+    parser.add_argument("--expected-candidates", type=int, default=None,
+                         help="candidate_updates期待値。--apply時は省略不可（fail-closed）。dry-runで省略した場合は8086を使う。")
     parser.add_argument("--apply", action="store_true", help="明示した場合のみWRITEを行う。デフォルトはdry-run。")
     parser.add_argument("--expected-source-sha256", default=None,
                          help="--apply時、この値とProduction DBの現在のsha256が一致しない場合はSTOPする。")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.apply and args.expected_candidates is None:
+        parser.error("--apply時は--expected-candidatesの指定が必須です（省略不可。8,086件guardをCLIレベルでfail-closedにするため）。")
+    if args.expected_candidates is None:
+        args.expected_candidates = 8086
+    return args
 
 
 def main(argv=None):

@@ -18,7 +18,7 @@ from src.normalizer.departments import normalize_departments
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.reproject_legacy_departments import (  # noqa: E402
-    ApplyAborted, classify, fetch_legacy_rows, run_apply, run_dry_run, write_artifacts,
+    ApplyAborted, classify, fetch_legacy_rows, main, parse_args, run_apply, run_dry_run, write_artifacts,
 )
 
 ALL = dict(active_only=False, hp_only=False)
@@ -250,3 +250,54 @@ def test_apply_is_idempotent_second_pass_has_zero_candidates(reproject_db, tmp_p
         conn.close()
     result = classify(rows)
     assert result.candidate_updates == 0
+
+
+# ---- CLI: --expected-candidates is required whenever --apply is used ----------
+def test_parse_args_rejects_apply_without_expected_candidates(reproject_db, tmp_path):
+    store, ids = reproject_db
+    with pytest.raises(SystemExit) as exc:
+        parse_args(["--db", str(store.path), "--apply", "--out", str(tmp_path / "out")])
+    assert exc.value.code != 0
+
+
+def test_main_apply_without_expected_candidates_fails_closed_and_writes_nothing(reproject_db, tmp_path):
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    with pytest.raises(SystemExit) as exc:
+        main(["--db", str(store.path), "--apply", "--out", str(tmp_path / "out")])
+    assert exc.value.code != 0
+    assert store.path.read_bytes() == before_bytes
+
+
+def test_main_apply_with_matching_expected_candidates_proceeds(reproject_db, tmp_path):
+    store, ids = reproject_db
+    rc = main(["--db", str(store.path), "--apply", "--expected-candidates", "1", "--out", str(tmp_path / "out")])
+    assert rc == 0
+    conn = sqlite3.connect(store.path)
+    try:
+        departments = conn.execute(
+            "SELECT departments_json FROM clinics WHERE id=?", (ids["legacy_stale"],)
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert json.loads(departments) == ["眼科"]
+
+
+def test_main_apply_with_candidate_mismatch_fails_closed_and_writes_nothing(reproject_db, tmp_path):
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    rc = main(["--db", str(store.path), "--apply", "--expected-candidates", "999", "--out", str(tmp_path / "out")])
+    assert rc == 1
+    assert store.path.read_bytes() == before_bytes
+
+
+def test_main_dry_run_without_expected_candidates_still_defaults_to_8086(reproject_db, tmp_path):
+    # --apply を伴わない限り--expected-candidatesの省略は従来どおり許容し、8086がデフォルトのまま使われる。
+    store, ids = reproject_db
+    args = parse_args(["--db", str(store.path), "--out", str(tmp_path / "out")])
+    assert args.expected_candidates == 8086
+    before_bytes = store.path.read_bytes()
+    rc = main(["--db", str(store.path), "--out", str(tmp_path / "out")])
+    # このfixtureの実candidateは1件なので8086とは不一致になり、dry-runは既存仕様どおりFAIL CLOSED(非0)。
+    assert rc == 1
+    assert store.path.read_bytes() == before_bytes
