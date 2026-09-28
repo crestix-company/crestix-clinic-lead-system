@@ -508,17 +508,14 @@ def media_signals(record,results):
     return dedupe_signals(found)
 
 
-def rank_hp(pages,treatment,signals,config=None):
-    cfg=config or read_config(ROOT/"config/hp_ranking.yml")
-    pages=[p for p in pages if is_official_candidate(p.url)]
-    if not pages:
-        return {"hp_rank":"NO_HP","hp_score":0,"hp_rank_reasons":[]}
+def hp_rank_features(pages,treatment,signals):
+    """rank_hp()が使う11個のbool特徴を計算する（重み・閾値には依存しない）。"""
     html="\n".join(p.html for p in pages)
     text="\n".join(p.main_text for p in pages)
     soup=BeautifulSoup(html,"html.parser")
     links=[a for p in pages for a in p.links]
     treatment_urls={e["url"] for e in treatment.get("treatment_evidence",[]) if e["confidence"]>=.9 and e.get("source")!="CLINIC_NAME"}
-    features={
+    return {
         "HTTPS":pages[0].url.startswith("https://"),"スマホviewport":bool(soup.select('meta[name="viewport"]')),
         "Web予約導線":any(re.search(r"予約|受付|reserve|reservation|booking",a["text"]+a["url"],re.I) for a in links),
         "LINE導線":any(domain_is(a["url"],"line.me") or domain_is(a["url"],"lin.ee") for a in links),
@@ -527,9 +524,26 @@ def rank_hp(pages,treatment,signals,config=None):
         "問合せCTA":any(re.search(r"お問い合わせ|問合せ|tel:",a["text"]+a["url"]) for a in links),
         "SNS導線":any(any(domain_is(a["url"],d) for d in ["instagram.com","youtube.com","tiktok.com","facebook.com","x.com"]) for a in links),
         "独自LP・専門サイト":any(s["name"] in {"治療専用LP","治療専門サイト"} for s in signals)}
-    reasons=[{"feature":k,"points":int(cfg["weights"].get(k,0))} for k,v in features.items() if v]
-    score=sum(r["points"] for r in reasons)
-    rank=next((r for r in ["A","B","C","D"] if score>=cfg["thresholds"][r]),"D")
+
+
+def hp_rank_score(features,weights):
+    """特徴の重み付き合計点とその根拠一覧を返す。"""
+    reasons=[{"feature":k,"points":int(weights.get(k,0))} for k,v in features.items() if v]
+    return sum(r["points"] for r in reasons),reasons
+
+
+def hp_rank_from_score(score,thresholds):
+    return next((r for r in ["A","B","C","D"] if score>=thresholds[r]),"D")
+
+
+def rank_hp(pages,treatment,signals,config=None):
+    cfg=config or read_config(ROOT/"config/hp_ranking.yml")
+    pages=[p for p in pages if is_official_candidate(p.url)]
+    if not pages:
+        return {"hp_rank":"NO_HP","hp_score":0,"hp_rank_reasons":[]}
+    features=hp_rank_features(pages,treatment,signals)
+    score,reasons=hp_rank_score(features,cfg["weights"])
+    rank=hp_rank_from_score(score,cfg["thresholds"])
     return {"hp_rank":rank,"hp_score":score,"hp_rank_reasons":reasons,"hp_rank_version":cfg["version"]}
 
 
