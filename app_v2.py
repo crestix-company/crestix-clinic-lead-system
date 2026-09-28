@@ -36,6 +36,33 @@ def store_for(path):
     return ClinicStore(path)
 
 
+def resolve_production_db_path():
+    """Production DBの絶対パスを検証する。存在しない/開けない場合は自動生成せずエラー文を返す。
+
+    CLINIC_DB_PATH未設定時にrepo内の古いDBへ黙ってfallbackし、
+    利用者が気づかないまま古いデータを見てしまう事故を防ぐ。
+    """
+    raw = os.getenv("CLINIC_DB_PATH")
+    if not raw:
+        return None, "CLINIC_DB_PATHが設定されていません。Production DBの絶対パスを環境変数CLINIC_DB_PATHに設定してから起動してください。"
+    path = Path(raw)
+    if not path.exists():
+        return None, f"CLINIC_DB_PATHで指定されたファイルが見つかりません： {path}"
+    if not path.is_file():
+        return None, f"CLINIC_DB_PATHはファイルではありません（ディレクトリ等が指定されています）： {path}"
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        return None, f"CLINIC_DB_PATHをSQLiteとして開けません： {path}（{exc}）"
+    if "clinics" not in tables:
+        return None, f"CLINIC_DB_PATHにclinicsテーブルがありません： {path}"
+    return path, None
+
+
 @st.cache_resource
 def runner_for(path):
     return JobRunner()
@@ -804,9 +831,13 @@ def main():
             demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
 
-    path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3"))) if demo else Path(
-        os.getenv("CLINIC_DB_PATH", str(ROOT/"data/clinics.sqlite3"))
-    )
+    if demo:
+        path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
+    else:
+        path, db_error = resolve_production_db_path()
+        if db_error:
+            st.error(db_error)
+            st.stop()
     store = store_for(str(path))
     store.refresh_age_model()
 

@@ -4,6 +4,7 @@ from streamlit.testing.v1 import AppTest
 from src.utils.config import ROOT
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_HEADERS
+from src.master.store import ClinicStore
 
 
 def test_import_has_no_database_side_effects(tmp_path,monkeypatch):
@@ -16,7 +17,9 @@ def test_import_has_no_database_side_effects(tmp_path,monkeypatch):
 
 
 def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkeypatch):
-    monkeypatch.setenv("CLINIC_DB_PATH",str(tmp_path/"app.db"))
+    db_path=tmp_path/"app.db"
+    ClinicStore(db_path)  # CLINIC_DB_PATH必須化に対応し、事前に空のスキーマだけ用意する
+    monkeypatch.setenv("CLINIC_DB_PATH",str(db_path))
     # サンプル用のパスも隔離し、pytestで配布dataにDBを残さない。
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH",str(tmp_path/"demo.db"))
     app=AppTest.from_file(str(ROOT/"app_v2.py"),default_timeout=30).run()
