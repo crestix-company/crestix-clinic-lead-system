@@ -184,9 +184,12 @@ class ClinicStore:
             raise ValueError("医院が見つかりません。")
         if r["merged_into"]:
             return self._get(c, r["merged_into"])
+        # normalized_departmentsはeffective_jsonのcacheではなく、SQL filterと同じclinics.departments_json列を
+        # runtime sourceにする（reprojectでdepartments_jsonだけ更新してもfilter/pair判定がずれないように）。
         return {**json.loads(r["effective_json"]), "id": r["id"], "uuid": r["uuid"], "tel_match_key":r["tel_match_key"],
                 "first_seen_at":r["first_seen_at"], "last_seen_at":r["last_seen_at"],
-                "source_as_of_date":r["source_as_of_date"], "is_new_since_last_update":bool(r["is_new"])}
+                "source_as_of_date":r["source_as_of_date"], "is_new_since_last_update":bool(r["is_new"]),
+                "normalized_departments": json.loads(r["departments_json"])}
 
     def get(self, cid):
         with self.connect() as c:

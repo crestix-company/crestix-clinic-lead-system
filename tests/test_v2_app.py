@@ -4,6 +4,7 @@ from streamlit.testing.v1 import AppTest
 from src.utils.config import ROOT
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_HEADERS
+from src.master.scope import SCOPE_ALL
 from src.master.store import ClinicStore
 
 
@@ -29,6 +30,9 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert any(m.label=="HP確認済み" and m.value=="3件" for m in app.metric)
     app.radio[0].set_value("営業対象・出力").run()
     assert not app.exception and not app.error
+    # デモデータはimport時にfirst_seen_at=現在時刻となり既定の既存営業リスト（legacy cutoff）から外れるため、
+    # このexport確認では全国Clinic Masterへ切り替える。
+    next(s for s in app.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
     next(b for b in app.button if b.label=="CSV・Excelを作成").click().run()
     assert not app.exception and not app.error
     assert "final_comdesk_import.xlsx" in app.session_state["simple_export_files"]["files"]

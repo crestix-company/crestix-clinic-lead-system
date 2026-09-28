@@ -5,6 +5,7 @@ from src.utils.config import ROOT, read_config
 from src.enrichment.hp_analysis import Page
 from src.master.filters import Filters, AD_COUNT_SQL
 from src.master.samples import sample_records
+from src.master.scope import SCOPE_ALL
 from src.master.store import ClinicStore
 from src.scoring.research_scoring import (hp_signals, production_companies, analyze, AD_SIGNAL_NAMES, AD_SIGNAL_LABELS,
                                           SIGNAL_NAMES, dedupe_signals, signal, finalize_result)
@@ -218,6 +219,9 @@ def test_sales_ui_marketing_fields(tmp_path, monkeypatch, mstore):
 
 def test_sales_ui_filters_combine_with_and(tmp_path, monkeypatch, mstore):
     at = _app(tmp_path, monkeypatch, mstore.path)
+    # このtestはscope自体を検証しないため、既定の既存営業リスト（first_seen_atのcutoffで絞られる）を外し、
+    # 合成fixtureの全件が対象になる全国Clinic Masterへ切り替える。
+    next(s for s in at.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
     next(m for m in at.selectbox if m.label == "医科・歯科")
     at.multiselect[0].set_value([]).run()  # 都道府県の既定（東京都）は架空住所と一致するのでそのままでもよい
     next(m for m in at.multiselect if m.label == "診療科").select("眼科").run()
