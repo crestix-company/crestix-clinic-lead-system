@@ -1,0 +1,53 @@
+{
+  "changed": 32,
+  "changed_rate": 0.1095890410958904,
+  "distribution_share_delta_percentage_points": {
+    "A": -1.0273972602739725,
+    "B": -7.534246575342466,
+    "C": 5.821917808219178,
+    "D": 2.73972602739726
+  },
+  "max_absolute_share_delta_percentage_points": 7.534246575342466,
+  "phase21_distribution": {
+    "A": 3,
+    "B": 25,
+    "C": 110,
+    "D": 154
+  },
+  "phase22_distribution": {
+    "A": 0,
+    "B": 3,
+    "C": 127,
+    "D": 162
+  },
+  "review": 8,
+  "rows": 300,
+  "scored": 292,
+  "transition_matrix": {
+    "A": {
+      "A": 0,
+      "B": 0,
+      "C": 3,
+      "D": 0
+    },
+    "B": {
+      "A": 0,
+      "B": 3,
+      "C": 21,
+      "D": 1
+    },
+    "C": {
+      "A": 0,
+      "B": 0,
+      "C": 103,
+      "D": 7
+    },
+    "D": {
+      "A": 0,
+      "B": 0,
+      "C": 0,
+      "D": 154
+    }
+  },
+  "unchanged": 260
+}
