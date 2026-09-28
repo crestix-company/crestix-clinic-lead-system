@@ -21,3 +21,10 @@ node_modules/
 
 # Performance Phase: 実医院のHTTP応答・DB複製・計測生データ（Gitへ入れない）
 .perf-replay/
+
+# Production DB: 可変データなのでGit管理しない（git switch/restore/reset等での巻き戻り事故を防ぐ）。
+# *.sqlite3* で既にカバーされるが、本番ファイルは明示的にも列挙しておく。
+/data/clinics.sqlite3
+/data/clinics.sqlite3-wal
+/data/clinics.sqlite3-shm
+/data/clinics.sqlite3-journal
