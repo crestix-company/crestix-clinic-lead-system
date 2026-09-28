@@ -110,4 +110,3 @@ def test_department_deselect_prunes_only_removed_department():
 
 def test_comdesk_contract_is_still_28_columns():
     assert len(COMDESK_HEADERS) == 28
-
