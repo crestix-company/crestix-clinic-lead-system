@@ -1,5 +1,6 @@
 from datetime import date
 from io import BytesIO
+import hashlib
 import json
 import sqlite3
 import pandas as pd
@@ -257,6 +258,20 @@ def test_backups_and_schema_migration_preserve_originals(store,tmp_path):
     backup = tmp_path/"restored.db"
     backup.write_bytes(store.backup_bytes())
     assert ClinicStore(backup).query()[0]["uuid"]=="A"
+
+
+def test_opening_up_to_date_store_does_not_write_to_disk(store):
+    # 既に最新schema(version=4)のDBを開くだけでは、1バイトも書き込まない
+    # （PRAGMA user_version=Nは値が同じでも無条件に書き込むSQLiteの仕様のため、
+    # 既に最新なら実行しないことを固定する回帰テスト）。
+    store.import_comdesk(table())
+    before = hashlib.sha256(store.path.read_bytes()).hexdigest()
+    before_mtime = store.path.stat().st_mtime_ns
+    ClinicStore(store.path)
+    after = hashlib.sha256(store.path.read_bytes()).hexdigest()
+    after_mtime = store.path.stat().st_mtime_ns
+    assert after == before
+    assert after_mtime == before_mtime
 
 
 from pathlib import Path
