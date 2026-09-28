@@ -55,6 +55,30 @@ py -3.12 -m venv .venv
 
 旧DBを削除・初期化しません。初回2.1.0起動時に必要なMaps列・テーブルを後方互換で追加し、更新前DBバックアップを作成します。
 
+## Production DB（重要）
+
+**Production DBはリポジトリ内の`data/clinics.sqlite3`ではありません。** 可変データをGit管理すると、`git switch`/`restore`/`reset`/古いbranchへの移動などでDBが巻き戻る・削除される事故が起きるため、Production DBはリポジトリ外に置いて運用します。
+
+起動前に環境変数`CLINIC_DB_PATH`でリポジトリ外の実DBを指定してください（未設定時は`data/clinics.sqlite3`にフォールバックしますが、これは開発・テスト用の空/サンプルDBとして扱ってください。Production用データを置かないでください）。
+
+```powershell
+set CLINIC_DB_PATH=C:\path\to\external\clinics.sqlite3
+.\.venv\Scripts\python.exe scripts\launch_v2.py
+```
+
+```bash
+export CLINIC_DB_PATH=~/CrestixData/clinic-lead/clinics.sqlite3
+.venv/bin/python scripts/launch_v2.py
+```
+
+古いbranch（`data/clinics.sqlite3`がGit LFSで追跡されていた履歴）へ切り替えても、`CLINIC_DB_PATH`を設定していればProduction DBそのものには影響しません。
+
+`start_v2_windows.bat`をダブルクリックして起動する運用の場合は、事前に`CLINIC_DB_PATH`をWindowsのシステム環境変数として設定しておくか、ローカルの`start_v2_windows.bat`に`set CLINIC_DB_PATH=...`の行を追加してください（このファイル自体はGit管理下のため、パスを書き込む場合は各PCでの手元編集にとどめ、リポジトリへcommitしないでください）。
+
+### 複数PC運用について
+
+現在のSQLite構成では、**複数PCから同じProduction DBファイルへ同時に書き込む運用はできません**（Google Drive/Dropbox/OneDrive等での共有・同期を含みます）。PCごとに別々のコピーを持たせて同時更新することも禁止です。複数PCから同一データを継続的に更新する必要が生じた段階で、Central PostgreSQL / Supabase等への移行を検討してください（現時点では未実施・未計画です）。
+
 ## Google Maps Clinic Collector
 
 Google Maps公式HP取得にはChrome拡張

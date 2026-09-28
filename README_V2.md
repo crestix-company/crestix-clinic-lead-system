@@ -54,3 +54,7 @@ py -3.12 -m venv .venv
 ## DB更新
 
 旧DBを削除・初期化しません。初回2.1.0起動時に必要なMaps列・テーブルを後方互換で追加し、更新前DBバックアップを作成します。
+
+## Production DB（重要）
+
+**Production DBはリポジトリ内の`data/clinics.sqlite3`ではありません。** 詳細は`README.md`の「Production DB（重要）」を参照してください。起動前に環境変数`CLINIC_DB_PATH`でリポジトリ外の実DBを指定してください。
