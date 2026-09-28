@@ -17,6 +17,7 @@ class Filters:
     medical_types: list[str] = field(default_factory=list)
     departments: list[str] = field(default_factory=list)
     treatments: list[str] = field(default_factory=list)
+    sales_pairs: list[tuple[str, str]] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
     ad_min: int = 0
     production_companies: list[str] = field(default_factory=list)
@@ -54,6 +55,35 @@ def clauses(f, as_of=None):
     for values, col, label in [(f.departments,"departments_json","診療科"), (f.treatments,"treatments_json","治療カテゴリ")]:
         if values:
             add(label, f"EXISTS(SELECT 1 FROM json_each({col}) WHERE value IN ({','.join('?' for _ in values)}))", *values)
+    if f.sales_pairs:
+        from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
+        pair_sql, pair_args = [], []
+        sources = sorted(VALID_EVIDENCE_SOURCES)
+        for department, treatment in f.sales_pairs:
+            definition = treatment_definition(department, treatment)
+            if definition is None or definition.support_status == "MISSING":
+                continue
+            evidence_match = (
+                "json_extract(e.value,'$.category') IN (" +
+                ",".join("?" for _ in definition.current_categories) + ") AND " +
+                "EXISTS(SELECT 1 FROM json_each(treatments_json) tc "
+                "WHERE tc.value=json_extract(e.value,'$.category')) AND " +
+                "json_extract(e.value,'$.source') IN (" + ",".join("?" for _ in sources) + ")"
+            )
+            args = [department, *definition.current_categories, *sources]
+            if definition.match_mode == "KEYWORD":
+                evidence_match += " AND json_extract(e.value,'$.keyword') IN (" + ",".join(
+                    "?" for _ in definition.evidence_keywords
+                ) + ")"
+                args.extend(definition.evidence_keywords)
+            pair_sql.append(
+                "(EXISTS(SELECT 1 FROM json_each(departments_json) d WHERE d.value=?) "
+                "AND EXISTS(SELECT 1 FROM research_results r, "
+                "json_each(json_extract(r.result_json,'$.treatment_evidence')) e "
+                "WHERE r.clinic_id=clinics.id AND " + evidence_match + "))"
+            )
+            pair_args.extend(args)
+        add("標榜診療科×治療", "(" + " OR ".join(pair_sql) + ")" if pair_sql else "0", *pair_args)
     if f.signal_min:
         add(f"集客投資シグナル{f.signal_min}個以上", "signal_count>=?", f.signal_min)
     # 広告・集客施策の複数選択は同一項目内OR。施策数は別項目（AND）。

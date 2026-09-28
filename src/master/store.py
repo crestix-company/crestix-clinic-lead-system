@@ -405,10 +405,29 @@ class ClinicStore:
             return c.execute("SELECT count(*) FROM clinics WHERE "+sql,args).fetchone()[0]
 
     def query(self, filters=None, limit=100, offset=0, as_of=None):
-        sql,args = where(filters or Filters(active_only=False,hp_only=False),as_of)
+        filters = filters or Filters(active_only=False,hp_only=False)
+        sql,args = where(filters,as_of)
         with self.connect() as c:
             rows = c.execute("SELECT id FROM clinics WHERE "+sql+" ORDER BY signal_count DESC,id LIMIT ? OFFSET ?",(*args,min(100000,max(0,int(limit))),max(0,int(offset)))).fetchall()
-            return [self._get(c,r[0]) for r in rows]
+            records = [self._get(c,r[0]) for r in rows]
+        if filters.sales_pairs:
+            from src.master.sales_treatments import matching_pairs
+            for record in records:
+                record["matched_pairs"] = [
+                    {
+                        "department": match.department, "treatment": match.treatment,
+                        "matched_category": match.matched_category,
+                        "matched_keyword": match.matched_keyword,
+                        "evidence_source": match.evidence_source,
+                    }
+                    for match in matching_pairs(
+                        record.get("normalized_departments", ()),
+                        record.get("treatment_categories", ()),
+                        record.get("treatment_evidence", ()),
+                        filters.sales_pairs,
+                    )
+                ]
+        return records
 
     def funnel(self, filters, as_of=None):
         conditions,args = ["merged_into IS NULL", "merge_hold=0"],[]

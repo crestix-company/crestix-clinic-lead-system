@@ -143,7 +143,12 @@ def mstore(tmp_path):
     store.import_master([_clinic(i, n, d) for i, n, d, *_ in SPECS])
     ids = {r["clinic_name"]: r["id"] for r in store.query(Filters(**ALL), limit=100)}
     for i, n, d, t, s, comp in SPECS:
+        treatment_evidence = [
+            {"category": category, "keyword": category, "source": "HOME_MENU", "confidence": .98}
+            for category in t
+        ]
         store.save_research(ids[n], {"hp_status": "VERIFIED", "hp_url": "https://x.example/", "treatment_categories": t,
+                                     "treatment_evidence": treatment_evidence,
                                      "marketing_signals": [signal(x, "", "t", "t") for x in s], "hp_production_companies": comp})
     return store
 
@@ -198,7 +203,7 @@ def test_sales_ui_marketing_fields(tmp_path, monkeypatch, mstore):
     at = _app(tmp_path, monkeypatch, mstore.path)
     assert not at.exception
     labels = [getattr(e, "label", None) for e in at.main if getattr(e, "label", None)]
-    assert labels.index("治療カテゴリ") < labels.index("広告・集客施策") < labels.index("広告・集客施策数") < labels.index("HP制作会社") < labels.index("開業10年以内")
+    assert labels.index("診療科") < labels.index("広告・集客施策") < labels.index("広告・集客施策数") < labels.index("HP制作会社") < labels.index("開業10年以内")
     assert "アツい" not in labels
     assert [c.label for c in at.checkbox] == ["開業10年以内", "59歳以下 50%以上", "HPランク A/B"]
     ads = next(m for m in at.multiselect if m.label == "広告・集客施策")
@@ -216,7 +221,7 @@ def test_sales_ui_filters_combine_with_and(tmp_path, monkeypatch, mstore):
     next(m for m in at.selectbox if m.label == "医科・歯科")
     at.multiselect[0].set_value([]).run()  # 都道府県の既定（東京都）は架空住所と一致するのでそのままでもよい
     next(m for m in at.multiselect if m.label == "診療科").select("眼科").run()
-    next(m for m in at.multiselect if m.label == "治療カテゴリ").select("白内障").run()
+    next(m for m in at.multiselect if m.label == "眼科の治療").select("白内障").run()
     next(m for m in at.multiselect if m.label == "広告・集客施策").select("Instagram公式運用").select("LINE公式運用").run()
     next(s for s in at.selectbox if s.label == "広告・集客施策数").set_value(3).run()
     next(m for m in at.multiselect if m.label == "HP制作会社").select("HERO innovation").select("grits").run()

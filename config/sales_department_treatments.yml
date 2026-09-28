@@ -1,0 +1,571 @@
+version: 1
+departments:
+  消化器内科:
+    - treatment: 内視鏡
+      match_mode: CATEGORY
+      current_categories: [内視鏡]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 胃カメラ
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [胃カメラ]
+      support_status: ALIAS
+    - treatment: 大腸カメラ
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [大腸カメラ]
+      support_status: ALIAS
+    - treatment: 大腸内視鏡
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [大腸内視鏡]
+      support_status: ALIAS
+    - treatment: 大腸ポリープ切除
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [大腸ポリープ切除]
+      support_status: ALIAS
+    - treatment: 日帰りポリープ切除
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [日帰りポリープ切除]
+      support_status: ALIAS
+    - treatment: 鎮静剤 内視鏡
+      match_mode: KEYWORD
+      current_categories: [内視鏡]
+      evidence_keywords: [鎮静剤 内視鏡]
+      support_status: ALIAS
+  眼科:
+    - treatment: 白内障
+      match_mode: CATEGORY
+      current_categories: [白内障]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 白内障手術
+      match_mode: KEYWORD
+      current_categories: [白内障]
+      evidence_keywords: [白内障手術]
+      support_status: ALIAS
+    - treatment: 日帰り白内障手術
+      match_mode: KEYWORD
+      current_categories: [白内障]
+      evidence_keywords: [日帰り白内障手術]
+      support_status: ALIAS
+    - treatment: 多焦点眼内レンズ
+      match_mode: KEYWORD
+      current_categories: [白内障]
+      evidence_keywords: [多焦点眼内レンズ]
+      support_status: ALIAS
+    - treatment: 選定療養 白内障
+      match_mode: KEYWORD
+      current_categories: [白内障]
+      evidence_keywords: [選定療養 白内障]
+      support_status: ALIAS
+    - treatment: 緑内障
+      match_mode: CATEGORY
+      current_categories: [緑内障]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 緑内障手術
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [緑内障手術]
+      support_status: ALIAS
+    - treatment: 緑内障レーザー治療
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [緑内障レーザー治療]
+      support_status: ALIAS
+    - treatment: MIGS
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [MIGS]
+      support_status: ALIAS
+    - treatment: SLT
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [SLT]
+      support_status: ALIAS
+    - treatment: 低侵襲緑内障手術
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [低侵襲緑内障手術]
+      support_status: ALIAS
+    - treatment: iStent
+      match_mode: KEYWORD
+      current_categories: [緑内障]
+      evidence_keywords: [iStent]
+      support_status: ALIAS
+    - treatment: ICL
+      match_mode: CATEGORY
+      current_categories: [ICL]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: オルソケラトロジー
+      match_mode: CATEGORY
+      current_categories: [オルソケラトロジー]
+      evidence_keywords: []
+      support_status: EXACT
+  糖尿病内科:
+    - treatment: 糖尿病内科
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [糖尿病内科]
+      support_status: ALIAS
+    - treatment: 糖尿病専門医
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [糖尿病専門医]
+      support_status: ALIAS
+    - treatment: 糖尿病専門外来
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [糖尿病専門外来]
+      support_status: ALIAS
+    - treatment: 1型糖尿病
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [1型糖尿病]
+      support_status: ALIAS
+    - treatment: インスリン導入
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [インスリン導入]
+      support_status: ALIAS
+    - treatment: CGM
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [CGM]
+      support_status: ALIAS
+    - treatment: FreeStyleリブレ
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [FreeStyleリブレ]
+      support_status: ALIAS
+    - treatment: HbA1c当日検査
+      match_mode: KEYWORD
+      current_categories: [糖尿病]
+      evidence_keywords: [HbA1c当日検査]
+      support_status: ALIAS
+  泌尿器科:
+    - treatment: 尿路結石
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [尿路結石]
+      support_status: ALIAS
+    - treatment: ESWL
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [ESWL]
+      support_status: ALIAS
+    - treatment: 体外衝撃波結石破砕術
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [体外衝撃波結石破砕術]
+      support_status: ALIAS
+    - treatment: 前立腺肥大症手術
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [前立腺肥大症手術]
+      support_status: ALIAS
+    - treatment: 前立腺レーザー治療
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [前立腺レーザー治療]
+      support_status: ALIAS
+    - treatment: HoLEP
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [HoLEP]
+      support_status: ALIAS
+    - treatment: Rezūm
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [Rezūm]
+      support_status: ALIAS
+    - treatment: WAVE治療
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [WAVE治療]
+      support_status: ALIAS
+    - treatment: UroLift
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [UroLift]
+      support_status: ALIAS
+    - treatment: 過活動膀胱ボトックス
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [過活動膀胱ボトックス]
+      support_status: ALIAS
+    - treatment: 前立腺生検
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [前立腺生検]
+      support_status: ALIAS
+    - treatment: ED治療
+      match_mode: KEYWORD
+      current_categories: [ED, 泌尿器科]
+      evidence_keywords: [ED治療]
+      support_status: AMBIGUOUS
+    - treatment: 性病検査
+      match_mode: KEYWORD
+      current_categories: [泌尿器科]
+      evidence_keywords: [性病検査]
+      support_status: ALIAS
+  循環器内科:
+    - treatment: 下肢静脈瘤
+      match_mode: CATEGORY
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 日帰り手術
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [日帰り手術]
+      support_status: ALIAS
+    - treatment: 血管内焼灼術
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [血管内焼灼術]
+      support_status: ALIAS
+    - treatment: レーザー治療
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [レーザー治療]
+      support_status: ALIAS
+    - treatment: 高周波治療
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [高周波治療]
+      support_status: ALIAS
+    - treatment: グルー治療
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [グルー治療]
+      support_status: ALIAS
+    - treatment: ベナシール
+      match_mode: KEYWORD
+      current_categories: [下肢静脈瘤]
+      evidence_keywords: [ベナシール]
+      support_status: ALIAS
+    - treatment: 睡眠時無呼吸
+      match_mode: CATEGORY
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 睡眠時無呼吸症候群
+      match_mode: KEYWORD
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: [睡眠時無呼吸症候群]
+      support_status: ALIAS
+    - treatment: SAS外来
+      match_mode: KEYWORD
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: [SAS外来]
+      support_status: ALIAS
+    - treatment: CPAP
+      match_mode: KEYWORD
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: [CPAP]
+      support_status: ALIAS
+    - treatment: 睡眠外来
+      match_mode: KEYWORD
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: [睡眠外来]
+      support_status: ALIAS
+    - treatment: PSG検査
+      match_mode: KEYWORD
+      current_categories: [睡眠時無呼吸]
+      evidence_keywords: [PSG検査]
+      support_status: ALIAS
+  皮膚科:
+    - treatment: ニキビ
+      match_mode: KEYWORD
+      current_categories: [皮膚科]
+      evidence_keywords: [ニキビ]
+      support_status: ALIAS
+    - treatment: ニキビ跡
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: ニキビ跡治療
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [ニキビ跡治療]
+      support_status: ALIAS
+    - treatment: クレーター治療
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [クレーター治療]
+      support_status: ALIAS
+    - treatment: ポテンツァ
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [ポテンツァ]
+      support_status: ALIAS
+    - treatment: ダーマペン
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [ダーマペン]
+      support_status: ALIAS
+    - treatment: サブシジョン
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [サブシジョン]
+      support_status: ALIAS
+    - treatment: フラクショナルレーザー
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [フラクショナルレーザー]
+      support_status: ALIAS
+    - treatment: イソトレチノイン
+      match_mode: KEYWORD
+      current_categories: [ニキビ・ニキビ跡]
+      evidence_keywords: [イソトレチノイン]
+      support_status: ALIAS
+    - treatment: 日帰り手術
+      match_mode: CATEGORY
+      current_categories: [日帰り手術]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 粉瘤手術
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [粉瘤手術]
+      support_status: ALIAS
+    - treatment: くり抜き法
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [くり抜き法]
+      support_status: ALIAS
+    - treatment: 皮膚腫瘍切除
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [皮膚腫瘍切除]
+      support_status: ALIAS
+    - treatment: 脂肪腫切除
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [脂肪腫切除]
+      support_status: ALIAS
+    - treatment: 眼瞼下垂手術
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [眼瞼下垂手術]
+      support_status: ALIAS
+    - treatment: アトピー・乾癬
+      match_mode: CATEGORY
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: 生物学的製剤
+      match_mode: KEYWORD
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: [生物学的製剤]
+      support_status: ALIAS
+    - treatment: デュピクセント
+      match_mode: KEYWORD
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: [デュピクセント]
+      support_status: ALIAS
+    - treatment: ミチーガ
+      match_mode: KEYWORD
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: [ミチーガ]
+      support_status: ALIAS
+    - treatment: 乾癬治療
+      match_mode: KEYWORD
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: [乾癬治療]
+      support_status: ALIAS
+    - treatment: 紫外線療法
+      match_mode: KEYWORD
+      current_categories: [アトピー・乾癬]
+      evidence_keywords: [紫外線療法]
+      support_status: ALIAS
+  歯科:
+    - treatment: 矯正治療
+      match_mode: KEYWORD
+      current_categories: [矯正]
+      evidence_keywords: [矯正治療]
+      support_status: ALIAS
+    - treatment: 全顎矯正
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 成人矯正
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: マウスピース矯正
+      match_mode: KEYWORD
+      current_categories: [矯正]
+      evidence_keywords: [マウスピース矯正]
+      support_status: ALIAS
+    - treatment: インビザライン
+      match_mode: KEYWORD
+      current_categories: [矯正]
+      evidence_keywords: [インビザライン]
+      support_status: ALIAS
+    - treatment: 裏側矯正・舌側矯正
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: インプラント治療
+      match_mode: KEYWORD
+      current_categories: [インプラント]
+      evidence_keywords: [インプラント治療]
+      support_status: ALIAS
+    - treatment: インプラント
+      match_mode: CATEGORY
+      current_categories: [インプラント]
+      evidence_keywords: []
+      support_status: EXACT
+    - treatment: All-on-4
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 即時荷重インプラント
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 骨造成
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: GBR
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: サイナスリフト
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+  美容整形外科:
+    - treatment: 豊胸
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 脂肪吸引
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: フェイスリフト
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 輪郭形成
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 骨切り
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 鼻整形
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 眼瞼下垂手術
+      match_mode: KEYWORD
+      current_categories: [日帰り手術]
+      evidence_keywords: [眼瞼下垂手術]
+      support_status: ALIAS
+    - treatment: 二重全切開
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 脂肪注入
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 再生医療系施術
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 美容外科手術全般
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+  産婦人科:
+    - treatment: 不妊治療
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 体外受精
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 顕微授精
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 採卵
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 胚移植
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 卵子凍結
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 精子凍結
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 不妊検査パッケージ
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: NIPT
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 出生前診断
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 無痛分娩
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
+    - treatment: 自費の婦人科形成
+      match_mode: KEYWORD
+      current_categories: []
+      evidence_keywords: []
+      support_status: MISSING
