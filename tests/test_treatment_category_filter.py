@@ -286,15 +286,12 @@ def test_sales_ui_has_two_level_selection(tmp_path, monkeypatch):
     at = _sales_app(tmp_path, monkeypatch)
     assert not at.exception
     dep = next(m for m in at.multiselect if m.label == "診療科")
-    tr = next(m for m in at.multiselect if m.label == "治療カテゴリ")
     assert "眼科" in dep.options and "歯科" in dep.options
-    assert tr.options == list(read_config(ROOT / "config/treatment_keywords.yml"))
     dep.select("眼科").run()
-    tr = next(m for m in at.multiselect if m.label == "治療カテゴリ")
-    assert tr.options == ["白内障", "緑内障", "ICL", "オルソケラトロジー", "硝子体"]
+    tr = next(m for m in at.multiselect if m.label == "眼科の治療")
+    assert tr.options[:5] == ["白内障", "白内障手術", "日帰り白内障手術", "多焦点眼内レンズ", "選定療養 白内障"]
     next(m for m in at.multiselect if m.label == "診療科").select("歯科").run()
-    tr = next(m for m in at.multiselect if m.label == "治療カテゴリ")
-    assert tr.options == ["白内障", "緑内障", "ICL", "オルソケラトロジー", "硝子体", "矯正", "インプラント"]
+    assert next(m for m in at.multiselect if m.label == "歯科の治療").options[-1].startswith("サイナスリフト")
     assert not at.exception
     assert "Tavily" not in " ".join(str(e.value) for e in list(at.markdown) + list(at.caption))
 
@@ -302,12 +299,12 @@ def test_sales_ui_has_two_level_selection(tmp_path, monkeypatch):
 def test_sales_ui_keeps_selected_treatment_valid_after_department_change(tmp_path, monkeypatch):
     at = _sales_app(tmp_path, monkeypatch)
     next(m for m in at.multiselect if m.label == "診療科").select("眼科").run()
-    next(m for m in at.multiselect if m.label == "治療カテゴリ").select("硝子体").run()
+    next(m for m in at.multiselect if m.label == "眼科の治療").select("ICL").run()
     dep = next(m for m in at.multiselect if m.label == "診療科")
     dep.unselect("眼科").select("歯科").run()
     assert not at.exception
-    tr = next(m for m in at.multiselect if m.label == "治療カテゴリ")
-    assert tr.options == ["矯正", "インプラント"]
+    assert all(m.label != "眼科の治療" for m in at.multiselect)
+    assert next(m for m in at.multiselect if m.label == "歯科の治療").value == []
 
 
 # ---- 実医院52件回帰で見つかったケース（全カテゴリ共通の記事・告知除外、糖尿病表記揺れ） ----

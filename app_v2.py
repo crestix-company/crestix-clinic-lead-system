@@ -23,6 +23,7 @@ from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_jo
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
+from src.master.sales_treatments import sales_treatment_master
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -606,17 +607,35 @@ def simple_sales_ui(store):
         prefs = [r[0] for r in c.execute(
             "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
         )]
-    treatment_names = list(read_config(ROOT/"config/treatment_keywords.yml"))
-
     pref_default = ["東京都"] if "東京都" in prefs else []
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
     sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
     pref = st.multiselect("都道府県", prefs, default=pref_default, key="simple_sales_pref")
     deps = st.multiselect("診療科", DEPARTMENTS, key="simple_sales_departments")
-    dept_treatments = read_config(ROOT/"config/treatment_departments.yml")
-    treatment_options = list(dict.fromkeys(t for d in deps for t in dept_treatments.get(d, []))) if deps else treatment_names
-    treatments = st.multiselect("治療カテゴリ", treatment_options, key="simple_sales_treatments")
-    treatments = [t for t in treatments if t in treatment_options]
+    sales_master = sales_treatment_master()
+    previous_deps = set(st.session_state.get("simple_sales_previous_departments", ()))
+    removed_deps = previous_deps - set(deps)
+    for department in removed_deps:
+        st.session_state["simple_sales_pair_" + department] = []
+    st.session_state["simple_sales_previous_departments"] = list(deps)
+    sales_pairs = []
+    if deps:
+        st.caption("選択した標榜診療科ごとに、HPで確認済みの治療を絞り込みます。")
+    for department in deps:
+        items = sales_master.get(department, ())
+        if not items:
+            continue
+        st.markdown(f"**【{department}】**")
+        labels = [item.treatment for item in items]
+        selected = st.multiselect(
+            f"{department}の治療",
+            labels,
+            key="simple_sales_pair_" + department,
+            label_visibility="collapsed",
+            format_func=lambda label, by_label={item.treatment:item for item in items}:
+                label + ("（現Research未対応）" if by_label[label].support_status == "MISSING" else ""),
+        )
+        sales_pairs.extend((department, treatment) for treatment in selected)
     ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
     ad_min = st.selectbox("広告・集客施策数", ad_count_options(store), format_func=ad_count_label, key="simple_sales_ad_min")
     companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
@@ -636,7 +655,7 @@ def simple_sales_ui(store):
         age_min=.5 if age else None,
         prefectures=pref,
         departments=deps,
-        treatments=treatments,
+        sales_pairs=sales_pairs,
         ranks=["A","B"] if rank_ab else [],
         signals=ads,
         ad_min=ad_min,
