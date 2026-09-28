@@ -19,6 +19,7 @@ from src.enrichment.safe_web import WebError
 from src.normalizer.departments import DEPARTMENTS
 from src.master.store import ClinicStore
 from src.master.filters import Filters
+from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
@@ -85,9 +86,13 @@ def filters_ui(store,prefix="sales",defaults=None):
     with store.connect() as c:
         prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
     treatment_names = list(read_config(ROOT/"config/treatment_keywords.yml"))
-    cols = st.columns(3)
     def key(name):
         return prefix+"_"+name
+    scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
+    scope = st.selectbox("対象データ", scope_options,
+                          index=scope_options.index(defaults.scope) if defaults.scope in scope_options else 0,
+                          format_func=lambda s: SCOPE_LABELS[s], key=key("scope"))
+    cols = st.columns(3)
     with cols[0]:
         active = st.checkbox("現存クリニックのみ",value=defaults.active_only,key=key("active"))
         hp = st.checkbox("HP確認済みのみ",value=defaults.hp_only,key=key("hp"))
@@ -113,7 +118,8 @@ def filters_ui(store,prefix="sales",defaults=None):
     st.caption("条件同士はAND。診療科・治療カテゴリなど同じ項目の複数選択はORです。HP未発見は「存在しない」と断定した状態ではありません。")
     return Filters(active_only=active,hp_only=hp,recent_only=recent,age_min=age/100 if age is not None else None,
                    medical_types=medical,prefectures=pref,departments=deps,ranks=ranks,treatments=treatments,
-                   ad_min=ad_min,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword)
+                   ad_min=ad_min,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword,
+                   scope=scope)
 
 
 def show_funnel(store,filters):
@@ -603,6 +609,8 @@ def simple_sales_ui(store):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
 
+    scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
+    scope = st.selectbox("対象データ", scope_options, index=0, format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
     with store.connect() as c:
         prefs = [r[0] for r in c.execute(
             "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
@@ -661,6 +669,7 @@ def simple_sales_ui(store):
         ad_min=ad_min,
         production_companies=companies,
         keyword=keyword,
+        scope=scope,
     )
 
     count = store.count(filters)
@@ -782,7 +791,7 @@ def sales_ui(store):
     if saved_filters is None:
         with store.connect() as c:
             has_maps = c.execute("SELECT 1 FROM clinics WHERE maps_presence_status<>'' LIMIT 1").fetchone() is not None
-        defaults = Filters(maps_confirmed_only=has_maps)
+        defaults = Filters(maps_confirmed_only=has_maps, scope=SCOPE_LEGACY_PRE_NATIONAL)
     else:
         defaults = Filters(**saved_filters)
     filters = filters_ui(store,"sales",defaults)

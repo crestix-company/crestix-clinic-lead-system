@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
+from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
 AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
@@ -30,6 +31,7 @@ class Filters:
     maps_confirmed_only: bool = False
     maps_website_only: bool = False
     keyword: str = ""
+    scope: str = SCOPE_ALL
 
 
 def clauses(f, as_of=None):
@@ -37,6 +39,10 @@ def clauses(f, as_of=None):
     steps = []
     def add(label, sql, *args):
         steps.append((label, sql, list(args)))
+    if f.scope not in SCOPE_VALUES:
+        raise ValueError("対象データ（scope）の指定を確認してください。")
+    if f.scope == SCOPE_LEGACY_PRE_NATIONAL:
+        add("既存営業リスト（全国append前）", "first_seen_at<?", LEGACY_PRE_NATIONAL_CUTOFF)
     if f.active_only:
         add("現存クリニック（一覧基準日）", "active=1")
     if f.hp_only:
