@@ -1,0 +1,34 @@
+{
+  "a_to_d": 5,
+  "ab_to_cd": 192,
+  "artifact": {
+    "artifact_sha": "bb530750a9d22c81a11e89e58eb42dc5de7df6ba14cbed05a88306f6e86b9d68",
+    "dataset_fingerprint": "b8343a8a1a3bafa6724a9efd56cd2f5d8b847c5e20e6f7edceb53eb2ce8a44ff",
+    "model_version": "hp-content-2.2-hierarchical-logistic-experimental"
+  },
+  "cd_to_ab": 0,
+  "current_distribution": {
+    "A": 99,
+    "B": 200,
+    "C": 0,
+    "D": 0
+  },
+  "d_to_a": 0,
+  "eligible": 300,
+  "evaluated": 299,
+  "feature_missing": 1,
+  "network_calls": 0,
+  "one_step_difference": 153,
+  "same": 55,
+  "sample_limit": 500,
+  "shadow_distribution": {
+    "A": 14,
+    "B": 93,
+    "C": 141,
+    "D": 51
+  },
+  "skipped": 1,
+  "source_rows": 300,
+  "three_step_difference": 5,
+  "two_step_difference": 86
+}

@@ -28,3 +28,8 @@ node_modules/
 /data/clinics.sqlite3-wal
 /data/clinics.sqlite3-shm
 /data/clinics.sqlite3-journal
+
+# HP Rank Phase2.2 bounded Shadow Validation: 個別クリニック名/medical_keyを含む
+# 生CSVはGit管理しない（集計サマリのみコミットする）。
+/artifacts/hp_rank/shadow/bounded_phase22_shadow_predictions.csv
+/artifacts/hp_rank/shadow/bounded_phase22_review_queue.csv
