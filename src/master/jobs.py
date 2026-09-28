@@ -17,6 +17,15 @@ from src.enrichment.safe_web import _host_key
 PARALLEL_WORKERS = 2
 _WRITE_LOCK = Lock()
 
+ITEM_STATES = frozenset({"PENDING", "RUNNING", "DONE", "CANCELLED"})
+TERMINAL_ITEM_STATES = frozenset({"DONE", "CANCELLED"})
+ITEM_TRANSITIONS = frozenset({
+    ("PENDING", "RUNNING"),
+    ("PENDING", "CANCELLED"),
+    ("RUNNING", "DONE"),
+    ("RUNNING", "PENDING"),
+})
+
 
 def create_job(store,filters,kind="hp",limit=100,max_searches=100,force=False,max_pages=20):
     if kind not in {"hp","epark","media"}:
@@ -62,7 +71,7 @@ def pause_job(store,jid):
 
 
 def reset_job(store,jid):
-    """調査ジョブだけを履歴画面からリセットする。調査結果・HPページ・検索使用量は消さない。"""
+    """未処理itemを終了し、jobをリセットする。既存の調査結果等は消さない。"""
     with store.connect() as c:
         c.execute("BEGIN IMMEDIATE")
         row = c.execute("SELECT status FROM research_jobs WHERE id=?",(jid,)).fetchone()
@@ -70,7 +79,49 @@ def reset_job(store,jid):
             raise ValueError("調査履歴が見つかりません。")
         if row[0] == "RUNNING":
             raise ValueError("実行中の調査はリセットできません。先に一時停止し、停止完了を待ってください。")
+        c.execute("UPDATE research_job_items SET state='CANCELLED' WHERE job_id=? AND state='PENDING'",(jid,))
         c.execute("UPDATE research_jobs SET status='RESET',updated_at=? WHERE id=?",(now(),jid))
+
+
+def repair_reset_job_items(store,job_ids,dry_run=True):
+    """指定したRESET jobのPENDING itemだけをCANCELLEDへ移す。
+
+    dry-runも同じBEGIN IMMEDIATE transactionで対象を数え、必ずrollbackする。
+    job IDの暗黙選択を避けるため、空の指定は受け付けない。
+    """
+    ids = tuple(dict.fromkeys(str(jid).strip() for jid in job_ids if str(jid).strip()))
+    if not ids:
+        raise ValueError("repair対象のjob IDを明示してください。")
+    placeholders = ",".join("?" for _ in ids)
+    eligible_sql = f"""SELECT COUNT(*)
+        FROM research_job_items i
+        JOIN research_jobs j ON j.id=i.job_id
+        WHERE i.job_id IN ({placeholders})
+          AND j.status='RESET' AND i.state='PENDING'"""
+    with store.connect() as c:
+        c.execute("BEGIN" if dry_run else "BEGIN IMMEDIATE")
+        found = {r[0] for r in c.execute(
+            f"SELECT id FROM research_jobs WHERE id IN ({placeholders})", ids
+        )}
+        missing = [jid for jid in ids if jid not in found]
+        if missing:
+            raise ValueError("調査履歴が見つかりません: " + ", ".join(missing))
+        before = c.execute(eligible_sql,ids).fetchone()[0]
+        changed = 0
+        if not dry_run:
+            changed = c.execute(f"""UPDATE research_job_items
+                SET state='CANCELLED'
+                WHERE state='PENDING' AND job_id IN ({placeholders})
+                  AND EXISTS (
+                    SELECT 1 FROM research_jobs j
+                    WHERE j.id=research_job_items.job_id AND j.status='RESET'
+                  )""",ids).rowcount
+        after = c.execute(eligible_sql,ids).fetchone()[0]
+        result = {"job_ids":list(ids),"dry_run":bool(dry_run),"before":before,
+                  "changed":changed,"after":after}
+        if dry_run:
+            c.rollback()
+        return result
 
 
 def job_limit(store,jid,limit):
@@ -90,12 +141,15 @@ def run_job(store,jid,provider,fetcher=None):
 def _run_locked(store,jid,provider,fetcher):
     with store.connect() as c:
         c.execute("BEGIN IMMEDIATE")
-        job = dict(c.execute("SELECT * FROM research_jobs WHERE id=?",(jid,)).fetchone())
-        if job["status"]=="COMPLETED":
+        row = c.execute("SELECT * FROM research_jobs WHERE id=?",(jid,)).fetchone()
+        if not row:
+            raise ValueError("調査履歴が見つかりません。")
+        job = dict(row)
+        if job["status"] in {"COMPLETED","RESET"}:
             return
         # ロック取得できた時点で旧プロセスの実行はない。未完了行だけを回復。
-        c.execute("UPDATE research_job_items SET state='PENDING' WHERE state='RUNNING'")
-        c.execute("UPDATE research_jobs SET status='PAUSED' WHERE status='RUNNING'")
+        c.execute("UPDATE research_job_items SET state='PENDING' WHERE job_id=? AND state='RUNNING'",(jid,))
+        c.execute("UPDATE research_jobs SET status='PAUSED' WHERE id=? AND status='RUNNING'",(jid,))
         c.execute("UPDATE research_jobs SET status='RUNNING',updated_at=? WHERE id=?",(now(),jid))
     options = json.loads(job["options_json"])
     def stopped():
