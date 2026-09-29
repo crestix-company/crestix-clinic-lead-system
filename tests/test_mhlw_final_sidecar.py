@@ -98,8 +98,9 @@ def test_official_and_crestix_filters_return_unique_final_matched_ids_only():
 def test_missing_sidecar_keeps_legacy_filters_and_gives_clear_mhlw_error(monkeypatch, tmp_path):
     missing_path = tmp_path / "missing.sqlite3"
     monkeypatch.setattr(store_module, "MHLW_SIDECAR_PATH", missing_path)
-    store = ClinicStore(str(DB))
-    assert store.count(Filters(active_only=False, hp_only=False)) == 13970
+    # CIにはProduction DBを置かない。空の一時DBでも既存filterが例外なく動くことを確認する。
+    store = ClinicStore(str(tmp_path / "clinics.sqlite3"))
+    assert store.count(Filters(active_only=False, hp_only=False)) == 0
     with pytest.raises(MhlwSidecarUnavailableError, match="sidecar"):
         store.count(Filters(active_only=False, hp_only=False, mhlw_official_departments=["内科"]))
 
