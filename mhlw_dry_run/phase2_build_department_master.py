@@ -5,19 +5,20 @@ Does NOT touch ./data/clinics.sqlite3. Pure local file -> local file.
 """
 import csv
 import sys
+from paths import BASE, source
 
 csv.field_size_limit(sys.maxsize)
 
 FACILITY_FILES = [
-    ("医科", "/Users/maekawahiroyuki/Downloads/02-1_clinic_facility_info_20260601.csv", "02-1_clinic_facility_info_20260601.csv"),
-    ("歯科", "/Users/maekawahiroyuki/Downloads/03-1_dental_facility_info_20260601.csv", "03-1_dental_facility_info_20260601.csv"),
+    ("医科", source("02-1_clinic_facility_info_20260601.csv"), "02-1_clinic_facility_info_20260601.csv"),
+    ("歯科", source("03-1_dental_facility_info_20260601.csv"), "03-1_dental_facility_info_20260601.csv"),
 ]
 SPECIALITY_FILES = [
-    ("医科", "/Users/maekawahiroyuki/Downloads/02-2_clinic_speciality_hours_20260601.csv", "02-2_clinic_speciality_hours_20260601.csv"),
-    ("歯科", "/Users/maekawahiroyuki/Downloads/03-2_dental_speciality_hours_20260601.csv", "03-2_dental_speciality_hours_20260601.csv"),
+    ("医科", source("02-2_clinic_speciality_hours_20260601.csv"), "02-2_clinic_speciality_hours_20260601.csv"),
+    ("歯科", source("03-2_dental_speciality_hours_20260601.csv"), "03-2_dental_speciality_hours_20260601.csv"),
 ]
 SOURCE_DATE = "2026-06-01"  # from filename suffix 20260601
-OUT_PATH = "/Users/maekawahiroyuki/Desktop/clinic-list-filter-complete/mhlw_dry_run/mhlw_department_master.csv"
+OUT_PATH = BASE / "mhlw_department_master.csv"
 
 facility_index = {}  # (facility_type, id) -> dict
 for facility_type, path, fname in FACILITY_FILES:

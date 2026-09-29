@@ -6,3 +6,7 @@
 *.csv
 *.json
 *.log
+
+# 再現可能なfinal buildに必要な小さな監査決定・fingerprint設定だけはGit管理する。
+!final_hp_promotion_decisions.csv
+!mhlw_source_manifest.json

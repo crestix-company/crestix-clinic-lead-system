@@ -24,12 +24,13 @@ csv.field_size_limit(sys.maxsize)
 from src.normalizer.clinic_name import normalize_clinic_name  # noqa: E402  (Rule A用・既存関数)
 from src.normalizer.address import normalize_address  # noqa: E402
 from mhlw_dry_run.normalize_v2 import light_normalize_name, comparison_name, base_address  # noqa: E402
+from mhlw_dry_run.paths import source  # noqa: E402
 
 BASE = Path(__file__).resolve().parent
 DB_PATH = Path(__file__).resolve().parents[1] / "data" / "clinics.sqlite3"
 FACILITY_FILES = [
-    ("医科", "/Users/maekawahiroyuki/Downloads/02-1_clinic_facility_info_20260601.csv"),
-    ("歯科", "/Users/maekawahiroyuki/Downloads/03-1_dental_facility_info_20260601.csv"),
+    ("医科", source("02-1_clinic_facility_info_20260601.csv")),
+    ("歯科", source("03-1_dental_facility_info_20260601.csv")),
 ]
 
 OUT_CSV = BASE / "phase4_join_v2.csv"

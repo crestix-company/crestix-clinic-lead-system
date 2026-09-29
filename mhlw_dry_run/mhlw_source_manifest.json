@@ -1,0 +1,16 @@
+{
+  "manifest_schema_version": 1,
+  "source_date": "2026-06-01",
+  "files": [
+    {"filename": "02-1_clinic_facility_info_20260601.csv", "size": 42589547, "sha256": "a9006fb926ad3e83ff75ff2312ddf234846c733a2cedf8cfe630fb825e5141d9"},
+    {"filename": "02-2_clinic_speciality_hours_20260601.csv", "size": 128912478, "sha256": "32c1ee4e17cfcafb80bbf98b90aa77492f3b647d8939218fcf78cca78102d221"},
+    {"filename": "03-1_dental_facility_info_20260601.csv", "size": 26411573, "sha256": "ae28015ac3d57c9eb3ab26bb5589ecf2ac2766b14bd8873c8da9200c973a672a"},
+    {"filename": "03-2_dental_speciality_hours_20260601.csv", "size": 82925113, "sha256": "cc577dda1057d89fc0e722d9d684ccbf3c3f800cd056a3f059a816a9ea620483"}
+  ],
+  "clinic_master": {
+    "path": "data/clinics.sqlite3",
+    "count": 13970,
+    "size": 312852480,
+    "sha256": "e29fbdc1e5ce71dfe7ffd3eea47663dcc70372cc62b93ff63c7679e5c6aea668"
+  }
+}

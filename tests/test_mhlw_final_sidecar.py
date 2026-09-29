@@ -124,8 +124,13 @@ def test_legacy_department_and_treatment_filters_do_not_use_final_sidecar():
 
 
 @missing
-def test_final_audit_has_all_81_candidates_once():
-    rows = list(csv.DictReader(open(ROOT / "mhlw_dry_run" / "final_hp_promotion_audit.csv", encoding="utf-8")))
-    assert len(rows) == 81
-    assert len({r["clinic_id"] for r in rows}) == 81
-    assert sum(r["promotion_allowed"] == "true" for r in rows) == 55
+def test_versioned_promotion_decisions_have_expected_audited_counts():
+    path = ROOT / "mhlw_dry_run" / "final_hp_promotion_decisions.csv"
+    rows = list(csv.DictReader(path.open(encoding="utf-8", newline="")))
+    promoted = [row for row in rows if row["promotion_allowed"] == "true"]
+    assert len(rows) == 168
+    assert len({row["clinic_id"] for row in rows}) == 168
+    assert len({(row["clinic_id"], row["mhlw_facility_id"]) for row in rows}) == 168
+    assert len(promoted) == 55
+    assert sum(row["final_identity_status"] == "HP_IDENTITY_CONFIRMED" for row in promoted) == 3
+    assert sum(row["final_identity_status"] == "HP_RENAME_CONFIRMED" for row in promoted) == 52

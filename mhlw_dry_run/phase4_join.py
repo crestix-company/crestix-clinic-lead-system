@@ -15,20 +15,22 @@ import json
 import sqlite3
 import sys
 from collections import defaultdict
+from pathlib import Path
 
-sys.path.insert(0, "/Users/maekawahiroyuki/Desktop/clinic-list-filter-complete")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 csv.field_size_limit(sys.maxsize)
 
 from src.normalizer.clinic_name import normalize_clinic_name
 from src.normalizer.address import normalize_address
+from mhlw_dry_run.paths import BASE, ROOT, source
 
-DB_PATH = "/Users/maekawahiroyuki/Desktop/clinic-list-filter-complete/data/clinics.sqlite3"
+DB_PATH = ROOT / "data" / "clinics.sqlite3"
 FACILITY_FILES = [
-    ("医科", "/Users/maekawahiroyuki/Downloads/02-1_clinic_facility_info_20260601.csv"),
-    ("歯科", "/Users/maekawahiroyuki/Downloads/03-1_dental_facility_info_20260601.csv"),
+    ("医科", source("02-1_clinic_facility_info_20260601.csv")),
+    ("歯科", source("03-1_dental_facility_info_20260601.csv")),
 ]
-OUT_CSV = "/Users/maekawahiroyuki/Desktop/clinic-list-filter-complete/mhlw_dry_run/legacy_mhlw_join.csv"
-OUT_JSON = "/Users/maekawahiroyuki/Desktop/clinic-list-filter-complete/mhlw_dry_run/join_summary.json"
+OUT_CSV = BASE / "legacy_mhlw_join.csv"
+OUT_JSON = BASE / "join_summary.json"
 
 # ---- 1. Build MHLW facility indices ----
 mhlw_facilities = []  # (mhlw_facility_id, facility_type, clinic_name, address, name_norm, address_norm)

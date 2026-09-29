@@ -12,11 +12,15 @@
 
 | 区分 | 内容 |
 |---|---|
-| **Git管理する（ソース）** | `*.py`（全スクリプト）、`crestix_department_mapping.py`（mapping定義）、`README.md`、`.gitignore` |
+| **Git管理する（ソース）** | `*.py`（全スクリプト）、`crestix_department_mapping.py`（mapping定義）、`README.md`、`.gitignore`、`mhlw_source_manifest.json`、`final_hp_promotion_decisions.csv` |
 | **Git管理しない（生成物・`.gitignore`で除外済み）** | `*.sqlite3`（sidecar DB）、`*.csv`（Phase成果物）、`*.json`（サマリー）、`*.log` |
 
-生成物はすべて下記コマンドで**決定的に**（同じ入力からは毎回バイト同一に）再生成できる。
+生成物は下記コマンドで**決定的に**（論理内容が同一になるように）再生成できる。
 巨大なMHLW元CSV（4ファイル、合計約280MB）もGit管理しない（`~/Downloads/`に別途配置する運用）。
+
+`final_hp_promotion_decisions.csv` はRule C 168件の監査済み判断だけを保持するversioned decision fileで、
+HP本文・住所・電話番号・URL・raw HTML等は含まない。`clinic_id` と `mhlw_facility_id` の組で判断を固定し、
+昇格は55件（`HP_IDENTITY_CONFIRMED` 3件、`HP_RENAME_CONFIRMED` 52件）だけである。
 
 ## 正式採用値（2026-09-29）
 
@@ -46,6 +50,8 @@ UIでは「ナビイ正式診療科」と「Crestix営業カテゴリ」を別fi
 
 厚労省 医療情報ネット オープンデータより、以下4ファイルを固定パスに配置する。
 同名ZIPの重複ファイル（`... 2.csv`等）は使用しない。
+配置先は既定で `~/Downloads`。別の場所を使う場合は全Phaseで共通の
+`MHLW_SOURCE_DIR=/path/to/csv-directory` を指定し、ソースを書き換えない。
 
 ```
 ~/Downloads/02-1_clinic_facility_info_20260601.csv       # 一般診療所 施設票
@@ -54,8 +60,9 @@ UIでは「ナビイ正式診療科」と「Crestix営業カテゴリ」を別fi
 ~/Downloads/03-2_dental_speciality_hours_20260601.csv    # 歯科診療所 診療科・診療時間票
 ```
 
-別PCで再現する場合は、各スクリプト冒頭の `FACILITY_FILES`/`SPECIALITY_FILES` のパスを
-実際の配置場所に合わせて書き換える（現状は上記絶対パスをハードコードしている）。
+`mhlw_source_manifest.json` に4ファイルのファイル名・size・SHA-256とClinic Master snapshotを固定している。
+`finalize_mhlw_sidecar.py` は生成前にfingerprintを検証し、1件でも異なる場合は
+`MHLW source fingerprint mismatch` でfail closedする。新しいMHLW versionを使う場合はJOIN監査からやり直す。
 
 ## 生成手順（依存順）
 
@@ -74,14 +81,26 @@ python3 mhlw_dry_run/phase3_build_crestix_mapping.py
 python3 mhlw_dry_run/phase4_join.py
 #   -> legacy_mhlw_join.csv, join_summary.json
 
-# 4. (任意・分析用) Crestix対象9科ごとの件数集計・HP調査候補抽出
-python3 mhlw_dry_run/phase5_6.py
-python3 mhlw_dry_run/phase6_5_hp_url_audit.py
+# 4. 安全な追加ruleを適用したPhase 4 v2を生成する（Rule Cはこの時点では昇格しない）
+python3 mhlw_dry_run/phase4_join_v2.py
+#   -> phase4_join_v2.csv
 
-# 5. 最終監査結果から正式採用sidecarを構築する
+# 5. Git管理された監査判断から正式採用sidecarを構築する
 python3 mhlw_dry_run/finalize_mhlw_sidecar.py
 #   -> clinic_mhlw_departments_final.sqlite3
 ```
+
+Production sidecar生成に必要なのは次の5点である。
+
+1. mainのコード
+2. manifestと一致するMHLW CSV 4点
+3. manifestと一致するProduction Clinic Master（READ ONLY）
+4. `mhlw_source_manifest.json`
+5. `final_hp_promotion_decisions.csv`
+
+`rule_c_hp_identity_audit.csv`、`final_hp_promotion_audit.csv`、公式HPへの再アクセスは不要であり、
+final build中のHTTP requestは0件である。decision fileは2026-06-01版MHLW sourceと、manifestに記録した
+Clinic Master snapshotに対する監査済み判断であり、別version/snapshotへ流用してはならない。
 
 旧 `clinic_mhlw_departments.sqlite3` はrollback用に残しており、即時削除しない。
 
@@ -94,7 +113,7 @@ python3 mhlw_dry_run/finalize_mhlw_sidecar.py
 ## sidecarのデプロイ注意点
 
 `*.sqlite3` は `.gitignore` 対象なので、コードをpushしただけでは別PCやProductionにfinal sidecarは存在しない。
-現構成では、固定した入力CSV・監査成果物からデプロイ工程で再生成し、件数・integrity・SHA等を検証してから
+現構成では、fingerprintを固定した入力CSV・versioned decision fileからデプロイ工程で再生成し、件数・integrity・論理内容を検証してから
 配置する **A: デプロイ時再生成** が最も追跡しやすく安全な第一候補。入力データの安全な配布が難しい場合は
 **B: 署名・checksum付きrelease artifact配布** が次候補。**C: Git LFS** はリポジトリ更新とDB配布が密結合し、
 誤更新や容量管理の負担が増えるため現時点では推奨しない。方式の最終決定・デプロイ実装は今回の範囲外。
@@ -176,7 +195,7 @@ python3 mhlw_dry_run/phase4_join_v2.py
 MHLW filterが使えない。ローカル検証止まりの現段階では各自が上記手順で生成すればよいが、
 複数PC・Production配布時は以下のいずれかを推奨する。
 
-1. 固定入力と監査成果物を用意し、デプロイ工程で `finalize_mhlw_sidecar.py` を実行して再生成する。
+1. fingerprint一致済み固定入力とGit管理されたdecision fileを用意し、デプロイ工程で `finalize_mhlw_sidecar.py` を実行して再生成する。
 2. 再生成入力を安全に配布できない場合は、checksum付きrelease artifactとして
    `clinic_mhlw_departments_final.sqlite3` をProduction DBとは別チャネルで配布する。
 3. Git LFSはDB更新とコード更新が密結合するため、現時点では優先しない。
