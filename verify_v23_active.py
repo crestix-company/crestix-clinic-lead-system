@@ -28,7 +28,8 @@ for label, path, expected in [
 
 try:
     from src.scoring import research_scoring as r
-    cfg = r.read_config(r.ROOT / "config/treatment_keywords.yml")
+    from src.enrichment.treatment_taxonomy import treatment_keyword_view
+    cfg = treatment_keyword_view()
 
     diabetes = r._category_term(
         "糖尿病",

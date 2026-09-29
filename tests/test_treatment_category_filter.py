@@ -9,6 +9,7 @@ from src.master.samples import sample_records
 from src.master.store import ClinicStore
 from src.normalizer.departments import normalize_departments, DEPARTMENTS
 from src.scoring.research_scoring import treatments
+from src.enrichment.treatment_taxonomy import treatment_keyword_view, department_category_view
 
 ALL = dict(active_only=False, hp_only=False)
 
@@ -49,8 +50,8 @@ def test_ambiguous_abbreviations_are_not_guessed(raw):
 
 # ---- 診療科 → 治療カテゴリ 対応表 ---------------------------------------
 def test_department_treatment_mapping_uses_known_names():
-    mapping = read_config(ROOT / "config/treatment_departments.yml")
-    keywords = read_config(ROOT / "config/treatment_keywords.yml")
+    mapping = department_category_view()
+    keywords = treatment_keyword_view()
     assert mapping["眼科"] == ["白内障", "緑内障", "ICL", "オルソケラトロジー", "硝子体"]
     assert mapping["皮膚科"] == ["ニキビ・ニキビ跡", "日帰り手術", "アトピー・乾癬"]
     assert mapping["歯科"] == ["矯正", "インプラント"]
@@ -60,7 +61,7 @@ def test_department_treatment_mapping_uses_known_names():
 
 
 def test_existing_keywords_are_kept():
-    kw = read_config(ROOT / "config/treatment_keywords.yml")
+    kw = treatment_keyword_view()
     for k in ["胃内視鏡", "上部消化管内視鏡", "下部消化管内視鏡", "消化管内視鏡", "消化器内視鏡", "内視鏡", "胃カメラ", "大腸カメラ",
               "大腸内視鏡", "大腸ポリープ切除", "日帰りポリープ切除", "鎮静剤 内視鏡", "ポリープ切除"]:
         assert k in kw["内視鏡"]
@@ -122,18 +123,17 @@ def test_diabetes_incidental_care_is_excluded():
     assert "糖尿病" not in treatments([page], record={"clinic_name": "一般内科クリニック", "departments": "内科"})["treatment_categories"]
 
 
-def test_diabetes_positive_by_keyword_and_by_department():
+def test_diabetes_positive_by_explicit_menu_evidence_only():
     assert "糖尿病" in cats("テストクリニック", "糖尿病内科")
     assert "糖尿病" in cats("テストクリニック", "糖尿病専門外来")
     assert "糖尿病" in cats("テストクリニック", "CGM")
     by_dept = treatments([menu_page("テストクリニック", "風邪")], record={"clinic_name": "テストクリニック", "departments": "内 糖内"})
-    assert "糖尿病" in by_dept["treatment_categories"]
-    assert any(e["source"] == "DEPARTMENT" for e in by_dept["treatment_evidence"])
+    assert "糖尿病" not in by_dept["treatment_categories"]
 
 
-def test_diabetes_clinic_name_is_strong_evidence():
-    assert "糖尿病" in cats("小川内科・糖尿病クリニック", "風邪", record={"departments": "内"})
-    assert "糖尿病" in cats("浦上小児内分泌・糖尿病クリニック", "診療案内")
+def test_diabetes_clinic_name_is_not_treatment_evidence():
+    assert "糖尿病" not in cats("小川内科・糖尿病クリニック", "風邪", record={"departments": "内"})
+    assert "糖尿病" not in cats("浦上小児内分泌・糖尿病クリニック", "診療案内")
     assert "糖尿病" not in cats("一般内科クリニック", "高血圧・脂質異常症・糖尿病などに対応", record={"departments": "内"})
     assert "糖尿病" not in cats("糖尿病網膜症眼科", "白内障")
 
@@ -183,7 +183,7 @@ def test_dental_orthodontics_and_implant_positive():
     assert "矯正" in cats("テスト歯科", "矯正治療", record=DENTAL)
     for label in ["インプラント", "インプラント治療", "口腔インプラント"]:
         assert "インプラント" in cats("テスト歯科", label, record=DENTAL), label
-    assert "インプラント" in cats("麻布インプラント歯科", "診療案内", record=DENTAL)
+    assert "インプラント" not in cats("麻布インプラント歯科", "診療案内", record=DENTAL)
 
 
 def test_dental_negative_cases():
@@ -345,7 +345,7 @@ def test_ended_or_suspended_treatment_is_not_positive():
 def test_diabetes_department_variants_and_outpatient_are_positive():
     for label in ["糖尿病・内分泌内科", "糖尿病・代謝内科", "糖尿病代謝内科", "糖尿病外来", "糖尿病・内分泌内科についてを見る"]:
         assert "糖尿病" in cats("テストクリニック", label), label
-    assert "糖尿病" in cats("○○糖尿病クリニック", "診療案内")
+    assert "糖尿病" not in cats("○○糖尿病クリニック", "診療案内")
 
 
 def test_diabetes_general_page_without_specialty_is_false():

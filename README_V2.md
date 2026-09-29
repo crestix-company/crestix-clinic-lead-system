@@ -58,3 +58,11 @@ py -3.12 -m venv .venv
 ## Production DB（重要）
 
 **Production DBはリポジトリ内の`data/clinics.sqlite3`ではありません。** 詳細は`README.md`の「Production DB（重要）」を参照してください。起動前に環境変数`CLINIC_DB_PATH`でリポジトリ外の実DBを指定してください。
+
+## Phase 7 治療カテゴリResearch方針
+
+治療カテゴリの正式な定義は[`config/treatment_taxonomy.yml`](config/treatment_taxonomy.yml)（`7A-v2`）に集約しています。ナビイ診療科は診療科の正データ、Crestix営業カテゴリは営業上の分類、Treatment Categoryは公式医院HPで提供を確認する別データです。疾患・専門領域は`clinical_focus`として分け、診療科や医院名から治療の提供を推測しません。`7A-v1`は互換snapshotとして残し、Phase 7-B Research対象は`ACTIVE`だけです。
+
+`CONFIRMED`には公式HP上で医院自身が提供を明示した根拠を必要とします。否定・紹介・一般解説・文脈不明は確定せず、`REVIEW`または`NOT_CONFIRMED`とします。`NOT_CONFIRMED`は「HPから確認できなかった」という意味で、未提供を意味しません。ソース判定には既存`is_official_candidate()`を使います。Evidenceの保存schemaもtaxonomy内に定義していますが、Phase 7-AではProduction DBへ書き込みません。
+
+Phase 7-BはACTIVE 43 Treatment Categoryごとに陽性候補2件・陰性候補4件を最低限含めて層化し、clinic ID重複を除いた約270医院（許容範囲200〜300）を対象とする設計です。HP本人確認状態、Maps公式HP URL、ナビイ診療科一致、複数診療科、大規模・小規模HPを混在させ、約30医院を人手監査します。既存カテゴリ有無はあくまでサンプリング層で、正解ラベルにはしません。precision、REVIEW/NOT_CONFIRMED率、alias別ヒット、誤検知と否定文誤検知、取得成功率、処理時間、HTTP request数を計測します。現時点でHTTPアクセス・Phase 7-B Researchは未開始です。Phase 7-B結果の確認前にPhase 7-Cへ進みません。

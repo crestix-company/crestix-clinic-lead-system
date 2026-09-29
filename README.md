@@ -96,3 +96,9 @@ Current version: v5.7.0
 複数PC運用は
 `extensions/google-maps-clinic-collector/MULTI_PC_SETUP.md`
 を参照してください。
+
+## Phase 7 治療カテゴリResearch
+
+Phase 7 taxonomy/rules are defined in [`config/treatment_taxonomy.yml`](config/treatment_taxonomy.yml) (`7A-v2`). ナビイ正式診療科、Crestix営業カテゴリ、公式HPで実提供を確認するTreatment Category、疾患・専門領域を表す`clinical_focus`は独立したデータです。DEPARTMENT/DISEASEはTreatmentに含めず、Phase 7-Bは`status: ACTIVE`のみを対象とします。v1定義は互換用snapshotとして保持し、v2との差分を`taxonomy_change_log`に記録しています。`CONFIRMED`には公式医院HP上の医院自身による提供根拠を必要とし、否定・紹介・一般医学解説・文脈不明は確定しません。`NOT_CONFIRMED`はHP上で確認できなかったという意味であり、未提供を意味しません。公式HP判定は既存`is_official_candidate()`を再利用します。
+
+Phase 7-A.2ではACTIVE 43カテゴリを確定しました。Phase 7-BはACTIVEカテゴリごとに陽性候補2件・陰性候補4件を最低限含め、9営業カテゴリ等で層化した約270医院（許容範囲200〜300、人手監査約30医院）を対象とする設計です。clinic ID重複を除きながら各カテゴリの候補枠を満たし、precision、REVIEW/NOT_CONFIRMED率、alias別ヒット、誤検知・否定文誤検知、取得成功率、処理時間、HTTP request数を測ります。候補抽出用の既存HP evidence/category有無はサンプリング層であり、Research判定ではありません。Phase 7-Bの結果確認前にPhase 7-C全件Researchは開始しません。現在Phase 7-BのHTTPアクセスは未実施です。

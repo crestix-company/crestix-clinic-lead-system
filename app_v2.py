@@ -25,6 +25,7 @@ from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
 from src.master.sales_treatments import sales_treatment_master
+from src.enrichment.treatment_taxonomy import treatment_category_names
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -83,7 +84,7 @@ def filters_ui(store,prefix="sales",defaults=None):
     defaults = defaults or Filters()
     with store.connect() as c:
         prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
-    treatment_names = list(read_config(ROOT/"config/treatment_keywords.yml"))
+    treatment_names = treatment_category_names()
     def key(name):
         return prefix+"_"+name
     scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
@@ -235,7 +236,7 @@ def manual_form(store,r):
         options = list(enums[field]); old = r.get(field)
         value = st.selectbox("修正後の値",options,index=options.index(old) if old in options else 0,format_func=lambda v:enums[field][v],key=key)
     elif field in {"treatment_categories","marketing_signals"}:
-        options = list(read_config(ROOT/"config/treatment_keywords.yml")) if field=="treatment_categories" else [s for s in SIGNAL_NAMES if s not in {"Googleスポンサー広告確認済み","EPARK課金済み確認"}]
+        options = treatment_category_names() if field=="treatment_categories" else [s for s in SIGNAL_NAMES if s not in {"Googleスポンサー広告確認済み","EPARK課金済み確認"}]
         selected = r.get(field,[]) if field=="treatment_categories" else [s["name"] for s in r.get(field,[])]
         value = st.multiselect("確認できた項目",options,default=[s for s in selected if s in options],key=key)
         if field=="marketing_signals":

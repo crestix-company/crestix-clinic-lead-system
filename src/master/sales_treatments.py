@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
 
-from src.utils.config import ROOT, read_config
+from src.enrichment.treatment_taxonomy import load_taxonomy
 
 
 VALID_EVIDENCE_SOURCES = frozenset({"HOME_MENU", "INTRO_MENU", "DEDICATED_PAGE"})
@@ -33,8 +33,7 @@ class PairMatch:
 
 @lru_cache(maxsize=1)
 def sales_treatment_master():
-    raw = read_config(ROOT / "config/sales_department_treatments.yml")
-    departments = raw.get("departments")
+    departments = load_taxonomy().get("crestix_sales_categories")
     if not isinstance(departments, dict):
         raise ValueError("営業治療マスタのdepartmentsを確認してください。")
     result = {}

@@ -5,7 +5,7 @@ MHLW元CSVやsidecar DBが手元になくても import してテストできる
 (tests/test_mhlw_crestix_mapping.py 参照)。
 
 Crestix canonical department vocabulary is taken from the EXISTING production config
-config/sales_department_treatments.yml (top-level keys), NOT invented fresh, to stay
+config/treatment_taxonomy.yml (crestix_sales_categories keys), NOT invented fresh, to stay
 consistent with the running system:
   消化器内科, 眼科, 糖尿病内科, 泌尿器科, 循環器内科, 皮膚科, 歯科, 美容整形外科, 産婦人科
 

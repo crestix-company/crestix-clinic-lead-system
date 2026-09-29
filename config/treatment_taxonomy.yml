@@ -1,0 +1,1576 @@
+taxonomy_version: 7A-v2
+previous_taxonomy_version: 7A-v1
+legacy_taxonomy_status: DEPRECATED_COMPATIBILITY_SNAPSHOT
+taxonomy_change_log:
+- Split disease/department labels from treatment, examination, procedure, and surgery categories.
+- Added a separate clinical_focus axis for disease and specialty-focus signals.
+- Restricted Phase 7-B eligibility to status ACTIVE and sales_filter_value HIGH or MEDIUM.
+- Preserved the complete 7A-v1 19-category definition and 112 sales options as compatibility history.
+source_of_truth_note: Canonical Phase 7 treatment taxonomy. Department context never
+  implies treatment delivery.
+statuses:
+  CONFIRMED: Official clinic website clearly says this clinic provides the treatment.
+  REVIEW: Mention exists but provider/context is ambiguous.
+  NOT_CONFIRMED: No qualifying evidence found; does not mean unavailable.
+evidence_schema:
+  required_fields:
+  - clinic_id
+  - treatment_category
+  - status
+  - evidence_text
+  - evidence_url
+  - evidence_page_title
+  - evidence_source_type
+  - checked_at
+  - rule_version
+rules:
+  official_site_only: true
+  positive_requires_clinic_provider_and_offer: true
+  diagnosis_never_implies_treatment: true
+  substring_match_never_confirms: true
+  negative_patterns:
+  - 行っていません
+  - 行っておりません
+  - 実施していません
+  - 実施しておりません
+  - 対応していません
+  - 対応しておりません
+  - 提供していません
+  - 取り扱っていません
+  - 施術していません
+  - 検査していません
+  - 他院をご紹介
+  - 他院に紹介
+  - 他の医療機関へ紹介
+  review_contexts:
+  - 一般医学解説
+  - 紹介先・他院
+  - 過去記事・ニュース
+  - 提供主体不明
+  official_url_predicate: src.enrichment.hp_analysis.is_official_candidate
+phase_7b_sampling:
+  target_unique_clinics: 270
+  acceptable_unique_clinic_range: [200, 300]
+  per_active_treatment_category_minimum_candidate_rows: 6
+  likely_positive_candidate_rows_per_category: 2
+  likely_negative_candidate_rows_per_category: 4
+  positive_candidate_basis: Legacy treatment evidence/category or documented procedure-specific HP link; sampling stratum only, never a confirmed label.
+  negative_candidate_basis: Same sales department with no corresponding legacy treatment category; candidate only, never a NOT_CONFIRMED decision.
+  http_requests_in_phase_7a_2: 0
+  phase_7b_started: false
+  overlap_policy: Stratify within active treatment categories, then deduplicate clinic IDs while retaining category-membership rows; refill until each ACTIVE category has positive and negative candidates.
+  strata:
+  - HP identity verified
+  - Maps website URL available
+  - MHLW department matches sales category
+  - multi-department clinic
+  - large multi-page official site
+  - small official site
+  human_audit_target: 30
+  metrics:
+  - confirmed_precision
+  - review_rate
+  - not_confirmed_rate
+  - alias_hit_rate
+  - false_positive_count
+  - negative_sentence_false_positive_count
+  - categories_per_clinic
+  - page_fetch_success_rate
+  - processing_seconds_per_clinic
+  - http_requests_per_clinic
+phase_7c_gate: Do not start full research until Phase 7-B false positives, misses,
+  and REVIEW rate are reviewed.
+legacy_department_category_map_v1:
+  眼科:
+  - 白内障
+  - 緑内障
+  - ICL
+  - オルソケラトロジー
+  - 硝子体
+  皮膚科:
+  - ニキビ・ニキビ跡
+  - 日帰り手術
+  - アトピー・乾癬
+  泌尿器科:
+  - 泌尿器科
+  - ED
+  - 男性更年期
+  循環器内科:
+  - 循環器内科
+  - 下肢静脈瘤
+  - 睡眠時無呼吸
+  血管外科:
+  - 下肢静脈瘤
+  心臓血管外科:
+  - 下肢静脈瘤
+  内科:
+  - 内視鏡
+  - 糖尿病
+  消化器内科:
+  - 内視鏡
+  糖尿病内科:
+  - 糖尿病
+  歯科:
+  - 矯正
+  - インプラント
+legacy_treatment_categories_v1:
+  内視鏡:
+    treatment_category: 内視鏡
+    department_context_only:
+    - 内科
+    - 消化器内科
+    aliases:
+    - 内視鏡
+    - 胃カメラ
+    - 胃内視鏡
+    - 上部消化管内視鏡
+    - 大腸カメラ
+    - 大腸内視鏡
+    - 下部消化管内視鏡
+    - 消化管内視鏡
+    - 消化器内視鏡
+    - 大腸ポリープ
+    - 大腸ポリープ切除
+    - ポリープ切除
+    - 日帰りポリープ切除
+    - 鎮静剤 内視鏡
+    - 内視鏡センター
+    - 上部内視鏡
+    - 経鼻内視鏡
+    - 経口内視鏡
+    exclude_terms: []
+    evidence_level: HIGH
+  白内障:
+    treatment_category: 白内障
+    department_context_only:
+    - 眼科
+    aliases:
+    - 白内障
+    - 白内障手術
+    - 日帰り白内障手術
+    - 多焦点眼内レンズ
+    - 選定療養 白内障
+    exclude_terms: []
+    evidence_level: HIGH
+  緑内障:
+    treatment_category: 緑内障
+    department_context_only:
+    - 眼科
+    aliases:
+    - 緑内障
+    - 緑内障手術
+    - 緑内障レーザー治療
+    - MIGS
+    - SLT
+    - 低侵襲緑内障手術
+    - iStent
+    exclude_terms: []
+    evidence_level: HIGH
+  ICL:
+    treatment_category: ICL
+    department_context_only:
+    - 眼科
+    aliases:
+    - ICL
+    - 眼内コンタクトレンズ
+    exclude_terms: []
+    evidence_level: HIGH
+  オルソケラトロジー:
+    treatment_category: オルソケラトロジー
+    department_context_only:
+    - 眼科
+    aliases:
+    - オルソケラトロジー
+    exclude_terms: []
+    evidence_level: HIGH
+  硝子体:
+    treatment_category: 硝子体
+    department_context_only:
+    - 眼科
+    aliases:
+    - 硝子体
+    - 硝子体手術
+    exclude_terms: []
+    evidence_level: HIGH
+  糖尿病:
+    treatment_category: 糖尿病
+    department_context_only:
+    - 内科
+    - 糖尿病内科
+    aliases:
+    - 糖尿病内科
+    - 糖尿病専門医
+    - 糖尿病専門外来
+    - 1型糖尿病
+    - インスリン導入
+    - CGM
+    - FreeStyleリブレ
+    - HbA1c当日検査
+    - 糖尿病・内分泌内科
+    - 糖尿病・代謝内科
+    - 糖尿病代謝内科
+    - 糖尿病外来
+    exclude_terms: []
+    evidence_level: HIGH
+  ED:
+    treatment_category: ED
+    department_context_only:
+    - 泌尿器科
+    aliases:
+    - ED
+    - ED治療
+    - ED外来
+    - ED治療薬
+    exclude_terms: []
+    evidence_level: HIGH
+  男性更年期:
+    treatment_category: 男性更年期
+    department_context_only:
+    - 泌尿器科
+    aliases:
+    - 男性更年期
+    - 男性更年期外来
+    - 男性更年期ドック
+    exclude_terms: []
+    evidence_level: HIGH
+  泌尿器科:
+    treatment_category: 泌尿器科
+    department_context_only:
+    - 泌尿器科
+    aliases:
+    - 泌尿器科
+    - 尿路結石
+    - 前立腺
+    - 膀胱鏡
+    - ESWL
+    - 体外衝撃波結石破砕術
+    - 前立腺肥大症手術
+    - 前立腺レーザー治療
+    - HoLEP
+    - Rezūm
+    - WAVE治療
+    - UroLift
+    - 過活動膀胱ボトックス
+    - 前立腺生検
+    - ED治療
+    - 性病検査
+    exclude_terms:
+    - 泌尿器科
+    evidence_level: HIGH
+  循環器内科:
+    treatment_category: 循環器内科
+    department_context_only:
+    - 循環器内科
+    aliases:
+    - 循環器内科
+    - 心エコー
+    - ホルター心電図
+    - 不整脈
+    - 高血圧専門
+    exclude_terms:
+    - 循環器内科
+    evidence_level: HIGH
+  皮膚科:
+    treatment_category: 皮膚科
+    department_context_only: []
+    aliases:
+    - 皮膚科
+    - ニキビ
+    - ニキビ治療
+    - 美容皮膚科
+    - 医療脱毛
+    - シミ治療
+    exclude_terms:
+    - 皮膚科
+    evidence_level: HIGH
+  下肢静脈瘤:
+    treatment_category: 下肢静脈瘤
+    department_context_only:
+    - 循環器内科
+    - 血管外科
+    - 心臓血管外科
+    aliases:
+    - 下肢静脈瘤
+    - 日帰り手術
+    - 血管内焼灼術
+    - レーザー治療
+    - 高周波治療
+    - グルー治療
+    - ベナシール
+    exclude_terms: []
+    evidence_level: HIGH
+  睡眠時無呼吸:
+    treatment_category: 睡眠時無呼吸
+    department_context_only:
+    - 循環器内科
+    aliases:
+    - 睡眠時無呼吸症候群
+    - SAS外来
+    - CPAP
+    - 睡眠外来
+    - PSG検査
+    exclude_terms: []
+    evidence_level: HIGH
+  ニキビ・ニキビ跡:
+    treatment_category: ニキビ・ニキビ跡
+    department_context_only:
+    - 皮膚科
+    aliases:
+    - ニキビ跡治療
+    - クレーター治療
+    - ポテンツァ
+    - ダーマペン
+    - サブシジョン
+    - フラクショナルレーザー
+    - イソトレチノイン
+    exclude_terms: []
+    evidence_level: HIGH
+  日帰り手術:
+    treatment_category: 日帰り手術
+    department_context_only:
+    - 皮膚科
+    aliases:
+    - 粉瘤手術
+    - くり抜き法
+    - 皮膚腫瘍切除
+    - 脂肪腫切除
+    - 眼瞼下垂手術
+    exclude_terms: []
+    evidence_level: HIGH
+  アトピー・乾癬:
+    treatment_category: アトピー・乾癬
+    department_context_only:
+    - 皮膚科
+    aliases:
+    - 生物学的製剤
+    - デュピクセント
+    - ミチーガ
+    - 乾癬治療
+    - 紫外線療法
+    exclude_terms: []
+    evidence_level: HIGH
+  矯正:
+    treatment_category: 矯正
+    department_context_only:
+    - 歯科
+    aliases:
+    - 矯正治療
+    - 矯正歯科
+    - 歯列矯正
+    - マウスピース矯正
+    - インビザライン
+    exclude_terms: []
+    evidence_level: HIGH
+  インプラント:
+    treatment_category: インプラント
+    department_context_only:
+    - 歯科
+    aliases:
+    - インプラント
+    - インプラント治療
+    - 口腔インプラント
+    exclude_terms: []
+    evidence_level: HIGH
+crestix_sales_categories:
+  消化器内科:
+  - treatment: 内視鏡
+    match_mode: CATEGORY
+    current_categories:
+    - 内視鏡
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 胃カメラ
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 胃カメラ
+    support_status: ALIAS
+  - treatment: 大腸カメラ
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 大腸カメラ
+    support_status: ALIAS
+  - treatment: 大腸内視鏡
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 大腸内視鏡
+    support_status: ALIAS
+  - treatment: 大腸ポリープ切除
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 大腸ポリープ切除
+    support_status: ALIAS
+  - treatment: 日帰りポリープ切除
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 日帰りポリープ切除
+    support_status: ALIAS
+  - treatment: 鎮静剤 内視鏡
+    match_mode: KEYWORD
+    current_categories:
+    - 内視鏡
+    evidence_keywords:
+    - 鎮静剤 内視鏡
+    support_status: ALIAS
+  眼科:
+  - treatment: 白内障
+    match_mode: CATEGORY
+    current_categories:
+    - 白内障
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 白内障手術
+    match_mode: KEYWORD
+    current_categories:
+    - 白内障
+    evidence_keywords:
+    - 白内障手術
+    support_status: ALIAS
+  - treatment: 日帰り白内障手術
+    match_mode: KEYWORD
+    current_categories:
+    - 白内障
+    evidence_keywords:
+    - 日帰り白内障手術
+    support_status: ALIAS
+  - treatment: 多焦点眼内レンズ
+    match_mode: KEYWORD
+    current_categories:
+    - 白内障
+    evidence_keywords:
+    - 多焦点眼内レンズ
+    support_status: ALIAS
+  - treatment: 選定療養 白内障
+    match_mode: KEYWORD
+    current_categories:
+    - 白内障
+    evidence_keywords:
+    - 選定療養 白内障
+    support_status: ALIAS
+  - treatment: 緑内障
+    match_mode: CATEGORY
+    current_categories:
+    - 緑内障
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 緑内障手術
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - 緑内障手術
+    support_status: ALIAS
+  - treatment: 緑内障レーザー治療
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - 緑内障レーザー治療
+    support_status: ALIAS
+  - treatment: MIGS
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - MIGS
+    support_status: ALIAS
+  - treatment: SLT
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - SLT
+    support_status: ALIAS
+  - treatment: 低侵襲緑内障手術
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - 低侵襲緑内障手術
+    support_status: ALIAS
+  - treatment: iStent
+    match_mode: KEYWORD
+    current_categories:
+    - 緑内障
+    evidence_keywords:
+    - iStent
+    support_status: ALIAS
+  - treatment: ICL
+    match_mode: CATEGORY
+    current_categories:
+    - ICL
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: オルソケラトロジー
+    match_mode: CATEGORY
+    current_categories:
+    - オルソケラトロジー
+    evidence_keywords: []
+    support_status: EXACT
+  糖尿病内科:
+  - treatment: 糖尿病内科
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - 糖尿病内科
+    support_status: ALIAS
+  - treatment: 糖尿病専門医
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - 糖尿病専門医
+    support_status: ALIAS
+  - treatment: 糖尿病専門外来
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - 糖尿病専門外来
+    support_status: ALIAS
+  - treatment: 1型糖尿病
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - 1型糖尿病
+    support_status: ALIAS
+  - treatment: インスリン導入
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - インスリン導入
+    support_status: ALIAS
+  - treatment: CGM
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - CGM
+    support_status: ALIAS
+  - treatment: FreeStyleリブレ
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - FreeStyleリブレ
+    support_status: ALIAS
+  - treatment: HbA1c当日検査
+    match_mode: KEYWORD
+    current_categories:
+    - 糖尿病
+    evidence_keywords:
+    - HbA1c当日検査
+    support_status: ALIAS
+  泌尿器科:
+  - treatment: 尿路結石
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 尿路結石
+    support_status: ALIAS
+  - treatment: ESWL
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - ESWL
+    support_status: ALIAS
+  - treatment: 体外衝撃波結石破砕術
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 体外衝撃波結石破砕術
+    support_status: ALIAS
+  - treatment: 前立腺肥大症手術
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 前立腺肥大症手術
+    support_status: ALIAS
+  - treatment: 前立腺レーザー治療
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 前立腺レーザー治療
+    support_status: ALIAS
+  - treatment: HoLEP
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - HoLEP
+    support_status: ALIAS
+  - treatment: Rezūm
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - Rezūm
+    support_status: ALIAS
+  - treatment: WAVE治療
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - WAVE治療
+    support_status: ALIAS
+  - treatment: UroLift
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - UroLift
+    support_status: ALIAS
+  - treatment: 過活動膀胱ボトックス
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 過活動膀胱ボトックス
+    support_status: ALIAS
+  - treatment: 前立腺生検
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 前立腺生検
+    support_status: ALIAS
+  - treatment: ED治療
+    match_mode: KEYWORD
+    current_categories:
+    - ED
+    - 泌尿器科
+    evidence_keywords:
+    - ED治療
+    support_status: AMBIGUOUS
+  - treatment: 性病検査
+    match_mode: KEYWORD
+    current_categories:
+    - 泌尿器科
+    evidence_keywords:
+    - 性病検査
+    support_status: ALIAS
+  循環器内科:
+  - treatment: 下肢静脈瘤
+    match_mode: CATEGORY
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 日帰り手術
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - 日帰り手術
+    support_status: ALIAS
+  - treatment: 血管内焼灼術
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - 血管内焼灼術
+    support_status: ALIAS
+  - treatment: レーザー治療
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - レーザー治療
+    support_status: ALIAS
+  - treatment: 高周波治療
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - 高周波治療
+    support_status: ALIAS
+  - treatment: グルー治療
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - グルー治療
+    support_status: ALIAS
+  - treatment: ベナシール
+    match_mode: KEYWORD
+    current_categories:
+    - 下肢静脈瘤
+    evidence_keywords:
+    - ベナシール
+    support_status: ALIAS
+  - treatment: 睡眠時無呼吸
+    match_mode: CATEGORY
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 睡眠時無呼吸症候群
+    match_mode: KEYWORD
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords:
+    - 睡眠時無呼吸症候群
+    support_status: ALIAS
+  - treatment: SAS外来
+    match_mode: KEYWORD
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords:
+    - SAS外来
+    support_status: ALIAS
+  - treatment: CPAP
+    match_mode: KEYWORD
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords:
+    - CPAP
+    support_status: ALIAS
+  - treatment: 睡眠外来
+    match_mode: KEYWORD
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords:
+    - 睡眠外来
+    support_status: ALIAS
+  - treatment: PSG検査
+    match_mode: KEYWORD
+    current_categories:
+    - 睡眠時無呼吸
+    evidence_keywords:
+    - PSG検査
+    support_status: ALIAS
+  皮膚科:
+  - treatment: ニキビ
+    match_mode: KEYWORD
+    current_categories:
+    - 皮膚科
+    evidence_keywords:
+    - ニキビ
+    support_status: ALIAS
+  - treatment: ニキビ跡
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: ニキビ跡治療
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - ニキビ跡治療
+    support_status: ALIAS
+  - treatment: クレーター治療
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - クレーター治療
+    support_status: ALIAS
+  - treatment: ポテンツァ
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - ポテンツァ
+    support_status: ALIAS
+  - treatment: ダーマペン
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - ダーマペン
+    support_status: ALIAS
+  - treatment: サブシジョン
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - サブシジョン
+    support_status: ALIAS
+  - treatment: フラクショナルレーザー
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - フラクショナルレーザー
+    support_status: ALIAS
+  - treatment: イソトレチノイン
+    match_mode: KEYWORD
+    current_categories:
+    - ニキビ・ニキビ跡
+    evidence_keywords:
+    - イソトレチノイン
+    support_status: ALIAS
+  - treatment: 日帰り手術
+    match_mode: CATEGORY
+    current_categories:
+    - 日帰り手術
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 粉瘤手術
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - 粉瘤手術
+    support_status: ALIAS
+  - treatment: くり抜き法
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - くり抜き法
+    support_status: ALIAS
+  - treatment: 皮膚腫瘍切除
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - 皮膚腫瘍切除
+    support_status: ALIAS
+  - treatment: 脂肪腫切除
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - 脂肪腫切除
+    support_status: ALIAS
+  - treatment: 眼瞼下垂手術
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - 眼瞼下垂手術
+    support_status: ALIAS
+  - treatment: アトピー・乾癬
+    match_mode: CATEGORY
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: 生物学的製剤
+    match_mode: KEYWORD
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords:
+    - 生物学的製剤
+    support_status: ALIAS
+  - treatment: デュピクセント
+    match_mode: KEYWORD
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords:
+    - デュピクセント
+    support_status: ALIAS
+  - treatment: ミチーガ
+    match_mode: KEYWORD
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords:
+    - ミチーガ
+    support_status: ALIAS
+  - treatment: 乾癬治療
+    match_mode: KEYWORD
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords:
+    - 乾癬治療
+    support_status: ALIAS
+  - treatment: 紫外線療法
+    match_mode: KEYWORD
+    current_categories:
+    - アトピー・乾癬
+    evidence_keywords:
+    - 紫外線療法
+    support_status: ALIAS
+  歯科:
+  - treatment: 矯正治療
+    match_mode: KEYWORD
+    current_categories:
+    - 矯正
+    evidence_keywords:
+    - 矯正治療
+    support_status: ALIAS
+  - treatment: 全顎矯正
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 成人矯正
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: マウスピース矯正
+    match_mode: KEYWORD
+    current_categories:
+    - 矯正
+    evidence_keywords:
+    - マウスピース矯正
+    support_status: ALIAS
+  - treatment: インビザライン
+    match_mode: KEYWORD
+    current_categories:
+    - 矯正
+    evidence_keywords:
+    - インビザライン
+    support_status: ALIAS
+  - treatment: 裏側矯正・舌側矯正
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: インプラント治療
+    match_mode: KEYWORD
+    current_categories:
+    - インプラント
+    evidence_keywords:
+    - インプラント治療
+    support_status: ALIAS
+  - treatment: インプラント
+    match_mode: CATEGORY
+    current_categories:
+    - インプラント
+    evidence_keywords: []
+    support_status: EXACT
+  - treatment: All-on-4
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 即時荷重インプラント
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 骨造成
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: GBR
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: サイナスリフト
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  美容整形外科:
+  - treatment: 豊胸
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 脂肪吸引
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: フェイスリフト
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 輪郭形成
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 骨切り
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 鼻整形
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 眼瞼下垂手術
+    match_mode: KEYWORD
+    current_categories:
+    - 日帰り手術
+    evidence_keywords:
+    - 眼瞼下垂手術
+    support_status: ALIAS
+  - treatment: 二重全切開
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 脂肪注入
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 再生医療系施術
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 美容外科手術全般
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  産婦人科:
+  - treatment: 不妊治療
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 体外受精
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 顕微授精
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 採卵
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 胚移植
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 卵子凍結
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 精子凍結
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 不妊検査パッケージ
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: NIPT
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 出生前診断
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 無痛分娩
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+  - treatment: 自費の婦人科形成
+    match_mode: KEYWORD
+    current_categories: []
+    evidence_keywords: []
+    support_status: MISSING
+
+# Phase 7-B research taxonomy. Only ACTIVE entries are eligible for research.
+# v1 below remains an explicitly deprecated compatibility snapshot for existing
+# treatments_json values and the current sales UI; it is not a Phase 7-B target.
+clinical_focus_schema:
+  required_fields:
+  - clinic_id
+  - clinical_focus
+  - source_type
+  - source_value
+  - evidence_url
+  - evidence_page_title
+  - checked_at
+  - rule_version
+  allowed_source_types: [MHLW_DEPARTMENT, OFFICIAL_HP]
+clinical_focus:
+  糖尿病:
+    aliases: [糖尿病, 糖尿病内科, 1型糖尿病]
+    source_sales_items: [糖尿病内科, 1型糖尿病]
+  白内障:
+    aliases: [白内障]
+    source_sales_items: [白内障]
+  緑内障:
+    aliases: [緑内障]
+    source_sales_items: [緑内障]
+  下肢静脈瘤:
+    aliases: [下肢静脈瘤]
+    source_sales_items: [下肢静脈瘤]
+  睡眠時無呼吸:
+    aliases: [睡眠時無呼吸, 睡眠時無呼吸症候群]
+    source_sales_items: [睡眠時無呼吸, 睡眠時無呼吸症候群]
+  ニキビ・ニキビ跡:
+    aliases: [ニキビ, ニキビ跡]
+    source_sales_items: [ニキビ, ニキビ跡]
+  アトピー・乾癬:
+    aliases: [アトピー, 乾癬]
+    source_sales_items: [アトピー・乾癬, 乾癬治療]
+  ED:
+    aliases: [ED]
+    source_sales_items: [ED治療]
+  尿路結石:
+    aliases: [尿路結石]
+    source_sales_items: [尿路結石]
+  男性更年期:
+    aliases: [男性更年期]
+    source_sales_items: []
+
+treatment_categories:
+  胃カメラ検査:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [消化器内科]
+    aliases: [胃カメラ, 胃内視鏡, 上部消化管内視鏡, 上部内視鏡, 経鼻内視鏡, 経口内視鏡]
+    source_sales_items: [胃カメラ, 内視鏡]
+    sales_filter_value: HIGH
+  大腸カメラ検査:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [消化器内科]
+    aliases: [大腸カメラ, 大腸内視鏡, 下部消化管内視鏡]
+    source_sales_items: [大腸カメラ, 大腸内視鏡, 内視鏡]
+    sales_filter_value: HIGH
+  大腸ポリープ切除:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [消化器内科]
+    aliases: [大腸ポリープ切除, 日帰りポリープ切除]
+    source_sales_items: [大腸ポリープ切除, 日帰りポリープ切除]
+    sales_filter_value: HIGH
+    context_required: [大腸, 消化管]
+  鎮静内視鏡:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [消化器内科]
+    aliases: [鎮静剤 内視鏡]
+    source_sales_items: [鎮静剤 内視鏡]
+    sales_filter_value: MEDIUM
+  白内障手術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [眼科]
+    aliases: [白内障手術, 日帰り白内障手術, 多焦点眼内レンズ]
+    source_sales_items: [白内障手術, 日帰り白内障手術, 多焦点眼内レンズ]
+    sales_filter_value: HIGH
+  ICL手術:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [眼科]
+    aliases: [ICL, 眼内コンタクトレンズ]
+    source_sales_items: [ICL]
+    sales_filter_value: HIGH
+  MIGS・緑内障レーザー治療:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [眼科]
+    aliases: [MIGS, 低侵襲緑内障手術, iStent, 緑内障手術, 緑内障レーザー治療, SLT]
+    source_sales_items: [MIGS, 低侵襲緑内障手術, iStent, 緑内障手術, 緑内障レーザー治療, SLT]
+    sales_filter_value: HIGH
+  オルソケラトロジー:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [眼科]
+    aliases: [オルソケラトロジー]
+    source_sales_items: [オルソケラトロジー]
+    sales_filter_value: HIGH
+  硝子体手術:
+    status: PROPOSED
+    item_type: SURGERY
+    crestix_departments: [眼科]
+    aliases: [硝子体, 硝子体手術]
+    source_sales_items: []
+    existing_taxonomy_only: true
+    sales_filter_value: HIGH
+    proposal_reason: 7A-v1にaliasはあるが既存112営業項目に該当項目がない。
+  CGM・持続血糖モニタリング:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [糖尿病内科]
+    aliases: [CGM, FreeStyleリブレ]
+    source_sales_items: [CGM, FreeStyleリブレ]
+    sales_filter_value: HIGH
+  インスリン導入・療法:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [糖尿病内科]
+    aliases: [インスリン導入]
+    source_sales_items: [インスリン導入]
+    sales_filter_value: HIGH
+  HbA1c検査:
+    status: PROPOSED
+    item_type: EXAM
+    crestix_departments: [糖尿病内科]
+    aliases: [HbA1c当日検査]
+    source_sales_items: [HbA1c当日検査]
+    sales_filter_value: LOW
+    proposal_reason: 検査一般として実施施設が広く、営業filterでの識別力を確認する。
+  ED治療:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [泌尿器科]
+    aliases: [ED治療, ED治療薬]
+    source_sales_items: [ED治療]
+    sales_filter_value: HIGH
+  尿路結石破砕:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [泌尿器科]
+    aliases: [ESWL, 体外衝撃波結石破砕術]
+    source_sales_items: [ESWL, 体外衝撃波結石破砕術]
+    sales_filter_value: HIGH
+  前立腺肥大症手術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [泌尿器科]
+    aliases: [前立腺肥大症手術, HoLEP]
+    source_sales_items: [前立腺肥大症手術, HoLEP]
+    sales_filter_value: HIGH
+  前立腺レーザー治療:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [泌尿器科]
+    aliases: [前立腺レーザー治療]
+    source_sales_items: [前立腺レーザー治療]
+    sales_filter_value: HIGH
+  前立腺肥大症低侵襲治療:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [泌尿器科]
+    aliases: [Rezūm, WAVE治療, UroLift]
+    source_sales_items: [Rezūm, WAVE治療, UroLift]
+    sales_filter_value: HIGH
+  過活動膀胱ボトックス療法:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [泌尿器科]
+    aliases: [過活動膀胱ボトックス]
+    source_sales_items: [過活動膀胱ボトックス]
+    sales_filter_value: HIGH
+  前立腺生検:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [泌尿器科]
+    aliases: [前立腺生検]
+    source_sales_items: [前立腺生検]
+    sales_filter_value: MEDIUM
+  性感染症検査:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [泌尿器科]
+    aliases: [性病検査]
+    source_sales_items: [性病検査]
+    sales_filter_value: MEDIUM
+  下肢静脈瘤血管内治療:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [循環器内科]
+    aliases: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
+    source_sales_items: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
+    sales_filter_value: HIGH
+  CPAP療法:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [循環器内科]
+    aliases: [CPAP]
+    source_sales_items: [CPAP]
+    sales_filter_value: HIGH
+  PSG検査:
+    status: ACTIVE
+    item_type: EXAM
+    crestix_departments: [循環器内科]
+    aliases: [PSG検査]
+    source_sales_items: [PSG検査]
+    sales_filter_value: MEDIUM
+  粉瘤摘出術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [皮膚科]
+    aliases: [粉瘤手術, くり抜き法]
+    source_sales_items: [粉瘤手術, くり抜き法]
+    sales_filter_value: HIGH
+  皮膚腫瘍切除:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [皮膚科]
+    aliases: [皮膚腫瘍切除]
+    source_sales_items: [皮膚腫瘍切除]
+    sales_filter_value: HIGH
+  脂肪腫切除:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [皮膚科]
+    aliases: [脂肪腫切除]
+    source_sales_items: [脂肪腫切除]
+    sales_filter_value: HIGH
+  ニキビ跡施術:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [皮膚科]
+    aliases: [ニキビ跡治療, クレーター治療, ポテンツァ, ダーマペン, サブシジョン, フラクショナルレーザー]
+    source_sales_items: [ニキビ跡治療, クレーター治療, ポテンツァ, ダーマペン, サブシジョン, フラクショナルレーザー]
+    sales_filter_value: HIGH
+  イソトレチノイン治療:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [皮膚科]
+    aliases: [イソトレチノイン]
+    source_sales_items: [イソトレチノイン]
+    sales_filter_value: HIGH
+  デュピクセント治療:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [皮膚科]
+    aliases: [デュピクセント]
+    source_sales_items: [デュピクセント]
+    sales_filter_value: HIGH
+  ミチーガ治療:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [皮膚科]
+    aliases: [ミチーガ]
+    source_sales_items: [ミチーガ]
+    sales_filter_value: HIGH
+  生物学的製剤治療:
+    status: PROPOSED
+    item_type: TREATMENT
+    crestix_departments: [皮膚科]
+    aliases: [生物学的製剤]
+    source_sales_items: [生物学的製剤]
+    sales_filter_value: MEDIUM
+    proposal_reason: 対象疾患・薬剤が広く、個別薬剤カテゴリとの境界をPhase 7-B前に要検討。
+  紫外線療法:
+    status: PROPOSED
+    item_type: PROCEDURE
+    crestix_departments: [皮膚科]
+    aliases: [紫外線療法]
+    source_sales_items: [紫外線療法]
+    sales_filter_value: MEDIUM
+  歯列矯正:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [歯科]
+    aliases: [矯正治療, 全顎矯正, 成人矯正, 裏側矯正・舌側矯正]
+    source_sales_items: [矯正治療, 全顎矯正, 成人矯正, 裏側矯正・舌側矯正]
+    sales_filter_value: HIGH
+  マウスピース矯正:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [歯科]
+    aliases: [マウスピース矯正, インビザライン]
+    source_sales_items: [マウスピース矯正, インビザライン]
+    sales_filter_value: HIGH
+  歯科インプラント:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [歯科]
+    aliases: [インプラント, インプラント治療, All-on-4, 即時荷重インプラント, 骨造成, GBR, サイナスリフト]
+    source_sales_items: [インプラント, インプラント治療, All-on-4, 即時荷重インプラント, 骨造成, GBR, サイナスリフト]
+    sales_filter_value: HIGH
+  豊胸手術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [豊胸]
+    source_sales_items: [豊胸]
+    sales_filter_value: HIGH
+  脂肪吸引:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [脂肪吸引]
+    source_sales_items: [脂肪吸引]
+    sales_filter_value: HIGH
+  フェイスリフト:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [フェイスリフト]
+    source_sales_items: [フェイスリフト]
+    sales_filter_value: HIGH
+  輪郭骨切り術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [骨切り]
+    source_sales_items: [骨切り]
+    sales_filter_value: HIGH
+  鼻形成術:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [鼻整形]
+    source_sales_items: [鼻整形]
+    sales_filter_value: HIGH
+  二重全切開:
+    status: ACTIVE
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [二重全切開]
+    source_sales_items: [二重全切開]
+    sales_filter_value: HIGH
+  輪郭形成術:
+    status: PROPOSED
+    item_type: SURGERY
+    crestix_departments: [美容整形外科]
+    aliases: [輪郭形成]
+    source_sales_items: [輪郭形成]
+    sales_filter_value: MEDIUM
+  眼瞼下垂手術:
+    status: PROPOSED
+    item_type: SURGERY
+    crestix_departments: [美容整形外科, 皮膚科]
+    aliases: [眼瞼下垂手術]
+    source_sales_items: [眼瞼下垂手術]
+    sales_filter_value: MEDIUM
+    proposal_reason: 複数営業科に現れるため、施設・専門科と対象ページを切り分ける必要がある。
+  脂肪注入施術:
+    status: PROPOSED
+    item_type: PROCEDURE
+    crestix_departments: [美容整形外科]
+    aliases: [脂肪注入]
+    source_sales_items: [脂肪注入]
+    sales_filter_value: MEDIUM
+  不妊治療:
+    status: ACTIVE
+    item_type: TREATMENT
+    crestix_departments: [産婦人科]
+    aliases: [不妊治療]
+    source_sales_items: [不妊治療]
+    sales_filter_value: HIGH
+  体外受精（IVF）:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [体外受精]
+    source_sales_items: [体外受精]
+    sales_filter_value: HIGH
+  顕微授精（ICSI）:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [顕微授精]
+    source_sales_items: [顕微授精]
+    sales_filter_value: HIGH
+  採卵:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [採卵]
+    source_sales_items: [採卵]
+    sales_filter_value: HIGH
+  胚移植:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [胚移植]
+    source_sales_items: [胚移植]
+    sales_filter_value: HIGH
+  無痛分娩:
+    status: ACTIVE
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [無痛分娩]
+    source_sales_items: [無痛分娩]
+    sales_filter_value: HIGH
+  卵子凍結:
+    status: PROPOSED
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [卵子凍結]
+    source_sales_items: [卵子凍結]
+    sales_filter_value: MEDIUM
+  精子凍結:
+    status: PROPOSED
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [精子凍結]
+    source_sales_items: [精子凍結]
+    sales_filter_value: MEDIUM
+  不妊検査:
+    status: PROPOSED
+    item_type: EXAM
+    crestix_departments: [産婦人科]
+    aliases: [不妊検査パッケージ]
+    source_sales_items: [不妊検査パッケージ]
+    sales_filter_value: MEDIUM
+  出生前遺伝学的検査（NIPT）:
+    status: PROPOSED
+    item_type: EXAM
+    crestix_departments: [産婦人科]
+    aliases: [NIPT]
+    source_sales_items: [NIPT]
+    sales_filter_value: MEDIUM
+  出生前診断:
+    status: PROPOSED
+    item_type: EXAM
+    crestix_departments: [産婦人科]
+    aliases: [出生前診断]
+    source_sales_items: [出生前診断]
+    sales_filter_value: MEDIUM
+  婦人科形成術:
+    status: PROPOSED
+    item_type: PROCEDURE
+    crestix_departments: [産婦人科]
+    aliases: [自費の婦人科形成]
+    source_sales_items: [自費の婦人科形成]
+    sales_filter_value: MEDIUM
+
+deprecated_sales_items:
+  日帰り手術:
+    status: DEPRECATED
+    reason: 対象術式が不明な包括語。具体的な手術カテゴリへ分割する。
+  選定療養 白内障:
+    status: DEPRECATED
+    reason: 費用制度・レンズ区分であり独立した治療提供ではない。
+  糖尿病専門医:
+    status: DEPRECATED
+    reason: 医師資格・専門性の表示であり治療提供カテゴリではない。
+  再生医療系施術:
+    status: DEPRECATED
+    reason: 対象施術が特定できない包括語。
+  美容外科手術全般:
+    status: DEPRECATED
+    reason: 対象手術が特定できない包括語。
+
+department_sales_items:
+  糖尿病専門外来:
+    status: DEPRECATED
+    item_type: DEPARTMENT
+    clinical_focus: 糖尿病
+    reason: 治療名ではなく外来・診療体制を示す。
+  SAS外来:
+    status: DEPRECATED
+    item_type: DEPARTMENT
+    clinical_focus: 睡眠時無呼吸
+    reason: 治療名ではなく外来・診療体制を示す。
+  睡眠外来:
+    status: DEPRECATED
+    item_type: DEPARTMENT
+    clinical_focus: 睡眠時無呼吸
+    reason: 治療名ではなく外来・診療体制を示す。
