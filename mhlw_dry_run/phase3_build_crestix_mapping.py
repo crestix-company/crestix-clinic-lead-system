@@ -17,10 +17,11 @@ csv.field_size_limit(sys.maxsize)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from crestix_department_mapping import classify  # noqa: E402
+from paths import source  # noqa: E402
 
 SPECIALITY_FILES = [
-    "/Users/maekawahiroyuki/Downloads/02-2_clinic_speciality_hours_20260601.csv",
-    "/Users/maekawahiroyuki/Downloads/03-2_dental_speciality_hours_20260601.csv",
+    source("02-2_clinic_speciality_hours_20260601.csv"),
+    source("03-2_dental_speciality_hours_20260601.csv"),
 ]
 MAP_OUT = Path(__file__).resolve().parent / "mhlw_to_crestix_department_mapping.csv"
 REVIEW_OUT = Path(__file__).resolve().parent / "department_mapping_review.csv"
