@@ -18,7 +18,8 @@ from src.normalizer.departments import normalize_departments
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.reproject_legacy_departments import (  # noqa: E402
-    ApplyAborted, classify, fetch_legacy_rows, main, parse_args, run_apply, run_dry_run, write_artifacts,
+    ApplyAborted, apply_precondition_violation, classify, fetch_legacy_rows, main, parse_args,
+    run_apply, run_dry_run, snapshot, write_artifacts,
 )
 
 ALL = dict(active_only=False, hp_only=False)
@@ -301,3 +302,105 @@ def test_main_dry_run_without_expected_candidates_still_defaults_to_8086(reproje
     # このfixtureの実candidateは1件なので8086とは不一致になり、dry-runは既存仕様どおりFAIL CLOSED(非0)。
     assert rc == 1
     assert store.path.read_bytes() == before_bytes
+
+
+# ---- apply_precondition_violation(): integrity/WAL/sha256のガード判定ロジック単体 ------
+def test_apply_precondition_violation_flags_integrity_failure():
+    snap = {"integrity": "corruption found", "journal_mode": "delete", "wal_size": 0, "sha256": "abc"}
+    reason = apply_precondition_violation(snap, expected_source_sha256=None)
+    assert reason is not None and "整合性" in reason
+
+
+def test_apply_precondition_violation_flags_wal_not_checkpointed():
+    snap = {"integrity": "ok", "journal_mode": "wal", "wal_size": 4096, "sha256": "abc"}
+    reason = apply_precondition_violation(snap, expected_source_sha256=None)
+    assert reason is not None and "チェックポイント" in reason
+
+
+def test_apply_precondition_violation_allows_wal_mode_when_fully_checkpointed():
+    snap = {"integrity": "ok", "journal_mode": "wal", "wal_size": 0, "sha256": "abc"}
+    assert apply_precondition_violation(snap, expected_source_sha256="abc") is None
+
+
+def test_apply_precondition_violation_flags_sha_mismatch():
+    snap = {"integrity": "ok", "journal_mode": "delete", "wal_size": 0, "sha256": "abc"}
+    reason = apply_precondition_violation(snap, expected_source_sha256="xyz")
+    assert reason is not None and "sha256" in reason.lower()
+
+
+def test_apply_precondition_violation_none_when_all_ok():
+    snap = {"integrity": "ok", "journal_mode": "delete", "wal_size": 0, "sha256": "abc"}
+    assert apply_precondition_violation(snap, expected_source_sha256="abc") is None
+    assert apply_precondition_violation(snap, expected_source_sha256=None) is None
+
+
+# ---- run_apply(): integrity gate is enforced end-to-end, write 0 on violation --------
+def test_apply_is_fail_closed_on_integrity_failure(reproject_db, tmp_path, monkeypatch):
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    import scripts.reproject_legacy_departments as mod
+    real_snapshot = mod.snapshot
+
+    def bad_snapshot(path):
+        snap = real_snapshot(path)
+        snap["integrity"] = "corruption found"
+        return snap
+
+    monkeypatch.setattr(mod, "snapshot", bad_snapshot)
+    with pytest.raises(ApplyAborted, match="整合性"):
+        run_apply(store.path, tmp_path / "out", expected_candidates=1)
+    after_bytes = store.path.read_bytes()
+    assert before_bytes == after_bytes  # UPDATE 0件・COMMITなし
+
+
+def test_apply_is_fail_closed_on_unchecked_pointed_wal(reproject_db, tmp_path, monkeypatch):
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    import scripts.reproject_legacy_departments as mod
+    monkeypatch.setattr(mod, "wal_file_size", lambda db_path: 4096)
+    with pytest.raises(ApplyAborted, match="チェックポイント"):
+        run_apply(store.path, tmp_path / "out", expected_candidates=1)
+    after_bytes = store.path.read_bytes()
+    assert before_bytes == after_bytes
+
+
+def test_apply_rechecks_preconditions_after_lock_and_catches_regression(reproject_db, tmp_path, monkeypatch):
+    """事前チェック（lock取得前）はPASSしても、BEGIN IMMEDIATE後の再検証でTOCTOU的な劣化を検知しSTOPする。"""
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    import scripts.reproject_legacy_departments as mod
+    calls = {"n": 0}
+
+    def flaky_wal_file_size(db_path):
+        calls["n"] += 1
+        return 0 if calls["n"] == 1 else 4096
+
+    monkeypatch.setattr(mod, "wal_file_size", flaky_wal_file_size)
+    with pytest.raises(ApplyAborted, match="writer lock取得後"):
+        run_apply(store.path, tmp_path / "out", expected_candidates=1)
+    after_bytes = store.path.read_bytes()
+    assert before_bytes == after_bytes
+    assert calls["n"] >= 2  # 事前チェックとlock取得後の再検証、双方で呼ばれたこと
+
+
+def test_apply_transaction_error_rolls_back_and_writes_nothing(reproject_db, tmp_path, monkeypatch):
+    """UPDATE直前で想定外の例外が起きても、BEGIN IMMEDIATE以降の変更がROLLBACKされること。"""
+    store, ids = reproject_db
+    before_bytes = store.path.read_bytes()
+    import scripts.reproject_legacy_departments as mod
+    real_classify = mod.classify
+
+    class _BoomOnUnpack:
+        def __iter__(self):
+            raise RuntimeError("boom-mid-transaction")
+
+    def broken_classify(rows):
+        result = real_classify(rows)
+        result.candidates = [_BoomOnUnpack() for _ in result.candidates]
+        return result
+
+    monkeypatch.setattr(mod, "classify", broken_classify)
+    with pytest.raises(RuntimeError, match="boom-mid-transaction"):
+        run_apply(store.path, tmp_path / "out", expected_candidates=1)
+    after_bytes = store.path.read_bytes()
+    assert before_bytes == after_bytes
