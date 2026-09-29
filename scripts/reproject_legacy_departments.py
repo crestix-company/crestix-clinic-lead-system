@@ -1,8 +1,10 @@
 """旧13,970件（既存営業リスト）のdepartments_jsonを、現行normalize_departments()で再計算するscript。
 
 デフォルトはdry-run（Production DBはmode=ro + PRAGMA query_only=ONで開き、一切書き込まない）。
---apply を明示しない限りWRITEは実行しない。--apply でも --expected-candidates が
-実際のcandidate件数と一致しない場合はROLLBACKしてSTOPする（fail-closed）。
+--apply を明示しない限りWRITEは実行しない。--apply でも次のいずれかに違反すればROLLBACKして
+STOPする（fail-closed）: integrity_check!="ok" / journal_mode=walで-wal未チェックポイント
+（main fileのsha256が信頼できない） / --expected-source-sha256不一致 / candidate件数不一致。
+これらはwriter lock（BEGIN IMMEDIATE）取得の前後で二重に検証する。
 
 変更対象は原則 clinics.departments_json 列のみ。HP/Maps/UUID/medical_key/Comdesk/
 research/base_json/effective_json/first_seen_at/source_records/status 等は触らない。
@@ -46,6 +48,11 @@ def open_readonly(path):
     return conn
 
 
+def wal_file_size(db_path):
+    wal_path = Path(str(db_path) + "-wal")
+    return wal_path.stat().st_size if wal_path.exists() else 0
+
+
 def snapshot(path):
     path = Path(path)
     stat = path.stat()
@@ -53,6 +60,7 @@ def snapshot(path):
     try:
         clinics = conn.execute("SELECT count(*) FROM clinics").fetchone()[0]
         integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        journal_mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     finally:
         conn.close()
     return {
@@ -61,7 +69,28 @@ def snapshot(path):
         "size": stat.st_size,
         "clinics": clinics,
         "integrity": integrity,
+        "journal_mode": journal_mode,
+        "wal_size": wal_file_size(path),
     }
+
+
+def apply_precondition_violation(snap, expected_source_sha256):
+    """apply前提（integrity/WAL状態/source sha256）がsnapshotの時点で満たされているか判定する。
+
+    問題なければNone、問題があれば理由の文字列を返す（呼び出し側でApplyAbortedにする）。
+    journal_mode=walで-walが未チェックポイント（size!=0）の場合、main file単体のsha256は
+    DBの実際の内容を表さないため、sha256の一致判定より先にこの状態を検出してSTOPする。
+    """
+    if snap["integrity"] != "ok":
+        return f"DB整合性チェックがokではありません（integrity_check={snap['integrity']}）。"
+    if snap["journal_mode"] == "wal" and snap["wal_size"] != 0:
+        return (
+            f"journal_mode=walで-walファイルが未チェックポイントです（wal_size={snap['wal_size']}バイト）。"
+            "main fileのsha256がDBの現在状態を正しく表さないため信頼できません。"
+        )
+    if expected_source_sha256 is not None and snap["sha256"] != expected_source_sha256:
+        return f"Production DBのsha256が想定と異なります（期待={expected_source_sha256} 実際={snap['sha256']}）。"
+    return None
 
 
 def fetch_legacy_rows(conn):
@@ -189,21 +218,39 @@ class ApplyAborted(RuntimeError):
 
 
 def run_apply(db_path, out_dir, expected_candidates, expected_source_sha256=None):
-    """将来のapply実装。このセッションでは呼び出さない。
+    """Production apply実装。
 
-    1トランザクションでdepartments_json列だけを更新し、candidate件数・(任意で)元DBの
-    sha256が期待値と一致しない場合はROLLBACKしてApplyAbortedを送出する（fail-closed）。
+    fail-closed guardをwriter lock（BEGIN IMMEDIATE）取得の前後で二重に検証する：
+      - integrity_check == "ok"
+      - journal_mode=walなら-walファイルが空（チェックポイント済み）であること
+        （そうでない場合main fileのsha256はDBの実際の内容を表さない）
+      - --expected-source-sha256を指定していればsha256が一致すること
+      - candidate件数がexpected_candidatesと一致すること（writer lock取得後、フレッシュに再計算）
+    事前チェック（lock取得前）は不要な書き込みロック取得を避けるための早期fail-fast。
+    lock取得後の再チェックは、事前チェックからBEGIN IMMEDIATEまでの間に別プロセスが
+    DBを書き換えた場合のTOCTOUを閉じるためのもの。いずれかに違反した場合はROLLBACKして
+    ApplyAbortedを送出し、departments_jsonへのUPDATEは実行しない。
     """
     before = snapshot(db_path)
-    if expected_source_sha256 is not None and before["sha256"] != expected_source_sha256:
-        raise ApplyAborted(
-            f"Production DBのsha256が想定と異なります（期待={expected_source_sha256} 実際={before['sha256']}）。"
-            "apply前提が崩れているためSTOPしました。"
-        )
+    reason = apply_precondition_violation(before, expected_source_sha256)
+    if reason:
+        raise ApplyAborted(reason + " apply前提が崩れているためSTOPしました（writer lock取得前）。")
 
     conn = sqlite3.connect(db_path)
     try:
         conn.execute("BEGIN IMMEDIATE")
+
+        locked_snapshot = {
+            "sha256": file_sha256(db_path),
+            "integrity": conn.execute("PRAGMA integrity_check").fetchone()[0],
+            "journal_mode": conn.execute("PRAGMA journal_mode").fetchone()[0],
+            "wal_size": wal_file_size(db_path),
+        }
+        reason = apply_precondition_violation(locked_snapshot, expected_source_sha256)
+        if reason:
+            conn.rollback()
+            raise ApplyAborted(reason + " apply前提が崩れているためSTOPしました（writer lock取得後の再検証）。")
+
         rows = fetch_legacy_rows(conn)
         classification = classify(rows)
         if classification.candidate_updates != expected_candidates:
