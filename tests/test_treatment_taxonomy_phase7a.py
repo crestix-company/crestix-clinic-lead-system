@@ -149,15 +149,21 @@ def test_cataract_disease_and_surgery_are_separate_and_day_surgery_is_deprecated
     assert taxonomy["deprecated_sales_items"]["日帰り手術"]["status"] == "DEPRECATED"
 
 
-def test_112_item_action_totals_are_reconciled():
-    import csv
-    from pathlib import Path
-    rows = list(csv.DictReader((Path(__file__).resolve().parents[1] / "phase7a1_taxonomy_review.csv").open(encoding="utf-8", newline="")))
-    assert len(rows) == 112
-    assert Counter(r["action"] for r in rows) == {
-        "KEEP": 19, "RENAME": 30, "SPLIT": 3, "ALIAS": 14,
-        "MOVE_TO_DISEASE": 9, "MOVE_TO_DEPARTMENT": 4, "PROPOSE": 29, "DROP": 4,
-    }
+def test_all_112_legacy_sales_items_have_a_taxonomy_disposition():
+    taxonomy = load_taxonomy()
+    represented = set(taxonomy["deprecated_sales_items"]) | set(taxonomy["department_sales_items"])
+    for definition in taxonomy["treatment_categories"].values():
+        represented.update(definition.get("source_sales_items", ()))
+    for definition in taxonomy["clinical_focus"].values():
+        represented.update(definition.get("source_sales_items", ()))
+    sales_items = [
+        item["treatment"]
+        for items in taxonomy["crestix_sales_categories"].values()
+        for item in items
+    ]
+    legacy_items = set(sales_items)
+    assert len(sales_items) == 112
+    assert legacy_items <= represented
 
 
 def test_every_sales_item_has_a_v2_treatment_focus_department_or_deprecation_disposition():
