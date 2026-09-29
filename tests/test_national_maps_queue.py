@@ -79,7 +79,9 @@ def test_package_uses_exact_existing_queue_headers():
 
 def test_real_tokyo_workbook_if_present():
     path = Path("data/raw/131コード内容別一覧表（医科）東京r0809.xlsx")
-    if not path.exists():
+    # GitHub Actionsの通常checkoutではGit LFS pointerだけが存在する場合がある。
+    # 実体をダウンロードさせず、実Workbookが利用可能な環境でのみ回帰確認する。
+    if not path.exists() or not zipfile.is_zipfile(path):
         return
     source = OfficialSource("tokyo", "関東信越厚生局", "東京", "https://kouseikyoku.mhlw.go.jp/x.xlsx", "https://kouseikyoku.mhlw.go.jp/", "xlsx", expected_prefectures=("東京都",))
     frame = parse_code_workbook(path.read_bytes(), path.name, source)
