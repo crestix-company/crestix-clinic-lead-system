@@ -7,6 +7,7 @@ from src.enrichment.hp_analysis import identity, Page, host, domain_is, keyword_
 from src.enrichment.consultation_schedule import SIGNAL_NAME as MIDDAY_SIGNAL,midday_procedure
 from src.utils.config import ROOT, read_config
 from src.normalizer.departments import normalize_departments
+from src.enrichment.treatment_taxonomy import treatment_keyword_view, load_taxonomy
 
 SIGNAL_NAMES = [
     "Googleスポンサー広告確認済み","EPARK課金済み確認","Doctors File掲載","Medical DOC掲載","マイナビ記事掲載",
@@ -97,6 +98,8 @@ def hot_status(count):
 def _treatment_terms(category, keywords):
     # より具体的な長い語を先に返す（大腸内視鏡 > 内視鏡、糖尿病専門医 > 糖尿病）。
     terms=list(dict.fromkeys(list(keywords or [])+([] if category in CATEGORY_NAME_NOT_KEYWORD else [category])))
+    excluded = set(load_taxonomy()["legacy_treatment_categories_v1"].get(category, {}).get("exclude_terms", ()))
+    terms = [term for term in terms if term not in excluded]
     return sorted(terms,key=lambda x:(len(x),x),reverse=True)
 
 
@@ -188,15 +191,13 @@ def _primary_heading(page):
 def treatments(pages, record=None, config=None):
     """営業用の治療カテゴリ。
 
-    優先順位:
-    1) 医院名
-    2) HOMEの実際の治療メニュー/タブ
-    3) 医院紹介・診療案内の実際の治療メニュー/タブ
-    4) 2/3から直接リンクされた独立治療ページの主見出し
+    診療科・医院名は治療提供の証拠にしない。
+    HOME/医院紹介/診療案内の実際の治療メニューと、そこから直接リンクされた
+    独立治療ページの主見出しだけを対象にする。
 
     共通SEOタイトル、サイトマップ、本文に単語があるだけのページはカテゴリ化しない。
     """
-    cfg = config or read_config(ROOT/"config/treatment_keywords.yml")
+    cfg = config or treatment_keyword_view()
     pages = [p for p in pages if is_official_candidate(p.url)]
     evidence = []
     seen = set()
@@ -228,17 +229,8 @@ def treatments(pages, record=None, config=None):
     def selfpay_ok(category,term):
         return category not in SELFPAY_GATED or ctx["selfpay"] or term in SELFPAY_TREATMENTS
 
-    if DIABETES_NAME.search(clinic_name) and not re.search(r"糖尿病網膜症",clinic_name):
-        # 医院名に「糖尿病」を掲げる医院は、糖尿病を主要診療とする強い根拠。
-        add("糖尿病",home_url,"糖尿病",1.0,"医院名に治療・診療名を含む（最優先）","CLINIC_NAME",True,clinic_name)
-    if "糖尿病内科" in departments:
-        # 診療科として糖尿病内科を登録している医院は、糖尿病を主要診療とみなす。
-        add("糖尿病",home_url,"診療科：糖尿病内科",.96,"厚生局の診療科に糖尿病内科を登録","DEPARTMENT",False,"糖尿病内科")
-    if clinic_name:
-        for category,keywords in cfg.items():
-            term=_category_term(category,clinic_name,_treatment_terms(category,keywords),ctx)
-            if term and selfpay_ok(category,term):
-                add(category,home_url,term,1.0,"医院名に治療・診療名を含む（最優先）","CLINIC_NAME",True,clinic_name)
+    # Clinic name and registered departments are identity/context data, never
+    # treatment delivery evidence. Only official HP content below may classify.
 
     # HOME / 医院紹介 / 診療案内の実リンクだけを見る。
     for index,page in enumerate(pages):
