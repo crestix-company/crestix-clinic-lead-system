@@ -33,6 +33,50 @@ def digest(value):
     return hashlib.sha256(dumps(value).encode()).hexdigest()
 
 
+# 正式採用したMHLW(医療情報ネット)診療科sidecar。Production DBには書き込まずATTACHする。
+# 旧clinic_mhlw_departments.sqlite3はrollback用に残すが、通常参照はこの定数だけを使う。
+MHLW_SIDECAR_PATH = Path(__file__).resolve().parents[2] / "mhlw_dry_run" / "clinic_mhlw_departments_final.sqlite3"
+
+
+class MhlwSidecarUnavailableError(RuntimeError):
+    pass
+
+
+def mhlw_sidecar_available():
+    """UIやAPI呼び出し側がMHLW診療科filterを安全に出し分けるための可用性チェック。"""
+    if not MHLW_SIDECAR_PATH.exists():
+        return False
+    try:
+        with sqlite3.connect(f"file:{MHLW_SIDECAR_PATH}?mode=ro", uri=True) as conn:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='clinic_mhlw_departments_final' AND type='table'"
+            ).fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+def mhlw_official_department_options():
+    """final sidecarに存在するナビイ正式診療科名（完全一致filter用）。"""
+    if not mhlw_sidecar_available():
+        return []
+    try:
+        with sqlite3.connect(f"file:{MHLW_SIDECAR_PATH}?mode=ro", uri=True) as conn:
+            return [r[0] for r in conn.execute(
+                "SELECT DISTINCT mhlw_department_name FROM clinic_mhlw_departments_final "
+                "WHERE mhlw_department_name<>'' ORDER BY mhlw_department_name")]
+    except sqlite3.Error as exc:
+        raise MhlwSidecarUnavailableError("ナビイ診療科sidecarを読み込めません。再生成または配布状態を確認してください。") from exc
+
+
+def _requires_mhlw_sidecar(filters):
+    return bool(filters and (filters.mhlw_official_departments or filters.crestix_sales_departments or filters.mhlw_departments))
+
+
+def _ensure_mhlw_sidecar(filters):
+    if _requires_mhlw_sidecar(filters) and not mhlw_sidecar_available():
+        raise MhlwSidecarUnavailableError("ナビイ診療科sidecarがありません。MHLW関連filterは利用できません。")
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS clinics(
@@ -158,6 +202,11 @@ class ClinicStore:
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=15000")
         conn.execute("PRAGMA journal_mode=WAL")
+        if MHLW_SIDECAR_PATH.exists():
+            try:
+                conn.execute("ATTACH DATABASE ? AS mhlwdb", (str(MHLW_SIDECAR_PATH),))
+            except sqlite3.Error:
+                pass
         try:
             yield conn
             conn.commit()
@@ -403,12 +452,15 @@ class ClinicStore:
             self._project(c,cid)
 
     def count(self, filters=None, as_of=None):
-        sql,args = where(filters or Filters(active_only=False,hp_only=False),as_of)
+        filters = filters or Filters(active_only=False,hp_only=False)
+        _ensure_mhlw_sidecar(filters)
+        sql,args = where(filters,as_of)
         with self.connect() as c:
             return c.execute("SELECT count(*) FROM clinics WHERE "+sql,args).fetchone()[0]
 
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         filters = filters or Filters(active_only=False,hp_only=False)
+        _ensure_mhlw_sidecar(filters)
         sql,args = where(filters,as_of)
         with self.connect() as c:
             rows = c.execute("SELECT id FROM clinics WHERE "+sql+" ORDER BY signal_count DESC,id LIMIT ? OFFSET ?",(*args,min(100000,max(0,int(limit))),max(0,int(offset)))).fetchall()
@@ -433,6 +485,7 @@ class ClinicStore:
         return records
 
     def funnel(self, filters, as_of=None):
+        _ensure_mhlw_sidecar(filters)
         conditions,args = ["merged_into IS NULL", "merge_hold=0"],[]
         with self.connect() as c:
             output = [("全マスター",c.execute("SELECT count(*) FROM clinics WHERE merged_into IS NULL").fetchone()[0])]

@@ -17,6 +17,10 @@ class Filters:
     prefectures: list[str] = field(default_factory=list)
     medical_types: list[str] = field(default_factory=list)
     departments: list[str] = field(default_factory=list)
+    mhlw_official_departments: list[str] = field(default_factory=list)
+    crestix_sales_departments: list[str] = field(default_factory=list)
+    # 後方互換: 旧mhlw_departmentsはCrestix営業カテゴリを意味する。
+    mhlw_departments: list[str] = field(default_factory=list)
     treatments: list[str] = field(default_factory=list)
     sales_pairs: list[tuple[str, str]] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
@@ -61,6 +65,17 @@ def clauses(f, as_of=None):
     for values, col, label in [(f.departments,"departments_json","診療科"), (f.treatments,"treatments_json","治療カテゴリ")]:
         if values:
             add(label, f"EXISTS(SELECT 1 FROM json_each({col}) WHERE value IN ({','.join('?' for _ in values)}))", *values)
+    if f.mhlw_official_departments:
+        # ナビイ正式名称は完全一致のみ。substring分類やCrestix名称への置換は行わない。
+        add("ナビイ正式診療科", "EXISTS(SELECT 1 FROM mhlwdb.clinic_mhlw_departments_final m WHERE m.clinic_id=clinics.id "
+            f"AND m.mhlw_department_name IN ({','.join('?' for _ in f.mhlw_official_departments)}))",
+            *f.mhlw_official_departments)
+    crestix_departments = list(dict.fromkeys([*f.crestix_sales_departments, *f.mhlw_departments]))
+    if crestix_departments:
+        # mhlw_departmentsは旧UI/APIとの後方互換。意味はCrestix営業カテゴリのまま維持する。
+        add("Crestix営業カテゴリ", "EXISTS(SELECT 1 FROM mhlwdb.clinic_mhlw_departments_final m WHERE m.clinic_id=clinics.id "
+            f"AND m.mapping_status IN ('EXACT','ALIAS') AND m.crestix_department IN ({','.join('?' for _ in crestix_departments)}))",
+            *crestix_departments)
     if f.sales_pairs:
         from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
         pair_sql, pair_args = [], []

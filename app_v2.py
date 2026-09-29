@@ -17,7 +17,7 @@ from src.enrichment.profiles import estimate_profile_age
 from src.enrichment.search_provider import TavilySearchProvider,SearchError,CachedSearch
 from src.enrichment.safe_web import WebError
 from src.normalizer.departments import DEPARTMENTS
-from src.master.store import ClinicStore
+from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_department_options,MhlwSidecarUnavailableError
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
@@ -31,8 +31,6 @@ HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"�
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
 JOB_LABELS = {"RUNNING":"実行中","PAUSED":"一時停止","COMPLETED":"完了","BUDGET":"検索上限で停止","RESET":"リセット済み"}
-
-
 @st.cache_resource
 def store_for(path):
     return ClinicStore(path)
@@ -105,6 +103,23 @@ def filters_ui(store,prefix="sales",defaults=None):
         medical = st.multiselect("医科・歯科",["医科","歯科"],default=defaults.medical_types,key=key("medical"))
         pref = st.multiselect("都道府県",prefs,default=[x for x in defaults.prefectures if x in prefs],key=key("pref"))
         deps = st.multiselect("診療科",DEPARTMENTS,default=defaults.departments,key=key("departments"))
+        if mhlw_sidecar_available():
+            try:
+                official_options = mhlw_official_department_options()
+            except MhlwSidecarUnavailableError as exc:
+                official_options = []
+                st.warning(str(exc))
+            mhlw_official_deps = st.multiselect("ナビイ正式診療科",official_options,
+                default=[x for x in defaults.mhlw_official_departments if x in official_options],key=key("mhlw_official_departments"),
+                help="厚生労働省 医療情報ネット（ナビイ）の正式診療科名で完全一致します。既存の厚生局由来「診療科」とは別軸です。")
+            crestix_options = list(sales_treatment_master())
+            legacy_crestix_defaults = defaults.crestix_sales_departments or defaults.mhlw_departments
+            crestix_deps = st.multiselect("Crestix営業カテゴリ",crestix_options,
+                default=[x for x in legacy_crestix_defaults if x in crestix_options],key=key("crestix_sales_departments"),
+                help="ナビイ正式診療科から明示mappingした営業用カテゴリです。正式診療科名を上書きしません。")
+        else:
+            mhlw_official_deps, crestix_deps = [], []
+            st.caption("ナビイ診療科sidecarがないため、ナビイ正式診療科・Crestix営業カテゴリfilterは利用できません。既存filterは通常どおり利用できます。")
         ranks = st.multiselect("HPランク",["A","B","C","D","NO_HP","UNKNOWN"],default=defaults.ranks,key=key("ranks"),format_func=lambda x:{"NO_HP":"HPなし","UNKNOWN":"未評価"}.get(x,x))
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
@@ -117,9 +132,22 @@ def filters_ui(store,prefix="sales",defaults=None):
     keyword = st.text_input("医院名・電話番号・UUIDで検索",value=defaults.keyword,key=key("keyword"))
     st.caption("条件同士はAND。診療科・治療カテゴリなど同じ項目の複数選択はORです。HP未発見は「存在しない」と断定した状態ではありません。")
     return Filters(active_only=active,hp_only=hp,recent_only=recent,age_min=age/100 if age is not None else None,
-                   medical_types=medical,prefectures=pref,departments=deps,ranks=ranks,treatments=treatments,
+                   medical_types=medical,prefectures=pref,departments=deps,mhlw_official_departments=mhlw_official_deps,
+                   crestix_sales_departments=crestix_deps,ranks=ranks,treatments=treatments,
                    ad_min=ad_min,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword,
                    scope=scope)
+
+
+def show_mhlw_join_status(store):
+    """正式採用したfinal sidecarの連携状況を簡潔に表示する。"""
+    with store.connect() as c:
+        attached = {r[1] for r in c.execute("PRAGMA database_list")}
+        if "mhlwdb" not in attached:
+            st.info("ナビイ診療科sidecarが見つかりません。既存filterのみ利用できます。")
+            return
+        matched = c.execute("SELECT count(DISTINCT clinic_id) FROM mhlwdb.clinic_mhlw_departments_final").fetchone()[0]
+        total = c.execute("SELECT count(*) FROM clinics WHERE merged_into IS NULL").fetchone()[0]
+    st.caption(f"ナビイ診療科連携：{matched:,} / {total:,}医院（{matched/total:.2%}）｜未MATCHED/REVIEW：{total-matched:,}医院")
 
 
 def show_funnel(store,filters):
@@ -796,6 +824,8 @@ def sales_ui(store):
         defaults = Filters(**saved_filters)
     filters = filters_ui(store,"sales",defaults)
     st.session_state["selected_sales_filters"] = asdict(filters)
+    with st.expander("ナビイ診療科連携状況",expanded=False):
+        show_mhlw_join_status(store)
     with st.expander("選択条件での絞り込み件数",expanded=True):
         show_funnel(store,filters)
     listing(store,filters,"sales_results")

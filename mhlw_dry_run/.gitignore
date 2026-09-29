@@ -1,0 +1,8 @@
+# mhlw_dry_run/ 配下の生成物はGit管理しない（README.md参照・build_sidecar_db.pyで再生成可能）。
+# Pythonソース(*.py)・README.md・この.gitignore自体はGit管理対象。
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.csv
+*.json
+*.log
