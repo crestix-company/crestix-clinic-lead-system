@@ -18,6 +18,7 @@ from src.enrichment.search_provider import TavilySearchProvider,SearchError,Cach
 from src.enrichment.safe_web import WebError
 from src.normalizer.departments import DEPARTMENTS
 from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_department_options,MhlwSidecarUnavailableError
+from src.master.research_sidecar import research_sidecar_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
@@ -84,6 +85,7 @@ def filters_ui(store,prefix="sales",defaults=None):
     defaults = defaults or Filters()
     with store.connect() as c:
         prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
+        municipality_options = [r[0] for r in c.execute("SELECT DISTINCT municipality_of(address) FROM clinics WHERE municipality_of(address)<>'' ORDER BY 1")]
     treatment_names = treatment_category_names()
     def key(name):
         return prefix+"_"+name
@@ -103,6 +105,7 @@ def filters_ui(store,prefix="sales",defaults=None):
     with cols[1]:
         medical = st.multiselect("医科・歯科",["医科","歯科"],default=defaults.medical_types,key=key("medical"))
         pref = st.multiselect("都道府県",prefs,default=[x for x in defaults.prefectures if x in prefs],key=key("pref"))
+        muni = st.multiselect("市区町村",municipality_options,default=[x for x in defaults.municipalities if x in municipality_options],key=key("municipalities"))
         deps = st.multiselect("診療科",DEPARTMENTS,default=defaults.departments,key=key("departments"))
         if mhlw_sidecar_available():
             try:
@@ -125,6 +128,20 @@ def filters_ui(store,prefix="sales",defaults=None):
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
         treatments = st.multiselect("治療カテゴリ",treatment_names,default=defaults.treatments,key=key("treatments"))
+        if research_sidecar_available():
+            try:
+                hp_treatment_options = treatment_research_category_options()
+            except ResearchSidecarUnavailableError as exc:
+                hp_treatment_options = []
+                st.warning(str(exc))
+            hp_treatments = st.multiselect("HP治療カテゴリ（Treatment Research・CONFIRMEDのみ）",hp_treatment_options,
+                default=[x for x in defaults.hp_treatment_categories if x in hp_treatment_options],key=key("hp_treatment_categories"),
+                help="公式HP上でCONFIRMED（提供確認済み）の治療カテゴリのみ営業対象にします。既存「治療カテゴリ」（厚生局treatments_json由来）とは別軸です。")
+            research_status = st.multiselect("Research Status",RESEARCH_STATUS_UI_OPTIONS,default=defaults.research_status,key=key("research_status"),
+                help="医院のTreatment Research調査状況で絞り込みます。NOT_RESEARCHEDは未調査の医院です。")
+        else:
+            hp_treatments, research_status = [], []
+            st.caption("Treatment Research sidecarがないため、HP治療カテゴリ・Research Status filterは利用できません。既存filterは通常どおり利用できます。")
         ad_options = ad_count_options(store)
         ad_min = st.selectbox("広告・集客施策数",ad_options,index=ad_options.index(defaults.ad_min) if defaults.ad_min in ad_options else 0,format_func=ad_count_label,key=key("ad_min"))
         new = st.checkbox("前回の厚生局更新から追加された医院",value=defaults.new_only,key=key("new"))
@@ -133,8 +150,9 @@ def filters_ui(store,prefix="sales",defaults=None):
     keyword = st.text_input("医院名・電話番号・UUIDで検索",value=defaults.keyword,key=key("keyword"))
     st.caption("条件同士はAND。診療科・治療カテゴリなど同じ項目の複数選択はORです。HP未発見は「存在しない」と断定した状態ではありません。")
     return Filters(active_only=active,hp_only=hp,recent_only=recent,age_min=age/100 if age is not None else None,
-                   medical_types=medical,prefectures=pref,departments=deps,mhlw_official_departments=mhlw_official_deps,
+                   medical_types=medical,prefectures=pref,municipalities=muni,departments=deps,mhlw_official_departments=mhlw_official_deps,
                    crestix_sales_departments=crestix_deps,ranks=ranks,treatments=treatments,
+                   hp_treatment_categories=hp_treatments,research_status=research_status,
                    ad_min=ad_min,owner_equal=equal,uuid_mode=uid,new_only=new,recent_opening=opening,maps_confirmed_only=maps_confirmed,signals=signals,keyword=keyword,
                    scope=scope)
 
