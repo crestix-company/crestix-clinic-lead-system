@@ -40,6 +40,20 @@ def canonical_page(url):
     return p._replace(query="",fragment="").geturl()
 
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_text(value):
+    """Strip NUL and other CSV/parser-breaking control chars from fetched-page text.
+
+    Keeps tab/newline/carriage-return, Japanese text and punctuation intact; only
+    removes bytes that a CSV parser (or Excel) treats as corrupt binary markers.
+    """
+    if not isinstance(value, str):
+        return value
+    return _CONTROL_CHARS_RE.sub("", value)
+
+
 @dataclass
 class Page:
     url: str
@@ -52,15 +66,15 @@ class Page:
 
     def __post_init__(self):
         soup = BeautifulSoup(self.html,"html.parser")
-        self.title = soup.title.get_text(" ",strip=True) if soup.title else ""
-        self.headings = " ".join(x.get_text(" ",strip=True) for x in soup.select("h1,h2"))
-        self.links = [{"url":urljoin(self.url,a.get("href","")),"text":a.get_text(" ",strip=True)} for a in soup.select("a[href]")]
+        self.title = sanitize_text(soup.title.get_text(" ",strip=True) if soup.title else "")
+        self.headings = sanitize_text(" ".join(x.get_text(" ",strip=True) for x in soup.select("h1,h2")))
+        self.links = [{"url":urljoin(self.url,a.get("href","")),"text":sanitize_text(a.get_text(" ",strip=True))} for a in soup.select("a[href]")]
         for x in soup.select("script,style,noscript,template"):
             x.decompose()
-        self.text = soup.get_text(" ",strip=True)
+        self.text = sanitize_text(soup.get_text(" ",strip=True))
         for x in soup.select("nav,footer,header,aside,[role=navigation]"):
             x.decompose()
-        self.main_text = soup.get_text(" ",strip=True)
+        self.main_text = sanitize_text(soup.get_text(" ",strip=True))
 
     def evidence(self):
         return {"url":self.url,"title":self.title,"headings":self.headings[:2000],"text":self.main_text[:15000]}
