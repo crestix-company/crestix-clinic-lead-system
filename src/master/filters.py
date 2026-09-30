@@ -2,6 +2,7 @@ from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
+from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
 AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
@@ -15,6 +16,7 @@ class Filters:
     age_min: float | None = None
     ranks: list[str] = field(default_factory=list)
     prefectures: list[str] = field(default_factory=list)
+    municipalities: list[str] = field(default_factory=list)
     medical_types: list[str] = field(default_factory=list)
     departments: list[str] = field(default_factory=list)
     mhlw_official_departments: list[str] = field(default_factory=list)
@@ -22,6 +24,9 @@ class Filters:
     # 後方互換: 旧mhlw_departmentsはCrestix営業カテゴリを意味する。
     mhlw_departments: list[str] = field(default_factory=list)
     treatments: list[str] = field(default_factory=list)
+    # Phase7 Treatment Research（CONFIRMED根拠）ベースの新filter。旧treatments(treatments_json)とは別物。
+    hp_treatment_categories: list[str] = field(default_factory=list)
+    research_status: list[str] = field(default_factory=list)
     sales_pairs: list[tuple[str, str]] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
     ad_min: int = 0
@@ -47,6 +52,13 @@ def clauses(f, as_of=None):
         raise ValueError("対象データ（scope）の指定を確認してください。")
     if f.scope == SCOPE_LEGACY_PRE_NATIONAL:
         add("既存営業リスト（全国append前）", "first_seen_at<?", LEGACY_PRE_NATIONAL_CUTOFF)
+    # 病院・センターは厚生局マスターから削除しないが(README.md「病院・センター」節)、
+    # 通常の営業用Comdesk出力には含めない。UI count = CSV rowsを常に一致させるため、
+    # fixed_export.pyだけでなくFilter/一覧側にも同じ判定を適用する(選択で外せない必須条件)。
+    add("病院・センター除外（営業対象外）",
+        "NOT (exclude_reason IN ('hospital','center') "
+        "OR COALESCE(json_extract(effective_json,'$.facility_type'),'')='病院' "
+        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%')")
     if f.active_only:
         add("現存クリニック（一覧基準日）", "active=1")
     if f.hp_only:
@@ -61,6 +73,8 @@ def clauses(f, as_of=None):
                                (f.medical_types,"medical_type","医科・歯科"), (f.hot,"hot_status","アツさ")]:
         if values:
             add(label, f"{col} IN ({','.join('?' for _ in values)})", *values)
+    if f.municipalities:
+        add("市区町村", f"municipality_of(address) IN ({','.join('?' for _ in f.municipalities)})", *f.municipalities)
     # 診療科/治療の複数選択は同一項目内OR、項目間AND。特定シグナルは全選択AND。
     for values, col, label in [(f.departments,"departments_json","診療科"), (f.treatments,"treatments_json","治療カテゴリ")]:
         if values:
@@ -76,6 +90,26 @@ def clauses(f, as_of=None):
         add("Crestix営業カテゴリ", "EXISTS(SELECT 1 FROM mhlwdb.clinic_mhlw_departments_final m WHERE m.clinic_id=clinics.id "
             f"AND m.mapping_status IN ('EXACT','ALIAS') AND m.crestix_department IN ({','.join('?' for _ in crestix_departments)}))",
             *crestix_departments)
+    if f.hp_treatment_categories:
+        # Phase7 CONFIRMED根拠のみ営業対象。REVIEW/NOT_CONFIRMED/FETCH_FAILED/未調査は含めない。
+        # Navi正式診療科・Crestix営業カテゴリとは独立したclinic_id JOIN（Crestix9カテゴリへの限定なし）。
+        add("HP治療カテゴリ（CONFIRMED）",
+            f"EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r WHERE r.clinic_id=clinics.id "
+            f"AND r.treatment_category_name IN ({','.join('?' for _ in f.hp_treatment_categories)}) "
+            "AND r.research_status='CONFIRMED')",
+            *f.hp_treatment_categories)
+    if f.research_status:
+        statuses = [s for s in f.research_status if s != "NOT_RESEARCHED"]
+        parts, status_args = [], []
+        if statuses:
+            parts.append(
+                f"EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r WHERE r.clinic_id=clinics.id "
+                f"AND r.research_status IN ({','.join('?' for _ in statuses)}))"
+            )
+            status_args.extend(statuses)
+        if "NOT_RESEARCHED" in f.research_status:
+            parts.append(f"NOT EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r WHERE r.clinic_id=clinics.id)")
+        add("Research Status", "(" + " OR ".join(parts) + ")", *status_args)
     if f.sales_pairs:
         from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
         pair_sql, pair_args = [], []

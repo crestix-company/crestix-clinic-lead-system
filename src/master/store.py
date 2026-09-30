@@ -15,7 +15,8 @@ from src.io.output_writer import csv_bytes, xlsx_bytes
 from src.master.matching import match_record, medical_key, MasterMatch
 from src.master.filters import Filters, where, clauses
 from src.normalizer.phone import normalize_phone, tel_match_key
-from src.normalizer.address import normalize_address
+from src.normalizer.address import normalize_address, extract_municipality
+from src.master.research_sidecar import research_sidecar_path, research_sidecar_readonly_uri, RESEARCH_SIDECAR_ATTACH_NAME, ensure_research_sidecar
 from src.normalizer.clinic_name import normalize_clinic_name, normalize_person, person_from_owner
 from src.normalizer.departments import normalize_departments
 from src.utils.date_utils import parse_date, today_japan
@@ -207,6 +208,18 @@ class ClinicStore:
                 conn.execute("ATTACH DATABASE ? AS mhlwdb", (str(MHLW_SIDECAR_PATH),))
             except sqlite3.Error:
                 pass
+        # Treatment Research共通Runtime DB。Research Worker（別worktree/別プロセス）がWRITEし、
+        # ここはmode=ro URIでATTACHしREAD ONLYを物理的に強制する。パスはTREATMENT_RESEARCH_DB_PATHで上書き可。
+        research_db_path = research_sidecar_path()
+        if research_db_path.exists():
+            try:
+                conn.execute(
+                    f"ATTACH DATABASE ? AS {RESEARCH_SIDECAR_ATTACH_NAME}",
+                    (research_sidecar_readonly_uri(research_db_path),),
+                )
+            except sqlite3.Error:
+                pass
+        conn.create_function("municipality_of", 1, extract_municipality)
         try:
             yield conn
             conn.commit()
@@ -454,6 +467,7 @@ class ClinicStore:
     def count(self, filters=None, as_of=None):
         filters = filters or Filters(active_only=False,hp_only=False)
         _ensure_mhlw_sidecar(filters)
+        ensure_research_sidecar(filters)
         sql,args = where(filters,as_of)
         with self.connect() as c:
             return c.execute("SELECT count(*) FROM clinics WHERE "+sql,args).fetchone()[0]
@@ -461,6 +475,7 @@ class ClinicStore:
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         filters = filters or Filters(active_only=False,hp_only=False)
         _ensure_mhlw_sidecar(filters)
+        ensure_research_sidecar(filters)
         sql,args = where(filters,as_of)
         with self.connect() as c:
             rows = c.execute("SELECT id FROM clinics WHERE "+sql+" ORDER BY signal_count DESC,id LIMIT ? OFFSET ?",(*args,min(100000,max(0,int(limit))),max(0,int(offset)))).fetchall()
@@ -486,6 +501,7 @@ class ClinicStore:
 
     def funnel(self, filters, as_of=None):
         _ensure_mhlw_sidecar(filters)
+        ensure_research_sidecar(filters)
         conditions,args = ["merged_into IS NULL", "merge_hold=0"],[]
         with self.connect() as c:
             output = [("全マスター",c.execute("SELECT count(*) FROM clinics WHERE merged_into IS NULL").fetchone()[0])]
@@ -539,6 +555,8 @@ class ClinicStore:
 
     def export(self, filters, template_id=None, as_of=None):
         # template_idは既存呼び出しとの互換用。出力は入力形式によらず28列。
+        _ensure_mhlw_sidecar(filters)
+        ensure_research_sidecar(filters)
         from src.master.fixed_export import export_fixed
         return export_fixed(self, filters, as_of)
 

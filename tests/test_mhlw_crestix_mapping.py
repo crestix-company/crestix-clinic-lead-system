@@ -20,11 +20,17 @@ from src.master.store import ClinicStore, MHLW_SIDECAR_PATH, mhlw_sidecar_availa
 
 PRODUCTION_DB = Path(__file__).resolve().parents[1] / "data" / "clinics.sqlite3"
 
+# 2026-09-30: ISリーダー正式回答によりREVIEW 37件をALIASへ確定(crestix_department_mapping.py参照)。
+# 値は再生成したsidecarから確認した新しい正式値。旧値(ISリーダー回答前): 皮膚科1784,循環器内科1291,
+# 消化器内科1331,眼科952,糖尿病内科454,泌尿器科402,産婦人科293,美容整形外科154,歯科32、union 5144。
+# 2026-09-30(同日追記): fixed_export.pyだけにあった病院・センター除外をfilters.py側にも適用し、
+# UI count = CSV rowsを一致させた(count invariant整理)。除外適用前: 皮膚科1910,循環器内科1329,
+# 消化器内科1582,眼科953,糖尿病内科627,泌尿器科434,産婦人科603,美容整形外科395,歯科39、union 5690。
 EXPECTED_DEPARTMENT_COUNTS = {
-    "皮膚科": 1784, "循環器内科": 1291, "消化器内科": 1331, "眼科": 952, "糖尿病内科": 454,
-    "泌尿器科": 402, "産婦人科": 293, "美容整形外科": 154, "歯科": 32,
+    "皮膚科": 1900, "循環器内科": 1317, "消化器内科": 1574, "眼科": 947, "糖尿病内科": 624,
+    "泌尿器科": 429, "産婦人科": 590, "美容整形外科": 392, "歯科": 38,
 }
-EXPECTED_UNION_UNIQUE_CLINICS = 5144
+EXPECTED_UNION_UNIQUE_CLINICS = 5660
 
 
 class TestClassifyLogic:
@@ -155,4 +161,5 @@ class TestSidecarAbsentSafety:
     def test_existing_filters_unaffected_when_mhlw_departments_empty(self):
         store = ClinicStore(str(PRODUCTION_DB))
         # mhlw_departments=[]("指定なし")のときはATTACHの有無に関係なく常に安全に動く。
-        assert store.count(Filters(active_only=False, hp_only=False)) == 13970
+        # 13970は全legacy件数。病院・センター除外(必須条件)を差し引いた13254が正しい母数。
+        assert store.count(Filters(active_only=False, hp_only=False)) == 13254
