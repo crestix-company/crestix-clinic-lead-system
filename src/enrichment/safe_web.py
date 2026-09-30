@@ -196,7 +196,7 @@ class SafeFetcher:
         raise last_error or WebError("ページを取得できません。")
 
 
-PRIORITY = re.compile(r"内視鏡|白内障|緑内障|治療|手術|検査|処置|料金|費用|院長|医師紹介|経歴|略歴|医院紹介|診療時間|受付時間|診療|自費|予約|doctor|staff|profile|career|schedule|hours|treatment|endoscop|cataract|glaucoma|medical|price|fee|access|about|clinic|lp/",re.I)
+PRIORITY = re.compile(r"内視鏡|白内障|緑内障|治療|手術|施術|検査|処置|外来|料金|費用|院長|医師紹介|経歴|略歴|医院紹介|診療時間|受付時間|診療|自費|予約|doctor|staff|profile|career|schedule|hours|treatment|endoscop|cataract|glaucoma|medical|price|fee|access|about|clinic|lp/",re.I)
 EXCLUDE = re.compile(r"\.(?:pdf|jpe?g|png|gif|webp|svg|ico|zip|mp4|mp3|css|js|xlsx?)(?:$|[?#])",re.I)
 
 

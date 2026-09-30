@@ -1212,7 +1212,9 @@ treatment_categories:
     status: ACTIVE
     item_type: EXAM
     crestix_departments: [糖尿病内科]
-    aliases: [CGM, FreeStyleリブレ]
+    aliases: [CGM, FreeStyleリブレ, リブレ]
+    context_required_aliases:
+      リブレ: [糖尿病, 血糖, グルコース, 血糖モニタリング, センサー]
     source_sales_items: [CGM, FreeStyleリブレ]
     sales_filter_value: HIGH
   インスリン導入・療法:
@@ -1291,6 +1293,8 @@ treatment_categories:
     item_type: PROCEDURE
     crestix_departments: [循環器内科]
     aliases: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
+    context_required_aliases:
+      レーザー治療: [静脈瘤, 下肢静脈瘤, 下肢, 血管内]
     source_sales_items: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
     sales_filter_value: HIGH
   CPAP療法:
