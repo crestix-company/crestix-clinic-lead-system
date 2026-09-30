@@ -52,6 +52,13 @@ def clauses(f, as_of=None):
         raise ValueError("対象データ（scope）の指定を確認してください。")
     if f.scope == SCOPE_LEGACY_PRE_NATIONAL:
         add("既存営業リスト（全国append前）", "first_seen_at<?", LEGACY_PRE_NATIONAL_CUTOFF)
+    # 病院・センターは厚生局マスターから削除しないが(README.md「病院・センター」節)、
+    # 通常の営業用Comdesk出力には含めない。UI count = CSV rowsを常に一致させるため、
+    # fixed_export.pyだけでなくFilter/一覧側にも同じ判定を適用する(選択で外せない必須条件)。
+    add("病院・センター除外（営業対象外）",
+        "NOT (exclude_reason IN ('hospital','center') "
+        "OR COALESCE(json_extract(effective_json,'$.facility_type'),'')='病院' "
+        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%')")
     if f.active_only:
         add("現存クリニック（一覧基準日）", "active=1")
     if f.hp_only:

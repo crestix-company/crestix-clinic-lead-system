@@ -97,3 +97,36 @@ def test_ui_count_equals_query_rows_equals_csv_rows_with_multi_department_and_tr
 
     research_status_combo = Filters(active_only=False, hp_only=False, research_status=["CONFIRMED", "REVIEW"])
     assert _assert_invariant(store, research_status_combo) == 2
+
+
+def test_hospital_and_center_excluded_from_count_query_and_csv_alike(tmp_path, monkeypatch):
+    """病院・センターはComdesk出力に含めない(README.md「病院・センター」節)という営業仕様は、
+    fixed_export.pyだけでなくUI count/query側にも同じ条件で適用され、
+    UI count = query rows = CSV rowsが常に一致することを確認する(2026-09-30 count invariant整理)。
+    """
+    store = ClinicStore(tmp_path / "hospital_exclusion.db")
+    records = sample_records()
+    records.append({
+        "clinic_id": "sample-hospital", "clinic_name": "架空総合病院", "phone": "03-0000-9001",
+        "address": "東京都千代田区架空町9-1-1", "prefecture": "東京都", "medical_type": "医科", "facility_type": "診療所",
+        "status": "現存", "owner_name": "見本 病院郎", "manager_name": "見本 病院郎", "departments": "消化器内科",
+        "designation_date": "2020-04-01", "as_of": records[0]["as_of"], "registration_reason": "新規", "source_url": "架空サンプル",
+    })
+    records.append({
+        "clinic_id": "sample-center", "clinic_name": "架空医療センター", "phone": "03-0000-9002",
+        "address": "東京都千代田区架空町9-2-1", "prefecture": "東京都", "medical_type": "医科", "facility_type": "診療所",
+        "status": "現存", "owner_name": "見本 円太郎", "manager_name": "見本 円太郎", "departments": "循環器内科",
+        "designation_date": "2020-04-01", "as_of": records[0]["as_of"], "registration_reason": "新規", "source_url": "架空サンプル",
+    })
+    store.import_master(records)
+
+    baseline = Filters(active_only=False, hp_only=False)
+    names = {row["clinic_name"] for row in store.query(baseline, limit=100)}
+    assert "架空総合病院" not in names
+    assert "架空医療センター" not in names
+    assert _assert_invariant(store, baseline) == len(records) - 2
+
+    # 「消化器内科」「循環器内科」は病院・センター側にも付けてあるので、Filter自体はヒットしても
+    # 除外条件で弾かれ、結局は青空内視鏡クリニック(消化器内科)・若葉眼科医院(眼科)の2件だけが残る。
+    multi_department = Filters(active_only=False, hp_only=False, departments=["消化器内科", "循環器内科", "眼科"])
+    assert _assert_invariant(store, multi_department) == 2

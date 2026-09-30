@@ -128,13 +128,10 @@ def export_fixed(store, filters, as_of=None):
             row["id"]: (json.loads(row["headers_json"]), json.loads(row["mapping_json"]))
             for row in connection.execute("SELECT * FROM templates")
         }
+        # 病院・センター除外はsrc/master/filters.pyのwhere()に統合済み（UI count = CSV rowsを一致させるため）。
         records = connection.execute("SELECT id FROM clinics WHERE " + sql + " ORDER BY id", args).fetchall()
         for item in records:
             data = store._get(connection, item["id"])
-            name = str(data.get("clinic_name", "") or "")
-            facility = str(data.get("facility_type", "") or "")
-            if data.get("exclude_reason") in {"hospital","center"} or facility == "病院" or "病院" in name or "センター" in name:
-                continue
             originals = connection.execute(
                 "SELECT * FROM comdesk_original_rows WHERE clinic_id=? ORDER BY (uuid<>'') DESC,id",
                 (data["id"],),
