@@ -20,11 +20,14 @@ from src.master.store import ClinicStore, MHLW_SIDECAR_PATH, mhlw_sidecar_availa
 
 PRODUCTION_DB = Path(__file__).resolve().parents[1] / "data" / "clinics.sqlite3"
 
+# 2026-09-30: ISリーダー正式回答によりREVIEW 37件をALIASへ確定(crestix_department_mapping.py参照)。
+# 値は再生成したsidecarから確認した新しい正式値。旧値(ISリーダー回答前): 皮膚科1784,循環器内科1291,
+# 消化器内科1331,眼科952,糖尿病内科454,泌尿器科402,産婦人科293,美容整形外科154,歯科32、union 5144。
 EXPECTED_DEPARTMENT_COUNTS = {
-    "皮膚科": 1784, "循環器内科": 1291, "消化器内科": 1331, "眼科": 952, "糖尿病内科": 454,
-    "泌尿器科": 402, "産婦人科": 293, "美容整形外科": 154, "歯科": 32,
+    "皮膚科": 1910, "循環器内科": 1329, "消化器内科": 1582, "眼科": 953, "糖尿病内科": 627,
+    "泌尿器科": 434, "産婦人科": 603, "美容整形外科": 395, "歯科": 39,
 }
-EXPECTED_UNION_UNIQUE_CLINICS = 5144
+EXPECTED_UNION_UNIQUE_CLINICS = 5690
 
 
 class TestClassifyLogic:

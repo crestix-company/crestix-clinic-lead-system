@@ -12,9 +12,11 @@ import src.master.store as store_module
 ROOT = Path(__file__).resolve().parents[1]
 FINAL = ROOT / "mhlw_dry_run" / "clinic_mhlw_departments_final.sqlite3"
 DB = ROOT / "data" / "clinics.sqlite3"
+# 2026-09-30: ISリーダー正式回答によりREVIEW 37件をALIASへ確定(mhlw_dry_run/crestix_department_mapping.py)。
+# 旧値(ISリーダー回答前): 消化器内科1331,眼科952,糖尿病内科454,泌尿器科402,循環器内科1291,皮膚科1784,歯科32,美容整形外科154,産婦人科293。
 EXPECTED_CATEGORIES = {
-    "消化器内科": 1331, "眼科": 952, "糖尿病内科": 454, "泌尿器科": 402,
-    "循環器内科": 1291, "皮膚科": 1784, "歯科": 32, "美容整形外科": 154, "産婦人科": 293,
+    "消化器内科": 1582, "眼科": 953, "糖尿病内科": 627, "泌尿器科": 434,
+    "循環器内科": 1329, "皮膚科": 1910, "歯科": 39, "美容整形外科": 395, "産婦人科": 603,
 }
 
 missing = pytest.mark.skipif(not (FINAL.exists() and DB.exists()), reason="final sidecar/Production DB not generated")
@@ -77,7 +79,7 @@ def test_official_and_crestix_axes_have_or_within_and_between_axes():
     assert store.count(Filters(active_only=False, hp_only=False,
         mhlw_official_departments=["心療内科", "糖尿病内科"])) == 1249
     assert store.count(Filters(active_only=False, hp_only=False,
-        crestix_sales_departments=["眼科", "皮膚科"])) == 2677
+        crestix_sales_departments=["眼科", "皮膚科"])) == 2797
     assert store.count(Filters(active_only=False, hp_only=False,
         mhlw_official_departments=["消化器内科"], crestix_sales_departments=["消化器内科"])) == 1331
 
