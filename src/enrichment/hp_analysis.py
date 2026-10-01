@@ -28,16 +28,41 @@ def domain_is(url, domain):
 
 
 def is_official_candidate(url):
-    p = urlparse(url)
-    return p.scheme in {"http","https"} and bool(host(url)) and not any(domain_is(url,d) for d in NON_OFFICIAL)
+    try:
+        p = urlparse(url)
+        return p.scheme in {"http","https"} and bool(host(url)) and not any(domain_is(url,d) for d in NON_OFFICIAL)
+    except (ValueError, UnicodeError):
+        return False
 
 
 def canonical_page(url):
-    p = urlparse(urldefrag(url)[0])
-    if p.scheme not in {"http","https"} or not p.hostname:
+    try:
+        p = urlparse(urldefrag(url)[0])
+        if p.scheme not in {"http","https"} or not p.hostname:
+            return ""
+        # 計測パラメータとクエリの無限ループを避ける。通常HTMLページだけを対象。
+        return p._replace(query="",fragment="").geturl()
+    except (ValueError, UnicodeError):
         return ""
-    # 計測パラメータとクエリの無限ループを避ける。通常HTMLページだけを対象。
-    return p._replace(query="",fragment="").geturl()
+
+
+def _safe_join(base_url, href):
+    """Resolve only fetchable HTTP(S) links; malformed hrefs are ignored per-link."""
+    if not isinstance(href, str):
+        return ""
+    href = href.strip()
+    if not href or href.startswith("#"):
+        return ""
+    if href.lower().startswith(("mailto:", "tel:", "javascript:", "data:")):
+        return ""
+    try:
+        joined = urljoin(base_url, href)
+        parsed = urlparse(joined)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return ""
+        return joined
+    except (ValueError, UnicodeError):
+        return ""
 
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -68,7 +93,11 @@ class Page:
         soup = BeautifulSoup(self.html,"html.parser")
         self.title = sanitize_text(soup.title.get_text(" ",strip=True) if soup.title else "")
         self.headings = sanitize_text(" ".join(x.get_text(" ",strip=True) for x in soup.select("h1,h2")))
-        self.links = [{"url":urljoin(self.url,a.get("href","")),"text":sanitize_text(a.get_text(" ",strip=True))} for a in soup.select("a[href]")]
+        self.links = []
+        for a in soup.select("a[href]"):
+            joined = _safe_join(self.url, a.get("href", ""))
+            if joined:
+                self.links.append({"url":joined,"text":sanitize_text(a.get_text(" ",strip=True))})
         for x in soup.select("script,style,noscript,template"):
             x.decompose()
         self.text = sanitize_text(soup.get_text(" ",strip=True))
