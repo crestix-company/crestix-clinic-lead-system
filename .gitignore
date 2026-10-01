@@ -28,3 +28,9 @@ node_modules/
 /data/clinics.sqlite3-wal
 /data/clinics.sqlite3-shm
 /data/clinics.sqlite3-journal
+
+# Phase 7 Full Run: 医院一覧・HP URL・進捗・キャッシュ等の生成物（Gitへ入れない）。
+# manifest/progress/cacheのスキーマはsource(scripts/*.py)側で管理する。
+/data/manifests/
+/data/research_worker/
+.venv_research/
