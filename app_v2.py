@@ -18,7 +18,7 @@ from src.enrichment.search_provider import TavilySearchProvider,SearchError,Cach
 from src.enrichment.safe_web import WebError
 from src.normalizer.departments import DEPARTMENTS
 from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_department_options,MhlwSidecarUnavailableError
-from src.master.research_sidecar import research_sidecar_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
+from src.master.research_sidecar import research_sidecar_available,clinic_research_status_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
@@ -137,11 +137,16 @@ def filters_ui(store,prefix="sales",defaults=None):
             hp_treatments = st.multiselect("HP治療カテゴリ（Treatment Research・CONFIRMEDのみ）",hp_treatment_options,
                 default=[x for x in defaults.hp_treatment_categories if x in hp_treatment_options],key=key("hp_treatment_categories"),
                 help="公式HP上でCONFIRMED（提供確認済み）の治療カテゴリのみ営業対象にします。既存「治療カテゴリ」（厚生局treatments_json由来）とは別軸です。")
-            research_status = st.multiselect("Research Status",RESEARCH_STATUS_UI_OPTIONS,default=defaults.research_status,key=key("research_status"),
-                help="医院のTreatment Research調査状況で絞り込みます。NOT_RESEARCHEDは未調査の医院です。")
         else:
-            hp_treatments, research_status = [], []
-            st.caption("Treatment Research sidecarがないため、HP治療カテゴリ・Research Status filterは利用できません。既存filterは通常どおり利用できます。")
+            hp_treatments = []
+            st.caption("Treatment Research sidecarがないため、HP治療カテゴリfilterは利用できません。既存filterは通常どおり利用できます。")
+        if clinic_research_status_available():
+            research_status = st.multiselect("Research Status",RESEARCH_STATUS_UI_OPTIONS,
+                default=[x for x in defaults.research_status if x in RESEARCH_STATUS_UI_OPTIONS],key=key("research_status"),
+                help="医院単位の調査状態（DONE/FETCH_FAILED/NOT_RESEARCHED）で絞り込みます。NOT_RESEARCHEDは該当医院の調査行が1件もない状態です。HP治療カテゴリfilterとは独立した軸です。")
+        else:
+            research_status = []
+            st.caption("Treatment Research sidecar（clinic_research_status）がないため、Research Status filterは利用できません。既存filterは通常どおり利用できます。")
         ad_options = ad_count_options(store)
         ad_min = st.selectbox("広告・集客施策数",ad_options,index=ad_options.index(defaults.ad_min) if defaults.ad_min in ad_options else 0,format_func=ad_count_label,key=key("ad_min"))
         new = st.checkbox("前回の厚生局更新から追加された医院",value=defaults.new_only,key=key("new"))

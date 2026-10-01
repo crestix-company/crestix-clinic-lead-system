@@ -9,7 +9,7 @@ import sqlite3
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_HEADERS
 from src.master.filters import Filters
-from src.master.research_sidecar import RESEARCH_SIDECAR_ENV_VAR, RESEARCH_SIDECAR_TABLE
+from src.master.research_sidecar import CLINIC_RESEARCH_STATUS_TABLE, RESEARCH_SIDECAR_ENV_VAR, RESEARCH_SIDECAR_TABLE
 from src.master.samples import sample_records
 from src.master.store import ClinicStore
 
@@ -20,7 +20,7 @@ CREATE TABLE {RESEARCH_SIDECAR_TABLE}(
   clinic_id INTEGER NOT NULL,
   treatment_category_id TEXT NOT NULL,
   treatment_category_name TEXT NOT NULL,
-  research_status TEXT NOT NULL,
+  research_status TEXT NOT NULL CHECK(research_status IN ('CONFIRMED','REVIEW','NOT_CONFIRMED')),
   matched_alias TEXT NOT NULL DEFAULT '',
   source_url TEXT NOT NULL DEFAULT '',
   page_title TEXT NOT NULL DEFAULT '',
@@ -31,20 +31,45 @@ CREATE TABLE {RESEARCH_SIDECAR_TABLE}(
   researched_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY(clinic_id, treatment_category_id)
 );
+CREATE TABLE {CLINIC_RESEARCH_STATUS_TABLE}(
+  clinic_id INTEGER PRIMARY KEY,
+  research_status TEXT NOT NULL CHECK(research_status IN ('DONE','FETCH_FAILED')),
+  candidate_count INTEGER NOT NULL DEFAULT 0,
+  source_url TEXT NOT NULL DEFAULT '',
+  final_url TEXT NOT NULL DEFAULT '',
+  identity_verified INTEGER NOT NULL DEFAULT 0,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT NOT NULL DEFAULT '',
+  taxonomy_version TEXT NOT NULL DEFAULT '',
+  evidence_engine_version TEXT NOT NULL DEFAULT '',
+  manifest_id TEXT NOT NULL DEFAULT '',
+  git_commit_sha TEXT NOT NULL DEFAULT '',
+  researched_at TEXT NOT NULL DEFAULT ''
+);
 """
 
 
-def _make_sidecar(path, rows):
-    """テスト用合成sidecar。実際のResearch Worker出力ではない。"""
+def _make_sidecar(path, treatment_rows=(), status_rows=()):
+    """テスト用合成sidecar(clinic_treatment_research_final + clinic_research_status)。
+    実際のResearch Worker出力ではない。
+    """
     conn = sqlite3.connect(path)
     try:
         conn.executescript(CREATE_SQL)
-        conn.executemany(
-            f"INSERT INTO {RESEARCH_SIDECAR_TABLE}"
-            "(clinic_id,treatment_category_id,treatment_category_name,research_status)"
-            " VALUES(?,?,?,?)",
-            rows,
-        )
+        if treatment_rows:
+            conn.executemany(
+                f"INSERT INTO {RESEARCH_SIDECAR_TABLE}"
+                "(clinic_id,treatment_category_id,treatment_category_name,research_status)"
+                " VALUES(?,?,?,?)",
+                treatment_rows,
+            )
+        if status_rows:
+            conn.executemany(
+                f"INSERT INTO {CLINIC_RESEARCH_STATUS_TABLE}"
+                "(clinic_id,research_status,candidate_count)"
+                " VALUES(?,?,?)",
+                status_rows,
+            )
         conn.commit()
     finally:
         conn.close()
@@ -74,12 +99,21 @@ def test_ui_count_equals_query_rows_equals_csv_rows_with_multi_department_and_tr
     gastro_clinic = clinics["青空内視鏡クリニック"]
 
     sidecar_path = tmp_path / "treatment_research_final.sqlite3"
-    _make_sidecar(str(sidecar_path), [
-        # 同一医院が複数treatment_categoryでCONFIRMEDを持つ（一覧・CSVは1行のまま）。
-        (gastro_clinic, "gastroscopy", "胃カメラ", "CONFIRMED"),
-        (gastro_clinic, "colonoscopy", "大腸カメラ", "CONFIRMED"),
-        (clinics["若葉眼科医院"], "cataract", "白内障手術", "REVIEW"),
-    ])
+    _make_sidecar(
+        str(sidecar_path),
+        treatment_rows=[
+            # 同一医院が複数treatment_categoryでCONFIRMEDを持つ（一覧・CSVは1行のまま）。
+            (gastro_clinic, "gastroscopy", "胃カメラ", "CONFIRMED"),
+            (gastro_clinic, "colonoscopy", "大腸カメラ", "CONFIRMED"),
+            (clinics["若葉眼科医院"], "cataract", "白内障手術", "REVIEW"),
+        ],
+        status_rows=[
+            # 医院単位Research Status(clinic_research_status)はTreatment単位行とは独立に持つ。
+            (gastro_clinic, "DONE", 2),
+            (clinics["若葉眼科医院"], "DONE", 0),
+            (clinics["日向皮膚科"], "FETCH_FAILED", 0),
+        ],
+    )
     monkeypatch.setenv(RESEARCH_SIDECAR_ENV_VAR, str(sidecar_path))
 
     baseline = Filters(active_only=False, hp_only=False)
@@ -95,8 +129,11 @@ def test_ui_count_equals_query_rows_equals_csv_rows_with_multi_department_and_tr
     review_excluded = Filters(active_only=False, hp_only=False, hp_treatment_categories=["白内障手術"])
     assert _assert_invariant(store, review_excluded) == 0
 
-    research_status_combo = Filters(active_only=False, hp_only=False, research_status=["CONFIRMED", "REVIEW"])
-    assert _assert_invariant(store, research_status_combo) == 2
+    research_status_combo = Filters(active_only=False, hp_only=False, research_status=["DONE", "FETCH_FAILED"])
+    assert _assert_invariant(store, research_status_combo) == 3
+
+    not_researched = Filters(active_only=False, hp_only=False, research_status=["NOT_RESEARCHED"])
+    assert _assert_invariant(store, not_researched) == 1
 
 
 def test_hospital_and_center_excluded_from_count_query_and_csv_alike(tmp_path, monkeypatch):
