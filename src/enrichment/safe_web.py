@@ -97,10 +97,33 @@ class PinnedTransport:
             return WebResponse(response.status,headers,bytes(data))
         except WebError:
             raise
-        except (OSError,ssl.SSLError,http.client.HTTPException,ValueError):
+        except ssl.SSLError:
+            # Certificate/TLS validation failures are permanent for this host, not a
+            # transient network blip -- keep this message distinct (no "タイムアウト"/
+            # "HTTP 5xx" substring) so callers' retry-on-transient-error checks never
+            # match it and retry a certificate problem.
+            raise WebError("SSL証明書の検証に失敗しました。") from None
+        except (OSError,http.client.HTTPException,ValueError):
             raise WebError("接続・SSL・タイムアウトのエラーです。") from None
         finally:
             conn.close()
+
+
+MAX_RETRY_AFTER_SECONDS = 30  # 429のRetry-Afterがこれを超える場合は再試行せずFETCH_FAILEDとする
+MAX_ROBOTS_REDIRECT_HOPS = 5  # RFC 9309 §2.3.1.2: robots.txt専用、別authorityへのredirectを許可
+
+
+def _parse_retry_after(value):
+    """Only the numeric-seconds form of Retry-After (the common case for rate
+    limiting). The HTTP-date form is treated as "no usable wait time" -- safer
+    to skip the retry than to mis-parse a date and wait the wrong amount."""
+    if value is None:
+        return None
+    try:
+        seconds = int(str(value).strip())
+    except ValueError:
+        return None
+    return seconds if seconds >= 0 else None
 
 
 class SafeFetcher:
@@ -109,19 +132,51 @@ class SafeFetcher:
         self.timeout,self.max_bytes,self.interval,self.sleep = timeout,max_bytes,interval,sleeper
         self.last,self.robots,self.blocked,self.delays = {},{},set(),{}
 
-    def _get(self,url,allowed_host=None,plain=False):
+    def _get(self,url,allowed_host=None,max_cross_domain_hops=0):
+        """max_cross_domain_hops is 0 for every existing caller (support-link
+        fetches, crawl() page fetches) -- identical behavior to before. Only the
+        initial official-HP fetch in research_worker.py passes 1, to allow a
+        single legitimate cross-domain redirect (a real domain migration)
+        through to the caller for identity() verification -- see
+        _check_or_consume_hop(). It is never applied inside crawl(). robots.txt
+        fetching does not use this method at all -- see _fetch_robots_text(),
+        which has its own, more permissive, cross-authority redirect policy
+        (RFC 9309 §2.3.1.2) while applying the exact same validate_url/SSRF
+        checks at every hop."""
+        retried_rate_limit = False
+        cross_domain_hops_used = 0
+
+        def _check_or_consume_hop(target_host):
+            nonlocal allowed_host, cross_domain_hops_used
+            if not allowed_host or _same_site_host(target_host, allowed_host):
+                return
+            if cross_domain_hops_used < max_cross_domain_hops:
+                cross_domain_hops_used += 1
+                allowed_host = target_host
+                return
+            raise WebError("別ドメインへのリダイレクトを停止しました。")
+
         for _ in range(5):
             validate_url(url,resolve=False)
             h = host(url)
             if h in self.blocked:
                 raise WebError("アクセス制限があるため、このサイトの取得を停止しました。")
-            if allowed_host and not _same_site_host(h, allowed_host):
-                raise WebError("別ドメインへのリダイレクトを停止しました。")
+            _check_or_consume_hop(h)
             wait = max(self.interval,self.delays.get(h,0))-(time.monotonic()-self.last.get(h,0))
             if wait>0:
                 self.sleep(wait)
             self.last[h] = time.monotonic()
             response = self.transport.get(url,self.timeout,self.max_bytes)
+            if response.status==429 and not retried_rate_limit:
+                # Bounded, Retry-After-respecting single retry -- never hammer a
+                # rate-limited host repeatedly. Missing or excessive Retry-After
+                # means we cannot retry responsibly, so fall through to the normal
+                # 429 handling below (blocked + WebError, no retry).
+                retry_after = _parse_retry_after(response.headers.get("retry-after"))
+                if retry_after is not None and retry_after <= MAX_RETRY_AFTER_SECONDS:
+                    retried_rate_limit = True
+                    self.sleep(retry_after)
+                    continue
             if response.status in {401,403,429}:
                 self.blocked.add(h)
             if response.status in {301,302,303,307,308}:
@@ -129,34 +184,93 @@ class SafeFetcher:
                     raise WebError("移転先URLが不明です。")
                 url = urljoin(url,response.headers["location"])
                 validate_url(url,resolve=False)
-                if allowed_host and not _same_site_host(host(url), allowed_host):
-                    raise WebError("別ドメインへのリダイレクトを停止しました。")
-                if not plain and not self.allowed(url):
+                _check_or_consume_hop(host(url))
+                if not self.allowed(url):
                     raise WebError("移転先のrobots.txtで取得が許可されていません。")
                 continue
-            if response.status==404 and plain:
-                return url,""
             if response.status!=200:
                 raise WebError(f"HTTP {response.status}。手動で確認してください。")
             if len(response.body)>self.max_bytes:
                 raise WebError("HTMLサイズが上限を超えました。")
             content_type = response.headers.get("content-type", "").lower()
-            if not plain and "html" not in content_type:
+            if "html" not in content_type:
                 raise WebError("HTMLページではありません。")
             encoding = re.search(r"charset=([\w-]+)",content_type)
-            dammit = UnicodeDammit(response.body,known_definite_encodings=[encoding[1]] if encoding else [],is_html=not plain)
+            dammit = UnicodeDammit(response.body,known_definite_encodings=[encoding[1]] if encoding else [],is_html=True)
             html = dammit.unicode_markup or ""
-            if not plain and re.search(r"verify you are human|checking your browser|cf-chl-|just a moment\.\.\.|アクセスが制限",html,re.I):
+            if re.search(r"verify you are human|checking your browser|cf-chl-|just a moment\.\.\.|アクセスが制限",html,re.I):
                 self.blocked.add(h)
                 raise WebError("アクセス確認画面のため取得できません。")
             return url,html
         raise WebError("リダイレクト回数の上限です。")
 
+    def _fetch_robots_text(self, origin):
+        """robots.txt-only redirect policy (RFC 9309 §2.3.1.2): unlike page
+        fetches, a robots.txt redirect MAY cross to a different authority/host
+        -- up to MAX_ROBOTS_REDIRECT_HOPS of them. Every hop still goes through
+        the exact same validate_url() SSRF/public-IP/port/userinfo checks as
+        any other fetch; this never weakens that.
+
+        Returns the robots.txt text to apply under `origin`'s OWN rules (the
+        text is parsed by the caller and cached under the ORIGINAL origin, not
+        the redirect destination), "" if robots.txt is legitimately absent
+        (RFC 9309: 404/4xx other than 429 -> unavailable -> no restrictions),
+        or None if the result cannot be trusted -- callers MUST fail closed
+        (block the fetch) on None, never silently treat it as "no
+        restrictions". None covers: unsafe destination, network-unreachable,
+        5xx, 429 (deliberately NOT treated like 404), a redirect loop beyond
+        the hop budget, and a 2xx response that is HTML without any robots
+        directive (e.g. a repurposed/expired domain's generic error page --
+        real example seen in production: a clinic's robots.txt redirecting to
+        a completely different business's live homepage)."""
+        current = origin + "/robots.txt"
+        for _ in range(MAX_ROBOTS_REDIRECT_HOPS + 1):
+            try:
+                # resolve=False here, matching _get()'s own per-hop convention: a
+                # cheap syntactic/IP-literal/userinfo/port check at this loop
+                # level. The real DNS-resolution-based public-IP check
+                # (resolve=True) happens inside self.transport.get() itself --
+                # PinnedTransport.get() calls validate_url(url) (default
+                # resolve=True) before every real connection, so this is not
+                # weakened for actual production traffic; it just keeps this
+                # method testable with a stub transport the same way every
+                # other SafeFetcher method already is.
+                validate_url(current, resolve=False)
+            except WebError:
+                return None
+            try:
+                response = self.transport.get(current, self.timeout, self.max_bytes)
+            except WebError:
+                return None
+            if response.status in {301,302,303,307,308} and response.headers.get("location"):
+                current = urljoin(current, response.headers["location"])
+                continue
+            if response.status == 429:
+                return None
+            if 400 <= response.status < 500:
+                return ""
+            if response.status != 200:
+                return None
+            if len(response.body) > self.max_bytes:
+                return None
+            content_type = response.headers.get("content-type", "").lower()
+            encoding = re.search(r"charset=([\w-]+)", content_type)
+            dammit = UnicodeDammit(response.body, known_definite_encodings=[encoding[1]] if encoding else [], is_html=False)
+            text = dammit.unicode_markup or ""
+            is_html = "html" in content_type or bool(re.search(r"(?i)<html|<!doctype html", text))
+            has_rep_directive = bool(re.search(r"(?im)^\s*(user-agent|allow|disallow|crawl-delay)\s*:", text))
+            if is_html and not has_rep_directive:
+                return None
+            return text
+        return None
+
     def allowed(self,url):
         p = urlsplit(url)
         origin = f"{p.scheme}://{p.netloc}"
         if origin not in self.robots:
-            _,text = self._get(origin+"/robots.txt",allowed_host=host(url),plain=True)
+            text = self._fetch_robots_text(origin)
+            if text is None:
+                raise WebError("robots.txtを安全に確認できないため取得を見送りました。")
             parser = RobotFileParser()
             parser.parse(text.splitlines())
             self.robots[origin] = parser
@@ -167,8 +281,10 @@ class SafeFetcher:
             self.delays[host(url)] = delay
         return self.robots[origin].can_fetch(USER_AGENT,url)
 
-    def fetch(self,url,allowed_host=None):
+    def fetch(self,url,allowed_host=None,max_cross_domain_hops=0):
         # 初回取得も別サイトへは追従しない。www有無だけ同一サイトとして許可する。
+        # max_cross_domain_hops>0のときだけ例外的に、その回数まで別hostへの
+        # redirectを許可する（呼び出し元が最終ページでidentity()検証する前提）。
         allowed_host = allowed_host or host(url)
         # Google Business Profile等が http:// を返しても、実サイトがHTTPS運用の
         # 場合がある。ブラウザ同様にHTTPSを先に試し、失敗時だけ元のHTTPへ戻す。
@@ -184,7 +300,7 @@ class SafeFetcher:
             try:
                 if not self.allowed(candidate):
                     raise WebError("robots.txtで取得が許可されていません。")
-                final,html = self._get(candidate,allowed_host)
+                final,html = self._get(candidate,allowed_host,max_cross_domain_hops=max_cross_domain_hops)
                 if final!=candidate and not self.allowed(final):
                     raise WebError("移転先のrobots.txtで取得が許可されていません。")
                 return Page(final,html)
