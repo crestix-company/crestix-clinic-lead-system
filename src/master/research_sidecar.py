@@ -15,6 +15,14 @@ sidecarとして使うと互いのプロセスが別々のSQLiteファイルを�
 sidecarが存在しない間はfilterが安全に0件扱いになるよう、既存のMHLW sidecar
 （src/master/store.py の MHLW_SIDECAR_PATH / mhlw_sidecar_available()）と同じ
 可用性チェックのパターンに揃える。
+
+2026-10-01: Research側がsidecarの契約を分離した（commit 90bb9fe）。
+  - clinic_treatment_research_final（Treatment単位・既存）: CONFIRMED/REVIEW/NOT_CONFIRMEDのみ。
+    HP治療カテゴリfilterは引き続きこのテーブルのCONFIRMED行だけを見る（変更なし）。
+  - clinic_research_status（新設・医院単位SSOT）: DONE/FETCH_FAILEDの2値、行が無ければNOT_RESEARCHED。
+    Research Status filter（医院単位の調査状態）はこのテーブルを見る。
+  両者は独立した軸であり、一方の値から他方を推測してはならない
+  （詳細: mhlw_dry_run/TREATMENT_RESEARCH_CONTRACT.md）。
 """
 import os
 import sqlite3
@@ -22,12 +30,18 @@ from pathlib import Path
 
 RESEARCH_SIDECAR_ENV_VAR = "TREATMENT_RESEARCH_DB_PATH"
 RESEARCH_SIDECAR_DEFAULT_PATH = Path.home() / "CrestixData" / "clinic-lead" / "treatment_research_final.sqlite3"
-RESEARCH_SIDECAR_TABLE = "clinic_treatment_research_final"
 RESEARCH_SIDECAR_ATTACH_NAME = "researchdb"
+
+# Treatment単位（HP治療カテゴリfilter用）。CONFIRMED/REVIEW/NOT_CONFIRMEDのみ。契約変更なし。
+RESEARCH_SIDECAR_TABLE = "clinic_treatment_research_final"
 RESEARCH_SIDECAR_QUALIFIED_TABLE = f"{RESEARCH_SIDECAR_ATTACH_NAME}.{RESEARCH_SIDECAR_TABLE}"
 
+# 医院単位SSOT（Research Status filter用）。DONE/FETCH_FAILEDのみ。行が無ければNOT_RESEARCHED。
+CLINIC_RESEARCH_STATUS_TABLE = "clinic_research_status"
+CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE = f"{RESEARCH_SIDECAR_ATTACH_NAME}.{CLINIC_RESEARCH_STATUS_TABLE}"
+
 # NOT_RESEARCHEDはテーブル上の値ではなく「該当clinic_idの行が1件もない」ことで表現する。
-RESEARCH_STATUS_VALUES = ("CONFIRMED", "REVIEW", "NOT_CONFIRMED", "FETCH_FAILED")
+RESEARCH_STATUS_VALUES = ("DONE", "FETCH_FAILED")
 RESEARCH_STATUS_UI_OPTIONS = (*RESEARCH_STATUS_VALUES, "NOT_RESEARCHED")
 
 
@@ -46,14 +60,26 @@ def research_sidecar_readonly_uri(path=None):
 
 
 def research_sidecar_available():
-    """UI/API呼び出し側がTreatment Research filterを安全に出し分けるための可用性チェック。"""
+    """HP治療カテゴリfilter（clinic_treatment_research_final）が安全に利用できるかの可用性チェック。"""
+    return _sidecar_table_exists(RESEARCH_SIDECAR_TABLE)
+
+
+def clinic_research_status_available():
+    """Research Status filter（医院単位SSOT clinic_research_status）が安全に利用できるかの可用性チェック。
+    clinic_treatment_research_finalとは独立したテーブルのため、別途チェックする
+    （HP治療カテゴリとResearch Statusは互いに影響しない独立軸: §5 参照）。
+    """
+    return _sidecar_table_exists(CLINIC_RESEARCH_STATUS_TABLE)
+
+
+def _sidecar_table_exists(table_name):
     path = research_sidecar_path()
     if not path.exists():
         return False
     try:
         with sqlite3.connect(research_sidecar_readonly_uri(path), uri=True) as conn:
             return conn.execute(
-                f"SELECT 1 FROM sqlite_master WHERE name='{RESEARCH_SIDECAR_TABLE}' AND type='table'"
+                "SELECT 1 FROM sqlite_master WHERE name=? AND type='table'", (table_name,)
             ).fetchone() is not None
     except sqlite3.Error:
         return False
@@ -79,7 +105,16 @@ def requires_research_sidecar(filters):
 
 
 def ensure_research_sidecar(filters):
-    if requires_research_sidecar(filters) and not research_sidecar_available():
+    """HP治療カテゴリとResearch Statusは独立したテーブルを読むため、使われている方だけを
+    個別にチェックする（片方のsidecarが欠けていても他方のfilterは動作し続ける）。
+    """
+    if not filters:
+        return
+    if filters.hp_treatment_categories and not research_sidecar_available():
         raise ResearchSidecarUnavailableError(
-            "Treatment Research sidecarがありません。HP治療カテゴリ・Research Status filterは利用できません。"
+            "Treatment Research sidecarがありません。HP治療カテゴリfilterは利用できません。"
+        )
+    if filters.research_status and not clinic_research_status_available():
+        raise ResearchSidecarUnavailableError(
+            "Treatment Research sidecar（clinic_research_status）がありません。Research Status filterは利用できません。"
         )

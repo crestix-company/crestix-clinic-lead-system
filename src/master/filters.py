@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
-from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE
+from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
 AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
@@ -99,16 +99,18 @@ def clauses(f, as_of=None):
             "AND r.research_status='CONFIRMED')",
             *f.hp_treatment_categories)
     if f.research_status:
+        # 医院単位の調査状態（SSOT: clinic_research_status）。clinic_treatment_research_final
+        # （Treatment単位・HP治療カテゴリ用）とは独立したテーブルで、一方の値から他方を推測しない。
         statuses = [s for s in f.research_status if s != "NOT_RESEARCHED"]
         parts, status_args = [], []
         if statuses:
             parts.append(
-                f"EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r WHERE r.clinic_id=clinics.id "
-                f"AND r.research_status IN ({','.join('?' for _ in statuses)}))"
+                f"EXISTS(SELECT 1 FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs WHERE rs.clinic_id=clinics.id "
+                f"AND rs.research_status IN ({','.join('?' for _ in statuses)}))"
             )
             status_args.extend(statuses)
         if "NOT_RESEARCHED" in f.research_status:
-            parts.append(f"NOT EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r WHERE r.clinic_id=clinics.id)")
+            parts.append(f"NOT EXISTS(SELECT 1 FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs WHERE rs.clinic_id=clinics.id)")
         add("Research Status", "(" + " OR ".join(parts) + ")", *status_args)
     if f.sales_pairs:
         from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
