@@ -1,7 +1,8 @@
-taxonomy_version: 7A-v2
-previous_taxonomy_version: 7A-v1
+taxonomy_version: 7A-v3
+previous_taxonomy_version: 7A-v2
 legacy_taxonomy_status: DEPRECATED_COMPATIBILITY_SNAPSHOT
 taxonomy_change_log:
+- Add department-context guards for ambiguous cross-specialty aliases while preserving explicit treatment-name rescue.
 - Split disease/department labels from treatment, examination, procedure, and surgery categories.
 - Added a separate clinical_focus axis for disease and specialty-focus signals.
 - Restricted Phase 7-B eligibility to status ACTIVE and sales_filter_value HIGH or MEDIUM.
@@ -1295,6 +1296,12 @@ treatment_categories:
     aliases: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
     context_required_aliases:
       レーザー治療: [静脈瘤, 下肢静脈瘤, 下肢, 血管内]
+      高周波治療: [静脈瘤, 下肢静脈瘤, 下肢, 血管内]
+      グルー治療: [静脈瘤, 下肢静脈瘤, 血管, ベナシール]
+    cross_department_guard:
+      context_required_aliases:
+        レーザー治療: [静脈瘤, 下肢静脈瘤, 血管内]
+        高周波治療: [静脈瘤, 下肢静脈瘤, 血管内]
     source_sales_items: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
     sales_filter_value: HIGH
   CPAP療法:
@@ -1394,6 +1401,14 @@ treatment_categories:
     item_type: PROCEDURE
     crestix_departments: [歯科]
     aliases: [インプラント, インプラント治療, All-on-4, 即時荷重インプラント, 骨造成, GBR, サイナスリフト]
+    context_required_aliases:
+      インプラント: [歯科, 歯, 口腔, 顎骨, All-on-4, GBR, サイナスリフト]
+      インプラント治療: [歯科, 歯, 口腔, 顎骨, All-on-4, GBR, サイナスリフト]
+      骨造成: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト]
+    cross_department_guard:
+      context_required_aliases:
+        インプラント: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト, All-on-4]
+        インプラント治療: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト, All-on-4]
     source_sales_items: [インプラント, インプラント治療, All-on-4, 即時荷重インプラント, 骨造成, GBR, サイナスリフト]
     sales_filter_value: HIGH
   豊胸手術:
@@ -1422,6 +1437,11 @@ treatment_categories:
     item_type: SURGERY
     crestix_departments: [美容整形外科]
     aliases: [骨切り]
+    context_required_aliases:
+      骨切り: [輪郭, 顎, エラ, 頬骨, 美容]
+    cross_department_guard:
+      context_required_aliases:
+        骨切り: [輪郭, 顎, エラ, 頬骨, 美容]
     source_sales_items: [骨切り]
     sales_filter_value: HIGH
   鼻形成術:
