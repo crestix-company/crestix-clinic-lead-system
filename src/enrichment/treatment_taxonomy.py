@@ -15,9 +15,9 @@ from src.utils.config import ROOT, read_config
 
 TAXONOMY_PATH = ROOT / "config/treatment_taxonomy.yml"
 STATUSES = frozenset({"CONFIRMED", "REVIEW", "NOT_CONFIRMED"})
-RULE_VERSION = "7A-v2"
+RULE_VERSION = "7A-v3"
 LEGACY_RULE_VERSION = "7A-v1"
-EVIDENCE_ENGINE_VERSION = "phase7b-context-v3"
+EVIDENCE_ENGINE_VERSION = "phase7b-context-v4"
 VALID_ITEM_TYPES = frozenset({"DEPARTMENT", "DISEASE", "EXAM", "TREATMENT", "PROCEDURE", "SURGERY", "OTHER"})
 VALID_TAXONOMY_STATUSES = frozenset({"ACTIVE", "PROPOSED", "DEPRECATED"})
 
