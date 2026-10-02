@@ -88,8 +88,9 @@ def _guarded_alias_hits(departments, evidence, department_map=None, alias_index=
       * department-matched categories retain the existing rescue behavior;
       * an exact canonical treatment name is always a valid cross-department rescue;
       * a specific alias is a valid cross-department rescue;
-      * an alias listed in context_required_aliases must carry one of its required
-        context terms in the same sentence when the department does not match.
+      * only aliases explicitly listed in cross_department_guard must carry one
+        of their required context terms in the same sentence when the department
+        does not match. Evidence-engine context rules are intentionally separate.
 
     This preserves legitimate cross-specialty offers (e.g. a dermatology clinic
     explicitly advertising ED treatment) while suppressing cases such as
@@ -120,7 +121,9 @@ def _guarded_alias_hits(departments, evidence, department_map=None, alias_index=
             guarded.add(category)
             continue
 
-        context_required = definition.get("context_required_aliases", {})
+        context_required = definition.get("cross_department_guard", {}).get(
+            "context_required_aliases", {}
+        )
         matched_aliases = [
             alias for alias in definition.get("aliases", ())
             if any(keyword_match(alias, sentence) for sentence in sentences)

@@ -1298,6 +1298,10 @@ treatment_categories:
       レーザー治療: [静脈瘤, 下肢静脈瘤, 下肢, 血管内]
       高周波治療: [静脈瘤, 下肢静脈瘤, 下肢, 血管内]
       グルー治療: [静脈瘤, 下肢静脈瘤, 血管, ベナシール]
+    cross_department_guard:
+      context_required_aliases:
+        レーザー治療: [静脈瘤, 下肢静脈瘤, 血管内]
+        高周波治療: [静脈瘤, 下肢静脈瘤, 血管内]
     source_sales_items: [血管内焼灼術, レーザー治療, 高周波治療, グルー治療, ベナシール]
     sales_filter_value: HIGH
   CPAP療法:
@@ -1401,6 +1405,10 @@ treatment_categories:
       インプラント: [歯科, 歯, 口腔, 顎骨, All-on-4, GBR, サイナスリフト]
       インプラント治療: [歯科, 歯, 口腔, 顎骨, All-on-4, GBR, サイナスリフト]
       骨造成: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト]
+    cross_department_guard:
+      context_required_aliases:
+        インプラント: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト, All-on-4]
+        インプラント治療: [歯科, 歯, 口腔, 顎骨, GBR, サイナスリフト, All-on-4]
     source_sales_items: [インプラント, インプラント治療, All-on-4, 即時荷重インプラント, 骨造成, GBR, サイナスリフト]
     sales_filter_value: HIGH
   豊胸手術:
@@ -1431,6 +1439,9 @@ treatment_categories:
     aliases: [骨切り]
     context_required_aliases:
       骨切り: [輪郭, 顎, エラ, 頬骨, 美容]
+    cross_department_guard:
+      context_required_aliases:
+        骨切り: [輪郭, 顎, エラ, 頬骨, 美容]
     source_sales_items: [骨切り]
     sales_filter_value: HIGH
   鼻形成術:

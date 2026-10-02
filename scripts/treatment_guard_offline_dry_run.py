@@ -212,7 +212,7 @@ def _classify(category: str, departments: list[str], pages: list[dict] | None) -
                 matched.append((alias, sentence, url))
     if not matched:
         return "UNDETERMINED_CACHE_MISSING", "cache exists but does not reproduce the prior alias hit; candidate retained", ""
-    required = definition.get("context_required_aliases", {})
+    required = definition.get("cross_department_guard", {}).get("context_required_aliases", {})
     ambiguous = []
     for alias, sentence, url in matched:
         keywords = tuple(required.get(alias, ()))
