@@ -31,6 +31,20 @@ _INTRO_PATH = re.compile(r"/(?:about(?:[-_]?us)?|clinic|medical|service|treatmen
 _INTRO_HEADING = re.compile(r"医院紹介|クリニック紹介|当院について|診療案内|診療内容|治療内容|専門外来|medical|service|treatment|department|guide", re.I)
 _EXCLUDED_LABEL = re.compile(r"採用|求人|学会|論文|終了|休止|中止|行っていません|行っておりません|実施していません|ブログ|コラム|ニュース|お知らせ")
 _GENERIC_PAGE = re.compile(r"アクセス|院長紹介|医師紹介|スタッフ|料金|費用|問い合わせ|採用|ブログ|ニュース|サイトマップ")
+_HARD_VETO = re.compile(
+    r"行っていません|行っておりません|実施していません|実施しておりません|"
+    r"取り扱っていません|提供していません|現在.{0,12}(?:休止|中止|停止)|"
+    r"受付終了|提供終了|取り扱い終了|終了しました"
+)
+_FOCUS_OFFER = re.compile(r"力を入れ|専門(?:として|に)|中心に診療|診療しています|専門外来|注力")
+_FOCUS_EXCLUDED = re.compile(r"一般的に|とは[、。]|他院|紹介先|前勤務先|経歴|略歴|学会|論文|研究実績")
+_OFFICIAL_FOCUS_ALIASES = {
+    "消化器内科": ("消化器内科", "消化器疾患"),
+    "循環器内科": ("循環器内科", "循環器疾患"),
+    "眼科": ("眼科診療", "眼疾患"),
+    "美容皮膚科": ("美容皮膚科",),
+    "血管外科": ("血管外科",),
+}
 _STATUS_PRIORITY = {"CONFIRMED": 5, "MENTIONED": 4, "REVIEW": 3, "NOT_CONFIRMED": 2, "CANDIDATE_ONLY": 1}
 _RANK_PRIORITY = {"S": 5, "A": 4, "B": 3, "C": 2, "D": 1, "X": 0}
 
@@ -73,6 +87,10 @@ class ClinicalFocusResult:
     confidence: float = 0.0
     rule_version: str = HYBRID_RULE_VERSION
 
+    def __post_init__(self):
+        if self.source_type not in {"CLINIC_NAME", "MHLW_DEPARTMENT", "OFFICIAL_HP"}:
+            raise ValueError(f"invalid Clinical Focus source type: {self.source_type}")
+
 
 def project_hybrid_status(status: str) -> str:
     """Lossless-enough projection into the unchanged production three-status schema."""
@@ -102,6 +120,27 @@ def _safe_alias_categories(text, departments=()):
 
 def _page_evidence(page, source_type="OFFICIAL_HP"):
     return {"url": page.url, "page_title": page.title, "blocks": build_evidence_blocks(page), "source_type": source_type}
+
+
+def _hard_veto_result(category, evidence_items, clinic_id, departments, checked_at):
+    """Return a local explicit non-offer/suspension override for one Treatment."""
+    for item in evidence_items:
+        for block in item.get("blocks", ()):
+            for sentence in re.split(r"[。！？!?\n]+", block.get("text", "")):
+                alias = _matched_alias(category, sentence)
+                if not alias or not _HARD_VETO.search(sentence):
+                    continue
+                isolated = {**item, "blocks": [{"heading_path": block.get("heading_path", []), "text": sentence}]}
+                safety = evaluate_treatment_evidence(category, [isolated], clinic_id=clinic_id, checked_at=checked_at)
+                exclusion = safety.get("exclusion_context", "NONE")
+                if exclusion not in {"NOT_OFFERED", "CURRENTLY_SUSPENDED"}:
+                    exclusion = "CURRENTLY_SUSPENDED" if re.search(r"休止|中止|停止|終了", sentence) else "NOT_OFFERED"
+                return HybridTreatmentResult(
+                    clinic_id, category, "NOT_CONFIRMED", "OFFICIAL_HP_TEXT", "X", alias,
+                    sentence[:500], item.get("url", ""), item.get("page_title", "")[:200],
+                    "NOT_PROVIDED", exclusion, " / ".join(departments), 0.0, checked_at=checked_at,
+                )
+    return None
 
 
 def _structural_context_ok(category, alias, text, departments):
@@ -217,11 +256,15 @@ def evaluate_hybrid_treatments(*, clinic_id=None, clinic_name="", departments=()
         score = (_STATUS_PRIORITY[result.hybrid_status], _RANK_PRIORITY[result.signal_rank], result.confidence)
         if key not in best or score > best[key][0]:
             best[key] = (score, result)
+    for category in set(best):
+        veto = _hard_veto_result(category, evidence_items, clinic_id, departments, checked_at)
+        if veto:
+            best[category] = ((0, 0, 0.0), veto)
     selected = results if include_supporting_signals else [best[name][1] for name in sorted(best)]
-    return selected, clinical_focus_signals(clinic_id, clinic_name, departments)
+    return selected, clinical_focus_signals(clinic_id, clinic_name, departments, pages)
 
 
-def clinical_focus_signals(clinic_id=None, clinic_name="", departments=()):
+def clinical_focus_signals(clinic_id=None, clinic_name="", departments=(), pages=()):
     """Separate disease/department focus axis; never produces Treatment status."""
     config = load_taxonomy().get("clinical_focus", {})
     found = {}
@@ -237,4 +280,21 @@ def clinical_focus_signals(clinic_id=None, clinic_name="", departments=()):
     for department in departments or ():
         if department and department not in found and any(x in department for x in ("眼科", "消化器", "循環器", "美容皮膚", "血管外科")):
             found.setdefault(department, ClinicalFocusResult(clinic_id, department, "MHLW_DEPARTMENT", department, confidence=.85))
+    focus_aliases = {focus: tuple(definition.get("aliases", ())) for focus, definition in config.items()}
+    focus_aliases.update(_OFFICIAL_FOCUS_ALIASES)
+    for page in pages or ():
+        if not is_official_candidate(page.url) or _ARTICLE_PATH.search(urlparse(page.url).path):
+            continue
+        if re.search(r"ブログ|コラム|ニュース|お知らせ|医師紹介|院長紹介|経歴|論文|学会", page.title):
+            continue
+        for block in build_evidence_blocks(page):
+            for sentence in re.split(r"[。！？!?\n]+", block.get("text", "")):
+                if not _FOCUS_OFFER.search(sentence) or _FOCUS_EXCLUDED.search(sentence):
+                    continue
+                for focus, aliases in focus_aliases.items():
+                    alias = next((term for term in aliases if keyword_match(term, sentence)), "")
+                    if alias:
+                        found[focus] = ClinicalFocusResult(
+                            clinic_id, focus, "OFFICIAL_HP", alias, page.url, .92
+                        )
     return [found[name] for name in sorted(found)]
