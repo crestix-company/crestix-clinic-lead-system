@@ -62,3 +62,23 @@ def test_unrelated_context_elsewhere_does_not_rescue_broad_alias():
         _evidence("眼科レーザー治療を行っています。下肢のむくみについてもご相談ください。"),
     )
     assert "下肢静脈瘤血管内治療" not in result
+
+
+def test_iidabashi_regression_keeps_explicit_ed_and_liposuction_but_not_broad_laser():
+    departments = ["アレルギー科", "内科", "形成外科", "皮膚科", "美容外科"]
+    result = candidate_union(
+        departments,
+        _evidence("ED治療と脂肪吸引を実施しています。美容皮膚科ではレーザー治療も行います。"),
+    )
+    assert {"ED治療", "脂肪吸引"} <= result
+    assert "下肢静脈瘤血管内治療" not in result
+
+
+def test_hanzomon_gi_regression_keeps_gastroscopy_candidate():
+    result = candidate_union(["消化器内科"], _evidence("上部消化管内視鏡検査（胃カメラ）を実施"))
+    assert "胃カメラ検査" in result
+
+
+def test_sanno_cpap_regression_is_not_dropped_by_department_context():
+    result = candidate_union(["内科", "皮膚科"], _evidence("睡眠時無呼吸症候群のCPAP治療に対応"))
+    assert "CPAP療法" in result

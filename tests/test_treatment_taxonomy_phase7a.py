@@ -17,10 +17,11 @@ def evidence(text, url="https://clinic.example/medical/", title="診療案内", 
     return {"url": url, "text": text, "page_title": title, "source_type": source_type}
 
 
-def test_taxonomy_v2_preserves_v1_and_has_nine_sales_categories():
+def test_taxonomy_v3_preserves_v2_and_has_nine_sales_categories():
     config = load_taxonomy()
-    assert config["taxonomy_version"] == RULE_VERSION == "7A-v2"
-    assert config["previous_taxonomy_version"] == LEGACY_RULE_VERSION == "7A-v1"
+    assert config["taxonomy_version"] == RULE_VERSION == "7A-v3"
+    assert config["previous_taxonomy_version"] == "7A-v2"
+    assert LEGACY_RULE_VERSION == "7A-v1"
     assert len(config["crestix_sales_categories"]) == 9
     assert len(config["legacy_treatment_categories_v1"]) == 19
     assert len(phase7b_research_categories()) == 43
@@ -44,7 +45,7 @@ def test_explicit_official_clinic_offer_confirms():
     result = evaluate_treatment_evidence("胃カメラ検査", [evidence("当院では胃カメラ検査を実施しています。")], clinic_id="c-1")
     assert result["status"] == "CONFIRMED"
     assert result["matched_alias"] == "胃カメラ"
-    assert result["rule_version"] == "7A-v2"
+    assert result["rule_version"] == "7A-v3"
     assert result["evidence_text"] and result["evidence_url"]
 
 
