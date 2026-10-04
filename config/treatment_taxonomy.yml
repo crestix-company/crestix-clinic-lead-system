@@ -1387,6 +1387,11 @@ treatment_categories:
     item_type: TREATMENT
     crestix_departments: [歯科]
     aliases: [矯正治療, 全顎矯正, 成人矯正, 裏側矯正・舌側矯正]
+    context_required_aliases:
+      矯正治療: [歯科, 歯列, 歯並び, 顎, 矯正歯科, デンタル]
+    cross_department_guard:
+      context_required_aliases:
+        矯正治療: [歯科, 歯列, 歯並び, 顎, 矯正歯科, デンタル]
     source_sales_items: [矯正治療, 全顎矯正, 成人矯正, 裏側矯正・舌側矯正]
     sales_filter_value: HIGH
   マウスピース矯正:
