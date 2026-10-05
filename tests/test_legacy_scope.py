@@ -232,13 +232,16 @@ def _app_at(tmp_path, monkeypatch, db_path):
     return AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()
 
 
-def test_simple_sales_screen_defaults_to_legacy_scope(tmp_path, monkeypatch):
+def test_simple_sales_screen_defaults_to_all_scope(tmp_path, monkeypatch):
+    # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
+    # 誤って取りこぼさないよう、簡易営業UIの既定値だけをSCOPE_ALLへ変更した
+    # （選択肢の並び順はUI/UXを変えないため元のまま）。
     store = ClinicStore(tmp_path / "ui.db")
     at = _app_at(tmp_path, monkeypatch, store.path)
     at.session_state["navigation"] = "営業対象・出力"
     at.run()
     scope_select = next(s for s in at.selectbox if s.label == "対象データ")
-    assert scope_select.value == SCOPE_LEGACY_PRE_NATIONAL
+    assert scope_select.value == SCOPE_ALL
     assert scope_select.options == ["既存営業リスト", "全国Clinic Master"]
 
 

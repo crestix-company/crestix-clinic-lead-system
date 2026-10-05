@@ -17,6 +17,10 @@ from src.master.filters import Filters, where, clauses
 from src.normalizer.phone import normalize_phone, tel_match_key
 from src.normalizer.address import normalize_address, extract_municipality
 from src.master.research_sidecar import research_sidecar_path, research_sidecar_readonly_uri, RESEARCH_SIDECAR_ATTACH_NAME, ensure_research_sidecar
+from src.master.sales_classification import (
+    SALES_CLASSIFICATION_SIDECAR_PATH, SALES_CLASSIFICATION_ATTACH_NAME,
+    ensure_sales_classification, ensure_sales_classification_sidecar,
+)
 from src.normalizer.clinic_name import normalize_clinic_name, normalize_person, person_from_owner
 from src.normalizer.departments import normalize_departments
 from src.utils.date_utils import parse_date, today_japan
@@ -216,6 +220,20 @@ class ClinicStore:
                 conn.execute(
                     f"ATTACH DATABASE ? AS {RESEARCH_SIDECAR_ATTACH_NAME}",
                     (research_sidecar_readonly_uri(research_db_path),),
+                )
+            except sqlite3.Error:
+                pass
+        # 正式Sales Tier分類sidecar。clinics.sqlite3(Production DB)へは一切書き込まず、
+        # artifacts配下の最新CSVから生成した別ファイルをREAD ONLYでATTACHする。
+        try:
+            ensure_sales_classification_sidecar()
+        except RuntimeError:
+            pass
+        if SALES_CLASSIFICATION_SIDECAR_PATH.exists():
+            try:
+                conn.execute(
+                    f"ATTACH DATABASE ? AS {SALES_CLASSIFICATION_ATTACH_NAME}",
+                    (f"file:{SALES_CLASSIFICATION_SIDECAR_PATH}?mode=ro",),
                 )
             except sqlite3.Error:
                 pass
@@ -468,6 +486,7 @@ class ClinicStore:
         filters = filters or Filters(active_only=False,hp_only=False)
         _ensure_mhlw_sidecar(filters)
         ensure_research_sidecar(filters)
+        ensure_sales_classification(filters)
         sql,args = where(filters,as_of)
         with self.connect() as c:
             return c.execute("SELECT count(*) FROM clinics WHERE "+sql,args).fetchone()[0]
@@ -476,6 +495,7 @@ class ClinicStore:
         filters = filters or Filters(active_only=False,hp_only=False)
         _ensure_mhlw_sidecar(filters)
         ensure_research_sidecar(filters)
+        ensure_sales_classification(filters)
         sql,args = where(filters,as_of)
         with self.connect() as c:
             rows = c.execute("SELECT id FROM clinics WHERE "+sql+" ORDER BY signal_count DESC,id LIMIT ? OFFSET ?",(*args,min(100000,max(0,int(limit))),max(0,int(offset)))).fetchall()
@@ -502,6 +522,7 @@ class ClinicStore:
     def funnel(self, filters, as_of=None):
         _ensure_mhlw_sidecar(filters)
         ensure_research_sidecar(filters)
+        ensure_sales_classification(filters)
         conditions,args = ["merged_into IS NULL", "merge_hold=0"],[]
         with self.connect() as c:
             output = [("全マスター",c.execute("SELECT count(*) FROM clinics WHERE merged_into IS NULL").fetchone()[0])]
@@ -557,6 +578,7 @@ class ClinicStore:
         # template_idは既存呼び出しとの互換用。出力は入力形式によらず28列。
         _ensure_mhlw_sidecar(filters)
         ensure_research_sidecar(filters)
+        ensure_sales_classification(filters)
         from src.master.fixed_export import export_fixed
         return export_fixed(self, filters, as_of)
 

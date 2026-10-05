@@ -3,6 +3,7 @@ from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
 from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE
+from src.master.sales_classification import SALES_CLASSIFICATION_QUALIFIED_TABLE
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
 AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
@@ -28,6 +29,11 @@ class Filters:
     hp_treatment_categories: list[str] = field(default_factory=list)
     research_status: list[str] = field(default_factory=list)
     sales_pairs: list[tuple[str, str]] = field(default_factory=list)
+    # 正式なSales Tier分類(SSOT: artifacts/sales_target_reclassification/)。旧hp_rank(ranks)とは別軸。
+    # 値はA/B/C/D。D(UNKNOWN)は営業対象外であり、Comdesk出力では別途除外する。
+    sales_tiers: list[str] = field(default_factory=list)
+    sales_confidence: list[str] = field(default_factory=list)
+    exclude_human_review: bool = False
     signals: list[str] = field(default_factory=list)
     ad_min: int = 0
     production_companies: list[str] = field(default_factory=list)
@@ -141,6 +147,21 @@ def clauses(f, as_of=None):
             )
             pair_args.extend(args)
         add("標榜診療科×治療", "(" + " OR ".join(pair_sql) + ")" if pair_sql else "0", *pair_args)
+    if f.sales_tiers:
+        # 正式なSales Tier分類(SSOT)。旧hp_rank(ranks)とは独立した軸で、一方の値から他方を推測しない。
+        add("Sales Tier（営業分類）",
+            f"EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            f"AND sc.sales_tier IN ({','.join('?' for _ in f.sales_tiers)}))",
+            *f.sales_tiers)
+    if f.sales_confidence:
+        add("Sales Tier確度",
+            f"EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            f"AND sc.confidence IN ({','.join('?' for _ in f.sales_confidence)}))",
+            *f.sales_confidence)
+    if f.exclude_human_review:
+        add("Human Review除外",
+            f"NOT EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            "AND sc.human_review_needed=1)")
     if f.signal_min:
         add(f"集客投資シグナル{f.signal_min}個以上", "signal_count>=?", f.signal_min)
     # 広告・集客施策の複数選択は同一項目内OR。施策数は別項目（AND）。

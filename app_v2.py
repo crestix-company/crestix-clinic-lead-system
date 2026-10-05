@@ -1,6 +1,6 @@
 """第一営業部向けローカルアプリ。importだけでは画面/DB/ネットを動かさない。"""
 from pathlib import Path
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 import os
 import sqlite3
@@ -27,12 +27,28 @@ from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
 from src.master.sales_treatments import sales_treatment_master
 from src.enrichment.treatment_taxonomy import treatment_category_names
+from src.master.sales_classification import (
+    sales_classification_summary,
+    SalesClassificationUnavailableError,
+)
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
 JOB_LABELS = {"RUNNING":"実行中","PAUSED":"一時停止","COMPLETED":"完了","BUDGET":"検索上限で停止","RESET":"リセット済み"}
+# 正式Sales Tier分類(SSOT)のプリセット。旧hp_rank(HPランクA/B)とは別軸で、営業対象判定の主軸はこちら。
+SALES_TIER_PRESETS = [
+    ("指定なし（Sales Tier不問）", []),
+    ("A VERIFIED", ["A"]),
+    ("B LIKELY", ["B"]),
+    ("C SPECIALTY", ["C"]),
+    ("A+B", ["A", "B"]),
+    ("A+B+C 営業対象", ["A", "B", "C"]),
+    ("D UNKNOWN", ["D"]),
+]
+SALES_TIER_PRESET_DEFAULT_INDEX = next(i for i, (label, _) in enumerate(SALES_TIER_PRESETS) if label == "A+B+C 営業対象")
+SALES_TIER_PRESET_UNRESTRICTED_INDEX = next(i for i, (label, _) in enumerate(SALES_TIER_PRESETS) if label == "指定なし（Sales Tier不問）")
 @st.cache_resource
 def store_for(path):
     return ClinicStore(path)
@@ -657,12 +673,14 @@ def simple_workflow_ui(store, demo):
             report_import(result)
 
 
-def simple_sales_ui(store):
+def simple_sales_ui(store, demo=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
 
     scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
-    scope = st.selectbox("対象データ", scope_options, index=0, format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
+    # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
+    # 取りこぼさないよう、既定値だけを全国Clinic Masterへ変更（表示順・選択肢はそのまま）。
+    scope = st.selectbox("対象データ", scope_options, index=scope_options.index(SCOPE_ALL), format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
     with store.connect() as c:
         prefs = [r[0] for r in c.execute(
             "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
@@ -680,7 +698,7 @@ def simple_sales_ui(store):
     st.session_state["simple_sales_previous_departments"] = list(deps)
     sales_pairs = []
     if deps:
-        st.caption("選択した標榜診療科ごとに、HPで確認済みの治療を絞り込みます。")
+        st.caption("選択した標榜診療科ごとに、HPで確認済みの治療を絞り込みます（既存機能）。")
     for department in deps:
         items = sales_master.get(department, ())
         if not items:
@@ -703,20 +721,27 @@ def simple_sales_ui(store):
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
     age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
-    rank_ab = cols[2].checkbox("HPランク A/B", key="simple_sales_rank")
+    # 2026-10-05: 旧「HPランク A/B」判定を、正式Sales Tier分類(SSOT)へ差し替え。
+    # 同じ位置のチェックボックスをセレクトボックスへ最小限の差し替えのみ行う。
+    tier_labels = [label for label, _ in SALES_TIER_PRESETS]
+    default_tier_index = SALES_TIER_PRESET_UNRESTRICTED_INDEX if demo else SALES_TIER_PRESET_DEFAULT_INDEX
+    tier_choice = cols[2].selectbox("Sales Tier", tier_labels, index=default_tier_index, key="simple_sales_tier_preset")
+    sales_tiers = dict(SALES_TIER_PRESETS)[tier_choice]
+    # 2026-10-05: 「既存UUID」は日常運用では営業担当が意識する必要がないため、通常画面からは外した
+    # （詳細設定の営業対象フィルター（詳細）には残している）。Comdesk出力時に内部で安全側に適用する。
 
     keyword = st.text_input("医院名・電話番号で検索", key="simple_sales_keyword")
 
     filters = Filters(
         active_only=True,
-        hp_only=True,
+        hp_only=False,
         medical_types=sales_medical_types,
         recent_only=recent,
         age_min=.5 if age else None,
         prefectures=pref,
         departments=deps,
         sales_pairs=sales_pairs,
-        ranks=["A","B"] if rank_ab else [],
+        sales_tiers=sales_tiers,
         signals=ads,
         ad_min=ad_min,
         production_companies=companies,
@@ -724,24 +749,50 @@ def simple_sales_ui(store):
         scope=scope,
     )
 
-    count = store.count(filters)
+    try:
+        count = store.count(filters)
+    except SalesClassificationUnavailableError as exc:
+        st.error(str(exc))
+        return
     st.metric("営業対象", f"{count:,}件")
+    summary = sales_classification_summary()
+    if summary:
+        st.caption(
+            f"Sales Tier分類（{summary['source_path'].name}）："
+            f"A={summary['by_tier']['A']:,}　B={summary['by_tier']['B']:,}　"
+            f"C={summary['by_tier']['C']:,}　D={summary['by_tier']['D']:,}（営業対象外）　"
+            f"｜営業利用可能(A+B+C)：{summary['sales_usable']:,}件"
+        )
 
     with st.expander("対象医院を確認", expanded=False):
         listing(store, filters, "simple_sales_results")
 
     st.subheader("Comdesk形式で出力")
-    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。")
+    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。D UNKNOWNとUUID未登録の医院は出力しません。")
+
+    # D UNKNOWNは営業対象外のため、選択内容に関わらずComdesk出力からは常に除外する。
+    # 既存UUIDは営業担当が意識しなくても安全なよう、出力時だけ内部でUUIDありに限定する(通常画面には選択肢を出さない)。
+    export_tiers = [t for t in sales_tiers if t != "D"]
+    if sales_tiers and not export_tiers:
+        st.caption("D UNKNOWNのみが選択されています。D UNKNOWNは営業対象外のためComdesk出力はできません。")
+    export_filters = replace(filters, sales_tiers=export_tiers, uuid_mode="あり")
+
+    try:
+        export_count = store.count(export_filters)
+    except SalesClassificationUnavailableError as exc:
+        st.error(str(exc))
+        return
 
     signature = json.dumps(
-        [str(store.path), asdict(filters), COMDESK_HEADERS, store.revision()],
+        [str(store.path), asdict(export_filters), COMDESK_HEADERS, store.revision()],
         ensure_ascii=False,
         sort_keys=True,
     )
-    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=count==0, use_container_width=True):
+    export_disabled = export_count == 0
+    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True):
         st.session_state["simple_export_files"] = {
             "signature": signature,
-            "files": store.export(filters),
+            "files": store.export(export_filters),
         }
 
     output = st.session_state.get("simple_export_files")
@@ -930,7 +981,7 @@ def main():
     if nav == "かんたん操作":
         simple_workflow_ui(store, demo)
     elif nav == "営業対象・出力":
-        simple_sales_ui(store)
+        simple_sales_ui(store, demo)
     else:
         advanced_ui(store, demo)
 
