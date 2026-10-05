@@ -61,6 +61,29 @@ def test_external_listing_identity_does_not_mean_clinic_website(url):
     assert rank_hp([page],{},[])["hp_rank"]=="NO_HP"
 
 
+@pytest.mark.parametrize("url",[
+    "https://www.kanja.jp/",
+    "https://www.w-medicalnet.com/index/module/Medical/",
+    "https://www.e-doctors-net.com/",
+    "https://arakawa-med.or.jp/",
+    "https://www.machida.tokyo.med.or.jp/",
+    "https://www.musashino-med.or.jp/",
+])
+def test_directory_and_medical_association_sites_are_not_official(url):
+    # Phase4B overnight audit (sales_target_reclassification TASK1/TASK2, 2026-10-05):
+    # these ward/city 医師会 directories and clinic-search aggregators were being
+    # accepted as evidence sources, producing false-positive treatment matches for
+    # whichever unrelated clinic happened to be listed on the same aggregator page.
+    assert not is_official_candidate(url)
+
+
+def test_clinic_owned_menu_page_is_still_official():
+    # Same audit: a text-pattern heuristic ("一覧" etc.) was tried and rejected
+    # because it false-triggered on ordinary clinic-owned treatment-menu pages
+    # like bequas-cl.com's own "施術一覧" page. The fix must stay domain-only.
+    assert is_official_candidate("https://bequas-cl.com/menu/")
+
+
 def test_ophthalmic_laser_is_not_dermatology():
     record=sample_records()[0]
     page=clinic_page(record,"https://eye.example/",

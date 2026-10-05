@@ -12,7 +12,14 @@ NON_OFFICIAL = {"doctorsfile.jp","medicaldoc.jp","epark.jp","caloo.jp","caloo.co
                "instagram.com","facebook.com","x.com","twitter.com","youtube.com","youtu.be","tiktok.com",
                "tokyo-doctors.com","kanagawa-doctors.com","chiba-doctors.com","byoinnavi.jp","hospita.jp",
                "qlife.jp","scuel.me","haisha-yoyaku.jp","itp.ne.jp","maps.google.com","google.com","yahoo.co.jp",
-               "job-medley.com","senshin-daido-life.jp","fdoc.jp","gmo-clinic-map.com","web-clover.net"}
+               "job-medley.com","senshin-daido-life.jp","fdoc.jp","gmo-clinic-map.com","web-clover.net",
+               "kanja.jp","w-medicalnet.com","e-doctors-net.com"}
+
+# 地区医師会 directory sites (各区市の医師会公式サイト) list many unrelated clinics
+# per page and are never a single clinic's own official domain; the hostname
+# pattern ("*-med.or.jp" / "*.med.or.jp") is more reliable than enumerating every
+# ward/city association individually.
+NON_OFFICIAL_SUFFIXES = ("med.or.jp",)
 
 
 def host(url):
@@ -30,7 +37,14 @@ def domain_is(url, domain):
 def is_official_candidate(url):
     try:
         p = urlparse(url)
-        return p.scheme in {"http","https"} and bool(host(url)) and not any(domain_is(url,d) for d in NON_OFFICIAL)
+        h = host(url)
+        if not (p.scheme in {"http","https"} and bool(h)):
+            return False
+        if any(domain_is(url,d) for d in NON_OFFICIAL):
+            return False
+        if any(h.endswith(suffix) for suffix in NON_OFFICIAL_SUFFIXES):
+            return False
+        return True
     except (ValueError, UnicodeError):
         return False
 
