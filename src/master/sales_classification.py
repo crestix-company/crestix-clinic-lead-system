@@ -10,18 +10,18 @@ artifacts/sales_target_reclassification/配下のCSV（SSOT）にある。
 clinics.sqlite3（Production DB）へは一切書き込まない。
 """
 import csv
-import hashlib
 import os
 import sqlite3
-from pathlib import Path
 
 from src.utils.config import ROOT
 
 SALES_CLASSIFICATION_DIR = ROOT / "artifacts" / "sales_target_reclassification"
 
-# 優先順位: v2 candidateが実在すればそれを優先。存在しなければ確定版final.csvを使う。
+# 優先順位: 最新population updateのv3 candidateを最優先。
+# v3が無い環境ではv2 candidate、さらに無ければ確定版final.csvへ安全にfallbackする。
 # 推測で中間ファイルを合成しない。
 SALES_CLASSIFICATION_CANDIDATES = (
+    SALES_CLASSIFICATION_DIR / "sales_target_classification_v3_candidate.csv",
     SALES_CLASSIFICATION_DIR / "sales_target_classification_final_v2_candidate.csv",
     SALES_CLASSIFICATION_DIR / "sales_target_classification_final.csv",
 )
