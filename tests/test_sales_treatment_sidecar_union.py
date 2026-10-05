@@ -3,8 +3,8 @@ legacy evidence(research_results.treatment_evidence)とTreatment Research sideca
 (clinic_treatment_research_final.research_status='CONFIRMED')のOR(UNION DISTINCT、
 clinic_id基準で二重カウントなし)で評価する(synthetic fixture。本番sidecar/artifactは使わない)。
 
-旧taxonomyの広義カテゴリ「内視鏡（詳細不明）」はこのUNIONの対象外(胃カメラ/大腸カメラへ
-無条件に振り分けない)であることも確認する。
+旧taxonomyの広義カテゴリは営業UI上「内視鏡」と表示し、このUNIONの対象外
+(胃カメラ/大腸カメラへ無条件に振り分けない)であることも確認する。
 """
 import sqlite3
 
@@ -110,12 +110,12 @@ def test_sidecar_review_or_not_confirmed_is_not_counted(tmp_path, monkeypatch, s
 
 
 def test_bare_endoscopy_category_is_not_mapped_to_sidecar_gastroscopy(tmp_path, monkeypatch, store_with_gastro_clinic):
-    """「内視鏡（詳細不明）」はsidecar UNIONの対象外: sidecarのCONFIRMEDだけでは成立しない。"""
+    """営業UIの「内視鏡」はsidecar UNIONの対象外: sidecarのCONFIRMEDだけでは成立しない。"""
     store, cid = store_with_gastro_clinic
     sidecar_path = tmp_path / "treatment_research_final.sqlite3"
     _make_sidecar(sidecar_path, [(cid, "gastroscopy", "胃カメラ検査", "CONFIRMED", "v1", "7A-v2", "2026-10-01T00:00:00Z")])
     monkeypatch.setenv(RESEARCH_SIDECAR_ENV_VAR, str(sidecar_path))
-    f = Filters(**ALL, sales_pairs=[("消化器内科", "内視鏡（詳細不明）")])
+    f = Filters(**ALL, sales_pairs=[("消化器内科", "内視鏡")])
     assert store.count(f) == 0
 
 
@@ -125,7 +125,7 @@ def test_bare_endoscopy_category_still_matches_via_legacy_category_evidence(tmp_
         "treatment_categories": ["内視鏡"],
         "treatment_evidence": [_evidence("内視鏡", "内視鏡")],
     })
-    f = Filters(**ALL, sales_pairs=[("消化器内科", "内視鏡（詳細不明）")])
+    f = Filters(**ALL, sales_pairs=[("消化器内科", "内視鏡")])
     assert store.count(f) == 1
 
 
