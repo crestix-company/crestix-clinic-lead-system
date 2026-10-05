@@ -1,0 +1,9 @@
+{
+  "data_version": "2026-10-05-01",
+  "updated_at": "2026-10-05",
+  "clinics_count": 162258,
+  "treatment_clinics": 6303,
+  "treatment_rows": 79650,
+  "done": 9867,
+  "fetch_failed": 302
+}
