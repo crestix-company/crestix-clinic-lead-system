@@ -773,12 +773,15 @@ def simple_sales_ui(store, demo=False):
     # D UNKNOWNは営業対象外のため、選択内容に関わらずComdesk出力からは常に除外する。
     # 既存UUIDは営業担当が意識しなくても安全なよう、出力時だけ内部でUUIDありに限定する(通常画面には選択肢を出さない)。
     export_tiers = [t for t in sales_tiers if t != "D"]
-    if sales_tiers and not export_tiers:
+    # D UNKNOWNのみを選択した場合、export_tiersが空になりsales_tiers未指定(全tier許可)と
+    # 区別できなくなる。空=無制限ではなく「0件」として扱い、意図せずD/他tierを出力しない。
+    d_only_selected = bool(sales_tiers) and not export_tiers
+    if d_only_selected:
         st.caption("D UNKNOWNのみが選択されています。D UNKNOWNは営業対象外のためComdesk出力はできません。")
     export_filters = replace(filters, sales_tiers=export_tiers, uuid_mode="あり")
 
     try:
-        export_count = store.count(export_filters)
+        export_count = 0 if d_only_selected else store.count(export_filters)
     except SalesClassificationUnavailableError as exc:
         st.error(str(exc))
         return
@@ -788,8 +791,8 @@ def simple_sales_ui(store, demo=False):
         ensure_ascii=False,
         sort_keys=True,
     )
-    export_disabled = export_count == 0
-    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True):
+    export_disabled = d_only_selected or export_count == 0
+    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True) and not d_only_selected:
         st.session_state["simple_export_files"] = {
             "signature": signature,
             "files": store.export(export_filters),

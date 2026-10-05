@@ -2,7 +2,7 @@ from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
-from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE
+from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE, research_sidecar_available
 from src.master.sales_classification import SALES_CLASSIFICATION_QUALIFIED_TABLE
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
@@ -119,7 +119,7 @@ def clauses(f, as_of=None):
             parts.append(f"NOT EXISTS(SELECT 1 FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs WHERE rs.clinic_id=clinics.id)")
         add("Research Status", "(" + " OR ".join(parts) + ")", *status_args)
     if f.sales_pairs:
-        from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
+        from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES, sidecar_treatment_category
         pair_sql, pair_args = [], []
         sources = sorted(VALID_EVIDENCE_SOURCES)
         for department, treatment in f.sales_pairs:
@@ -139,11 +139,25 @@ def clauses(f, as_of=None):
                     "?" for _ in definition.evidence_keywords
                 ) + ")"
                 args.extend(definition.evidence_keywords)
+            # 営業用Treatment Mapping: legacy evidence(上記)とTreatment Research sidecar(CONFIRMED)を
+            # clinic_id基準のOR(UNION DISTINCT、二重カウントなし)で評価する。対応表に無いpairはlegacy単独。
+            evidence_sql = (
+                "EXISTS(SELECT 1 FROM research_results r, "
+                "json_each(json_extract(r.result_json,'$.treatment_evidence')) e "
+                "WHERE r.clinic_id=clinics.id AND " + evidence_match + ")"
+            )
+            sidecar_category = sidecar_treatment_category(department, treatment)
+            if sidecar_category and research_sidecar_available():
+                # sidecarが一時的に無い場合は、既存どおりlegacy単独で評価する(sales_pairsを壊さない)。
+                evidence_sql = (
+                    "(" + evidence_sql + " OR EXISTS(SELECT 1 FROM " + RESEARCH_SIDECAR_QUALIFIED_TABLE +
+                    " sr WHERE sr.clinic_id=clinics.id AND sr.research_status='CONFIRMED' "
+                    "AND sr.treatment_category_name=?))"
+                )
+                args.append(sidecar_category)
             pair_sql.append(
                 "(EXISTS(SELECT 1 FROM json_each(departments_json) d WHERE d.value=?) "
-                "AND EXISTS(SELECT 1 FROM research_results r, "
-                "json_each(json_extract(r.result_json,'$.treatment_evidence')) e "
-                "WHERE r.clinic_id=clinics.id AND " + evidence_match + "))"
+                "AND " + evidence_sql + ")"
             )
             pair_args.extend(args)
         add("標榜診療科×治療", "(" + " OR ".join(pair_sql) + ")" if pair_sql else "0", *pair_args)

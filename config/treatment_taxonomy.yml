@@ -374,7 +374,7 @@ legacy_treatment_categories_v1:
     evidence_level: HIGH
 crestix_sales_categories:
   消化器内科:
-  - treatment: 内視鏡
+  - treatment: 内視鏡（詳細不明）
     match_mode: CATEGORY
     current_categories:
     - 内視鏡
@@ -1148,14 +1148,14 @@ treatment_categories:
     item_type: EXAM
     crestix_departments: [消化器内科]
     aliases: [胃カメラ, 胃内視鏡, 上部消化管内視鏡, 上部内視鏡, 経鼻内視鏡, 経口内視鏡]
-    source_sales_items: [胃カメラ, 内視鏡]
+    source_sales_items: [胃カメラ, 内視鏡（詳細不明）]
     sales_filter_value: HIGH
   大腸カメラ検査:
     status: ACTIVE
     item_type: EXAM
     crestix_departments: [消化器内科]
     aliases: [大腸カメラ, 大腸内視鏡, 下部消化管内視鏡]
-    source_sales_items: [大腸カメラ, 大腸内視鏡, 内視鏡]
+    source_sales_items: [大腸カメラ, 大腸内視鏡, 内視鏡（詳細不明）]
     sales_filter_value: HIGH
   大腸ポリープ切除:
     status: ACTIVE
