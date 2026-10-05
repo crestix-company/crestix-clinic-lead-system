@@ -9,13 +9,19 @@ VALID_EVIDENCE_SOURCES = frozenset({"HOME_MENU", "INTRO_MENU", "DEDICATED_PAGE"}
 VALID_SUPPORT = frozenset({"EXACT", "ALIAS", "MISSING", "AMBIGUOUS"})
 VALID_MATCH_MODES = frozenset({"CATEGORY", "KEYWORD"})
 
+# 営業UIでは内部事情の「詳細不明」を見せず、旧taxonomyの広義カテゴリを単純な「内視鏡」と表示する。
+# 保存済みtaxonomy/evidence自体は変更せず、表示・選択pairのみ正規化する。
+DISPLAY_TREATMENT_LABELS = {
+    ("消化器内科", "内視鏡（詳細不明）"): "内視鏡",
+}
+
 # 営業用Treatment Mapping: legacy taxonomy由来のpair(department,treatment)を、
 # Treatment Research sidecar(clinic_treatment_research_final.treatment_category_name)の
 # 対応カテゴリへ結び付ける。両軸はclinic_idベースのOR(UNION DISTINCT、二重カウントなし)で評価し、
 # Treatment ResearchのCONFIRMEDを優先根拠とする。ここに無いpairはlegacy単独で評価する
 # (sidecar側に対応する治療カテゴリが存在しない、または未確認のため)。
-# 旧taxonomyの広義カテゴリ「内視鏡（詳細不明）」自体はこの対応表に含めない
-# (胃カメラ/大腸カメラへ無条件に振り分けないため、別カテゴリのまま残す)。
+# 旧taxonomyの広義カテゴリ「内視鏡」はこの対応表に含めない
+# (胃カメラ/大腸カメラへ無条件に振り分けないため、legacyカテゴリのまま残す)。
 SIDECAR_TREATMENT_CATEGORY_BY_PAIR = {
     ("消化器内科", "胃カメラ"): "胃カメラ検査",
     ("消化器内科", "大腸カメラ"): "大腸カメラ検査",
@@ -66,15 +72,17 @@ def sales_treatment_master():
             required = {"treatment", "match_mode", "current_categories", "evidence_keywords", "support_status"}
             if not isinstance(item, dict) or set(item) != required:
                 raise ValueError(f"{department}の営業治療定義を確認してください。")
-            key = (department, item["treatment"])
+            raw_treatment = str(item["treatment"])
+            treatment = DISPLAY_TREATMENT_LABELS.get((department, raw_treatment), raw_treatment)
+            key = (department, treatment)
             if key in seen:
-                raise ValueError(f"営業治療が重複しています: {department} / {item['treatment']}")
+                raise ValueError(f"営業治療が重複しています: {department} / {treatment}")
             seen.add(key)
             if item["match_mode"] not in VALID_MATCH_MODES or item["support_status"] not in VALID_SUPPORT:
-                raise ValueError(f"営業治療の状態を確認してください: {department} / {item['treatment']}")
+                raise ValueError(f"営業治療の状態を確認してください: {department} / {treatment}")
             parsed.append(SalesTreatment(
                 department=department,
-                treatment=str(item["treatment"]),
+                treatment=treatment,
                 match_mode=item["match_mode"],
                 current_categories=tuple(item["current_categories"] or ()),
                 evidence_keywords=tuple(item["evidence_keywords"] or ()),
