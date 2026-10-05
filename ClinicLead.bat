@@ -9,6 +9,14 @@ echo Windows one-click launcher
 echo ========================================
 echo.
 
+if not exist "%~dp0scripts\windows_db_preflight.ps1" (
+  echo [ERROR] scripts\windows_db_preflight.ps1 が見つかりません。
+  echo GitHubの最新版を取得してから再実行してください。
+  echo.
+  pause
+  exit /b 1
+)
+
 if not exist "%~dp0scripts\update_and_launch_windows.ps1" (
   echo [ERROR] scripts\update_and_launch_windows.ps1 が見つかりません。
   echo GitHubの最新版を取得してから再実行してください。
@@ -24,6 +32,18 @@ if exist "%~dp0scripts\launch_v2_windows_temp.ps1" (
   if not exist "%RUNTIME_DIR%" mkdir "%RUNTIME_DIR%" >nul 2>&1
   move /Y "%~dp0scripts\launch_v2_windows_temp.ps1" "%RUNTIME_DIR%\launch_v2_windows_temp.ps1" >nul
   echo [INFO] 旧一時launcherをrepo外へ退避しました。
+)
+
+echo [INFO] Windows安全事前確認を実行します...
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\windows_db_preflight.ps1"
+set "PREFLIGHT_EXIT=%ERRORLEVEL%"
+if not "%PREFLIGHT_EXIT%"=="0" (
+  echo.
+  echo [ERROR] 事前確認で問題を検出したため起動しません。
+  echo 上に表示された内容を前川へ共有してください。
+  echo.
+  pause
+  exit /b %PREFLIGHT_EXIT%
 )
 
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update_and_launch_windows.ps1"
