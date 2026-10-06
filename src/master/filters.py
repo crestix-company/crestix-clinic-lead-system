@@ -2,7 +2,8 @@ from dataclasses import dataclass, field, asdict
 from src.utils.date_utils import today_japan
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
-from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE
+from src.master.research_sidecar import RESEARCH_SIDECAR_QUALIFIED_TABLE, CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE, research_sidecar_available
+from src.master.sales_classification import SALES_CLASSIFICATION_QUALIFIED_TABLE
 
 # 広告・集客施策数は既存の signal_count（HP制作会社等を含む）ではなく、抽出時に signals_json から数える。
 AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+",".join("'"+n.replace("'","''")+"'" for n in AD_SIGNAL_NAMES)+"))"
@@ -15,6 +16,9 @@ class Filters:
     recent_only: bool = False
     age_min: float | None = None
     ranks: list[str] = field(default_factory=list)
+    # 通常営業UI/Comdesk専用。v2 machine rank + 旧hp_rankからruntime導出するA/B/C/D。
+    effective_ranks: list[str] = field(default_factory=list)
+    site_types: list[str] = field(default_factory=list)
     prefectures: list[str] = field(default_factory=list)
     municipalities: list[str] = field(default_factory=list)
     medical_types: list[str] = field(default_factory=list)
@@ -28,6 +32,11 @@ class Filters:
     hp_treatment_categories: list[str] = field(default_factory=list)
     research_status: list[str] = field(default_factory=list)
     sales_pairs: list[tuple[str, str]] = field(default_factory=list)
+    # 正式なSales Tier分類(SSOT: artifacts/sales_target_reclassification/)。旧hp_rank(ranks)とは別軸。
+    # 値はA/B/C/D。D(UNKNOWN)は営業対象外であり、Comdesk出力では別途除外する。
+    sales_tiers: list[str] = field(default_factory=list)
+    sales_confidence: list[str] = field(default_factory=list)
+    exclude_human_review: bool = False
     signals: list[str] = field(default_factory=list)
     ad_min: int = 0
     production_companies: list[str] = field(default_factory=list)
@@ -69,10 +78,12 @@ def clauses(f, as_of=None):
         if not 0 <= f.age_min <= 1:
             raise ValueError("年齢確率は0〜100%で指定してください。")
         add(f"59歳以下確率{f.age_min:.0%}以上", "age_probability>=?", f.age_min)
-    for values, col, label in [(f.ranks,"hp_rank","HPランク"), (f.prefectures,"prefecture","都道府県"),
+    for values, col, label in [(f.ranks,"hp_rank","旧HPランク"), (f.effective_ranks,"effective_hp_rank_for_id(id,hp_rank)","HP ABC判定"), (f.prefectures,"prefecture","都道府県"),
                                (f.medical_types,"medical_type","医科・歯科"), (f.hot,"hot_status","アツさ")]:
         if values:
             add(label, f"{col} IN ({','.join('?' for _ in values)})", *values)
+    if f.site_types:
+        add("サイト種別", f"hp_site_type_for_id(id,hp_status,hp_url,maps_website_url) IN ({','.join('?' for _ in f.site_types)})", *f.site_types)
     if f.municipalities:
         add("市区町村", f"municipality_of(address) IN ({','.join('?' for _ in f.municipalities)})", *f.municipalities)
     # 診療科/治療の複数選択は同一項目内OR、項目間AND。特定シグナルは全選択AND。
@@ -113,7 +124,7 @@ def clauses(f, as_of=None):
             parts.append(f"NOT EXISTS(SELECT 1 FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs WHERE rs.clinic_id=clinics.id)")
         add("Research Status", "(" + " OR ".join(parts) + ")", *status_args)
     if f.sales_pairs:
-        from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES
+        from src.master.sales_treatments import treatment_definition, VALID_EVIDENCE_SOURCES, sidecar_treatment_category
         pair_sql, pair_args = [], []
         sources = sorted(VALID_EVIDENCE_SOURCES)
         for department, treatment in f.sales_pairs:
@@ -133,14 +144,43 @@ def clauses(f, as_of=None):
                     "?" for _ in definition.evidence_keywords
                 ) + ")"
                 args.extend(definition.evidence_keywords)
+            # 営業用Treatment Mapping: legacy evidence(上記)とTreatment Research sidecar(CONFIRMED)を
+            # clinic_id基準のOR(UNION DISTINCT、二重カウントなし)で評価する。対応表に無いpairはlegacy単独。
+            evidence_sql = (
+                "EXISTS(SELECT 1 FROM research_results r, "
+                "json_each(json_extract(r.result_json,'$.treatment_evidence')) e "
+                "WHERE r.clinic_id=clinics.id AND " + evidence_match + ")"
+            )
+            sidecar_category = sidecar_treatment_category(department, treatment)
+            if sidecar_category and research_sidecar_available():
+                # sidecarが一時的に無い場合は、既存どおりlegacy単独で評価する(sales_pairsを壊さない)。
+                evidence_sql = (
+                    "(" + evidence_sql + " OR EXISTS(SELECT 1 FROM " + RESEARCH_SIDECAR_QUALIFIED_TABLE +
+                    " sr WHERE sr.clinic_id=clinics.id AND sr.research_status='CONFIRMED' "
+                    "AND sr.treatment_category_name=?))"
+                )
+                args.append(sidecar_category)
             pair_sql.append(
                 "(EXISTS(SELECT 1 FROM json_each(departments_json) d WHERE d.value=?) "
-                "AND EXISTS(SELECT 1 FROM research_results r, "
-                "json_each(json_extract(r.result_json,'$.treatment_evidence')) e "
-                "WHERE r.clinic_id=clinics.id AND " + evidence_match + "))"
+                "AND " + evidence_sql + ")"
             )
             pair_args.extend(args)
         add("標榜診療科×治療", "(" + " OR ".join(pair_sql) + ")" if pair_sql else "0", *pair_args)
+    if f.sales_tiers:
+        # 正式なSales Tier分類(SSOT)。旧hp_rank(ranks)とは独立した軸で、一方の値から他方を推測しない。
+        add("Sales Tier（営業分類）",
+            f"EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            f"AND sc.sales_tier IN ({','.join('?' for _ in f.sales_tiers)}))",
+            *f.sales_tiers)
+    if f.sales_confidence:
+        add("Sales Tier確度",
+            f"EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            f"AND sc.confidence IN ({','.join('?' for _ in f.sales_confidence)}))",
+            *f.sales_confidence)
+    if f.exclude_human_review:
+        add("Human Review除外",
+            f"NOT EXISTS(SELECT 1 FROM {SALES_CLASSIFICATION_QUALIFIED_TABLE} sc WHERE sc.clinic_id=clinics.id "
+            "AND sc.human_review_needed=1)")
     if f.signal_min:
         add(f"集客投資シグナル{f.signal_min}個以上", "signal_count>=?", f.signal_min)
     # 広告・集客施策の複数選択は同一項目内OR。施策数は別項目（AND）。
