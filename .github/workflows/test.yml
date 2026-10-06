@@ -12,6 +12,81 @@ permissions:
   contents: read
 
 jobs:
+  windows-powershell-51:
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse launchers with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $files = @(
+            "scripts/update_and_launch_windows.ps1",
+            "scripts/launch_v2_windows.ps1"
+          )
+          foreach ($file in $files) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $file),
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Error
+              exit 1
+            }
+          }
+
+      - name: Smoke test native git stderr and exit-code handling
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          $ast = [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "scripts/update_and_launch_windows.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          $helper = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+              $node.Name -eq "Invoke-Git"
+          }, $true)
+          Invoke-Expression $helper.Extent.Text
+
+          $successGit = Join-Path $env:RUNNER_TEMP "git-success.cmd"
+          Set-Content -Encoding ASCII -Path $successGit -Value @(
+            "@echo Already on 'main' 1>&2",
+            "@exit /b 0"
+          )
+          $GitExecutable = [PSCustomObject]@{ Source = $successGit }
+          $ErrorActionPreference = "Stop"
+          $success = Invoke-Git -Arguments @("switch", "main")
+          if ($success.ExitCode -ne 0) { exit 1 }
+
+          $failedGit = Join-Path $env:RUNNER_TEMP "git-failed.cmd"
+          Set-Content -Encoding ASCII -Path $failedGit -Value @(
+            "@echo simulated failure 1>&2",
+            "@exit /b 7"
+          )
+          $GitExecutable = [PSCustomObject]@{ Source = $failedGit }
+          $failure = Invoke-Git -Arguments @("fetch", "origin", "main")
+          if ($failure.ExitCode -ne 7) { exit 1 }
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Windows launcher regression tests
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/test_windows_release_launcher.py -q
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -81,6 +81,40 @@ function Stop-WithError {
     exit 1
 }
 
+# Windows PowerShell 5.1 converts redirected native stderr into the
+# PowerShell error stream. With ErrorActionPreference=Stop, informational git
+# stderr such as "Already on 'main'" can therefore become a terminating error.
+# Keep stderr separate and decide native-command success only from the exit code.
+$GitExecutable = Get-Command git -CommandType Application -ErrorAction SilentlyContinue
+if (-not $GitExecutable) {
+    Stop-WithError "git コマンドを実行できませんでした。Gitがインストールされているか確認してください。"
+}
+
+function Invoke-Git {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Arguments,
+        [switch]$CaptureOutput
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $output = @(& $GitExecutable.Source @Arguments)
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if (-not $CaptureOutput -and $output.Count -gt 0) {
+        $output | Out-Host
+    }
+    [PSCustomObject]@{
+        ExitCode = $exitCode
+        Output = $output
+    }
+}
+
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 
@@ -95,15 +129,11 @@ if (-not (Test-Path (Join-Path $RepoRoot ".git"))) {
         "ローカルのコードをそのまま起動したい場合は .\scripts\launch_v2_windows.ps1 を使用してください。")
 }
 
-$gitStatus = $null
-try {
-    $gitStatus = git status --porcelain 2>&1
-} catch {
-    Stop-WithError "git コマンドを実行できませんでした（$($_.Exception.Message)）。Gitがインストールされているか確認してください。"
+$gitStatusResult = Invoke-Git -Arguments @("status", "--porcelain") -CaptureOutput
+if ($gitStatusResult.ExitCode -ne 0) {
+    Stop-WithError "git status の実行に失敗しました。"
 }
-if ($LASTEXITCODE -ne 0) {
-    Stop-WithError "git status の実行に失敗しました。`n$gitStatus"
-}
+$gitStatus = $gitStatusResult.Output
 if ($gitStatus) {
     Write-Host ""
     Write-Host "変更内容（git status --porcelain）:" -ForegroundColor Yellow
@@ -115,12 +145,8 @@ if ($gitStatus) {
 }
 Write-Info "未コミットの変更はありません。"
 
-try {
-    git switch main 2>&1 | Out-Host
-} catch {
-    Stop-WithError "main branchへ切り替えられませんでした（$($_.Exception.Message)）。"
-}
-if ($LASTEXITCODE -ne 0) {
+$gitSwitchResult = Invoke-Git -Arguments @("switch", "main")
+if ($gitSwitchResult.ExitCode -ne 0) {
     Stop-WithError "main branchへ切り替えられませんでした。ローカル状態を管理者へ共有してください。"
 }
 Write-Info "main branchを使用します。"
@@ -130,12 +156,8 @@ Write-Info "main branchを使用します。"
 # ---------------------------------------------------------------------------
 Write-Step "2/6 GitHubから最新版を確認しています"
 
-try {
-    git fetch origin main 2>&1 | Out-Host
-} catch {
-    Stop-WithError "git コマンドを実行できませんでした（$($_.Exception.Message)）。"
-}
-if ($LASTEXITCODE -ne 0) {
+$gitFetchResult = Invoke-Git -Arguments @("fetch", "origin", "main")
+if ($gitFetchResult.ExitCode -ne 0) {
     Stop-WithError ("GitHubから最新版を確認できませんでした。`n" +
         "ネットワーク接続またはGitHub接続を確認してください。`n`n" +
         "オフラインで既存コードを起動したい場合は、`n" +
@@ -149,20 +171,19 @@ Write-Info "GitHubから最新情報を取得しました。"
 # ---------------------------------------------------------------------------
 Write-Step "3/6 コードを最新版に更新しています"
 
-try {
-    git pull --ff-only origin main 2>&1 | Out-Host
-} catch {
-    Stop-WithError "git コマンドを実行できませんでした（$($_.Exception.Message)）。"
-}
-if ($LASTEXITCODE -ne 0) {
+$gitPullResult = Invoke-Git -Arguments @("pull", "--ff-only", "origin", "main")
+if ($gitPullResult.ExitCode -ne 0) {
     Stop-WithError ("git pull --ff-only に失敗しました（履歴が分岐している可能性があります）。`n" +
         "履歴の自動修正は行いません。管理者に確認するか、新しくcloneし直してください。")
 }
 Write-Info "コードを最新版に更新しました。"
 
-$currentCommit = git rev-parse --short HEAD 2>$null
-if ($currentCommit) {
-    Write-Info "現在のコミット: $currentCommit"
+$gitRevisionResult = Invoke-Git -Arguments @("rev-parse", "--short", "HEAD") -CaptureOutput
+if ($gitRevisionResult.ExitCode -ne 0) {
+    Stop-WithError "現在のコミットを確認できませんでした。"
+}
+if ($gitRevisionResult.Output) {
+    Write-Info "現在のコミット: $($gitRevisionResult.Output -join '')"
 }
 
 # Python（.venv）の確認。無ければここで停止する（アプリ起動も含め、何も自動生成しない）。
