@@ -151,6 +151,10 @@ def mstore(tmp_path):
         store.save_research(ids[n], {"hp_status": "VERIFIED", "hp_url": "https://x.example/", "treatment_categories": t,
                                      "treatment_evidence": treatment_evidence,
                                      "marketing_signals": [signal(x, "", "t", "t") for x in s], "hp_production_companies": comp})
+    # このfixtureは広告filterの合成検証が目的。営業対象A+Bの正式ガードを通した上で
+    # 広告条件のAND結合だけを観測できるよう、全件を旧A（sidecarなし時のeffective A）にする。
+    with store.connect() as c:
+        c.execute("UPDATE clinics SET hp_rank='A'")
     return store
 
 
@@ -206,8 +210,8 @@ def test_sales_ui_marketing_fields(tmp_path, monkeypatch, mstore):
     labels = [getattr(e, "label", None) for e in at.main if getattr(e, "label", None)]
     assert labels.index("診療科") < labels.index("広告・集客施策") < labels.index("広告・集客施策数") < labels.index("HP制作会社") < labels.index("開業10年以内")
     assert "アツい" not in labels
-    # 2026-10-05: 旧「HPランク A/B」チェックボックスを正式Sales Tier分類(SSOT)の
-    # セレクトボックスへ差し替えた（同じ位置）。チェックボックスは2つに減る。
+    # 2026-10-05 Stage2: 「HP ABC判定」はhp_rankベースのセレクトボックス（旧チェックボックスの位置）。
+    # チェックボックスは2つ（開業10年以内・59歳以下）のまま。
     assert [c.label for c in at.checkbox] == ["開業10年以内", "59歳以下 50%以上"]
     ads = next(m for m in at.multiselect if m.label == "広告・集客施策")
     assert ads.options[:4] == ["Doctors File", "Medical DOC", "地域ドクターズ", "Instagram"]
@@ -224,9 +228,8 @@ def test_sales_ui_filters_combine_with_and(tmp_path, monkeypatch, mstore):
     # このtestはscope自体を検証しないため、既定の既存営業リスト（first_seen_atのcutoffで絞られる）を外し、
     # 合成fixtureの全件が対象になる全国Clinic Masterへ切り替える。
     next(s for s in at.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
-    # このtestはSales Tier(正式分類SSOT)を検証しないため、既定のA+B+C(合成fixtureは分類対象外で0件になる)
-    # を外し、Sales Tier不問にする。
-    next(s for s in at.selectbox if s.label == "Sales Tier").set_value("指定なし（Sales Tier不問）").run()
+    # 「指定なし」でも正式な営業対象ガードA+Bは維持される。fixtureは全件effective A。
+    next(s for s in at.selectbox if s.label == "HP ABC判定").set_value("指定なし").run()
     next(m for m in at.selectbox if m.label == "医科・歯科")
     at.multiselect[0].set_value([]).run()  # 都道府県の既定（東京都）は架空住所と一致するのでそのままでもよい
     next(m for m in at.multiselect if m.label == "診療科").select("眼科").run()

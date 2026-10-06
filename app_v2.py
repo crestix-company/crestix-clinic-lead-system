@@ -31,6 +31,8 @@ from src.master.sales_classification import (
     sales_classification_summary,
     SalesClassificationUnavailableError,
 )
+from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvariantError
+from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -49,9 +51,51 @@ SALES_TIER_PRESETS = [
 ]
 SALES_TIER_PRESET_DEFAULT_INDEX = next(i for i, (label, _) in enumerate(SALES_TIER_PRESETS) if label == "A+B+C 営業対象")
 SALES_TIER_PRESET_UNRESTRICTED_INDEX = next(i for i, (label, _) in enumerate(SALES_TIER_PRESETS) if label == "指定なし（Sales Tier不問）")
+# 正式採用モデルv2-precision-firstのeffective_hp_rankを通常営業UIの主軸にする。
+# Production hp_rankは旧値として保持し、v2 sidecarとの合成はruntimeでのみ行う。
+HP_RANK_PRESETS = [
+    ("指定なし", []),
+    ("A+B", ["A", "B"]),
+    ("A", ["A"]),
+    ("B", ["B"]),
+    ("C", ["C"]),
+    ("D", ["D"]),
+]
+HP_RANK_PRESET_DEFAULT_INDEX = next(i for i, (label, _) in enumerate(HP_RANK_PRESETS) if label == "A+B")
+HP_RANK_PRESET_UNRESTRICTED_INDEX = next(i for i, (label, _) in enumerate(HP_RANK_PRESETS) if label == "指定なし")
+TREATMENT_STATUS_DISPLAY_LABELS = {
+    "FETCHED": "治療カテゴリ検出あり",
+    "DONE_NO_CATEGORY": "治療カテゴリ検出なし",
+    "FETCH_FAILED": "Webサイト調査失敗",
+    "NOT_RESEARCHED": "Webサイト未調査",
+}
 @st.cache_resource
 def store_for(path):
     return ClinicStore(path)
+
+
+def show_web_research_metrics(store):
+    """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
+    try:
+        counts = web_research_metrics(store.path)
+    except BatchMetricInvariantError as exc:
+        st.error(f"Webサイト調査件数を表示できません：{exc}")
+        return
+    if counts is None:
+        st.warning("HP research batch sidecarがないため、Webサイト調査状況を表示できません。")
+        return
+    definitions = [
+        ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
+        ("Webサイト調査完了", "researched", "登録されたWebサイトの取得・解析を完了し、HP ABC判定と治療カテゴリ判定まで完了した医院数です。"),
+        ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
+        ("Webサイト未調査", "not_researched", "WebサイトURLは登録されていますが、まだ自動調査が完了していない医院数です。"),
+        ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
+        ("治療カテゴリ検出なし", "treatment_not_detected", "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
+    ]
+    for start in range(0, len(definitions), 3):
+        columns = st.columns(3)
+        for column, (label, key, help_text) in zip(columns, definitions[start:start + 3]):
+            column.metric(label, f"{counts[key]:,}件", help=help_text)
 
 
 def resolve_production_db_path():
@@ -140,7 +184,7 @@ def filters_ui(store,prefix="sales",defaults=None):
         else:
             mhlw_official_deps, crestix_deps = [], []
             st.caption("ナビイ診療科sidecarがないため、ナビイ正式診療科・Crestix営業カテゴリfilterは利用できません。既存filterは通常どおり利用できます。")
-        ranks = st.multiselect("HPランク",["A","B","C","D","NO_HP","UNKNOWN"],default=defaults.ranks,key=key("ranks"),format_func=lambda x:{"NO_HP":"HPなし","UNKNOWN":"未評価"}.get(x,x))
+        ranks = st.multiselect("HP ABC判定",["A","B","C","D"],default=[x for x in defaults.ranks if x in {"A","B","C","D"}],key=key("ranks"))
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
         treatments = st.multiselect("治療カテゴリ",treatment_names,default=defaults.treatments,key=key("treatments"))
@@ -206,9 +250,15 @@ def display_rows(records):
             "開設者＝管理者":"不明" if r.get("owner_manager_equal") is None else "一致" if r["owner_manager_equal"] else "不一致",
             "指定年月日":r.get("designation_date",""),"開業10年以内":{True:"該当",False:"非該当",None:"不明"}[within_years(r.get("designation_date",""))],
             "59歳以下確率":prob,"Maps掲載":r.get("maps_presence_status",""),"Maps HP":r.get("maps_website_url",""),"HP URL":r.get("hp_url",""),"HP状態":HP_LABELS.get(r.get("hp_status"),"不明"),
-            "HPランク":{"NO_HP":"HPなし","UNKNOWN":"未評価"}.get(r.get("hp_rank"),r.get("hp_rank","未評価")),
+            "HP ABC":r.get("effective_hp_rank", "D"),
+            "サイト種別":SITE_TYPE_LABELS.get(r.get("site_type"), "その他・未確認"),
+            "ポータル名":r.get("portal_name", ""),
+            "UUID有無":"あり" if r.get("uuid") else "なし",
+            "HP ABC判定理由":r.get("effective_rank_reason", ""),
             "EPARK URL":r.get("epark_url",""),"EPARK契約":CONTRACT_LABELS.get(r.get("epark_contract"),"不明"),
-            "治療カテゴリ":" / ".join(r.get("treatment_categories",[])),"集客投資シグナル数":r.get("marketing_signal_count",0),
+            "治療カテゴリ":" / ".join(r.get("website_treatment_categories") or r.get("treatment_categories",[])),
+            "治療カテゴリ状態":TREATMENT_STATUS_DISPLAY_LABELS.get(r.get("treatment_status"),"不明"),
+            "集客投資シグナル数":r.get("marketing_signal_count",0),
             "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))})
     return pd.DataFrame(rows)
 
@@ -225,6 +275,7 @@ def details(store,cid):
     if r.get("epark_url"):
         st.link_button("EPARKを開く",r["epark_url"])
     st.write("HP確認："+" / ".join(r.get("hp_match_reason",[]) or [HP_LABELS.get(r.get("hp_status"),"未調査")]))
+    st.write(f"HP ABC：{r.get('effective_hp_rank','D')}（{r.get('effective_rank_reason','')}）")
     reasons = r.get("hp_rank_reasons",[])
     if reasons:
         st.write("HPランクの理由："+" / ".join(f"{p['feature']}（{p['points']}点）" for p in reasons))
@@ -306,6 +357,9 @@ def listing(store,filters,prefix="list"):
     number = st.number_input("ページ",1,pages,1,key=prefix+"_page")
     records = store.query(filters,limit=size,offset=(number-1)*size)
     if records:
+        statuses = store.treatment_status_for_ids([r["id"] for r in records])
+        for r in records:
+            r["treatment_status"] = statuses.get(r["id"])
         st.dataframe(display_rows(records),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
         choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
         if choice:
@@ -501,11 +555,10 @@ def simple_workflow_ui(store, demo):
     st.caption("普段使う操作だけを4ステップにまとめました。細かい設定・手動修正は「詳細設定」にあります。")
 
     st.subheader("現在のデータ状況")
-    cols = st.columns(4)
+    cols = st.columns(2)
     cols[0].metric("厚生局データ", f"{metrics.get('厚生局取込レコード',0):,}件")
-    cols[1].metric("既存UUIDあり", f"{metrics.get('既存UUIDあり',0):,}件")
-    cols[2].metric("Google Maps HP取得", f"{metrics.get('Google Maps HP取得',0):,}件")
-    cols[3].metric("HP確認済み", f"{metrics.get('HP確認済み',0):,}件")
+    cols[1].metric("既存UUIDあり", f"{metrics.get('既存UUIDあり',0):,}件", help="既存Comdeskデータと紐付いている医院数です。")
+    show_web_research_metrics(store)
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
@@ -676,6 +729,8 @@ def simple_workflow_ui(store, demo):
 def simple_sales_ui(store, demo=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
+    st.subheader("Webサイト調査状況")
+    show_web_research_metrics(store)
 
     scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
     # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
@@ -714,6 +769,11 @@ def simple_sales_ui(store, demo=False):
                 label + ("（現Research未対応）" if by_label[label].support_status == "MISSING" else ""),
         )
         sales_pairs.extend((department, treatment) for treatment in selected)
+
+    status_preview_filters = Filters(
+        active_only=True, hp_only=False, medical_types=sales_medical_types,
+        prefectures=pref, departments=deps, sales_pairs=sales_pairs, scope=scope,
+    )
     ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
     ad_min = st.selectbox("広告・集客施策数", ad_count_options(store), format_func=ad_count_label, key="simple_sales_ad_min")
     companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
@@ -721,36 +781,45 @@ def simple_sales_ui(store, demo=False):
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
     age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
-    # 2026-10-05: 旧「HPランク A/B」判定を、正式Sales Tier分類(SSOT)へ差し替え。
-    # 同じ位置のチェックボックスをセレクトボックスへ最小限の差し替えのみ行う。
-    tier_labels = [label for label, _ in SALES_TIER_PRESETS]
-    default_tier_index = SALES_TIER_PRESET_UNRESTRICTED_INDEX if demo else SALES_TIER_PRESET_DEFAULT_INDEX
-    tier_choice = cols[2].selectbox("Sales Tier", tier_labels, index=default_tier_index, key="simple_sales_tier_preset")
-    sales_tiers = dict(SALES_TIER_PRESETS)[tier_choice]
-    # 2026-10-05: 「既存UUID」は日常運用では営業担当が意識する必要がないため、通常画面からは外した
-    # （詳細設定の営業対象フィルター（詳細）には残している）。Comdesk出力時に内部で安全側に適用する。
+    # 通常営業UIはeffective_hp_rankを使用。Treatment状態はこの判定に影響しない。
+    rank_labels = [label for label, _ in HP_RANK_PRESETS]
+    default_rank_index = HP_RANK_PRESET_UNRESTRICTED_INDEX if demo else HP_RANK_PRESET_DEFAULT_INDEX
+    rank_choice = cols[2].selectbox("HP ABC判定", rank_labels, index=default_rank_index, key="simple_sales_hp_rank_preset")
+    hp_ranks = dict(HP_RANK_PRESETS)[rank_choice]
+    site_type_label = cols[3].selectbox(
+        "サイト種別", ["指定なし", "公式HP確認済み", "ポータルサイト", "その他・未確認"],
+        key="simple_sales_site_type",
+        help="HP ABC判定・治療カテゴリとは独立した分類です。公式HP確認済みは既存の公式確認根拠がある医院だけです。",
+    )
+    site_types = {
+        "指定なし": [], "公式HP確認済み": [SITE_OFFICIAL],
+        "ポータルサイト": [SITE_PORTAL], "その他・未確認": [SITE_OTHER],
+    }[site_type_label]
+    # 「既存UUID」は日常運用では営業担当が意識する必要がないため、通常画面からは外している
+    # （詳細設定の営業対象フィルター（詳細）には残している）。UUIDあり/なしは両方営業対象になり得る
+    # （UUIDなし＝新規案件）。出力時に強制的にUUIDありへ絞り込むことはしない。
 
     keyword = st.text_input("医院名・電話番号で検索", key="simple_sales_keyword")
 
-    filters = Filters(
-        active_only=True,
-        hp_only=False,
-        medical_types=sales_medical_types,
+    filters = replace(
+        status_preview_filters,
         recent_only=recent,
         age_min=.5 if age else None,
-        prefectures=pref,
-        departments=deps,
-        sales_pairs=sales_pairs,
-        sales_tiers=sales_tiers,
+        effective_ranks=hp_ranks,
+        site_types=site_types,
         signals=ads,
         ad_min=ad_min,
         production_companies=companies,
         keyword=keyword,
-        scope=scope,
     )
 
+    # 「指定なし」でも営業対象の定義は常にeffective A+B。C/Dは一覧監査には使えるが
+    # 営業対象メトリクスとComdeskには入れない。
+    export_ranks = [r for r in (hp_ranks or ["A", "B"]) if r in ("A", "B")]
+    non_ab_only_selected = bool(hp_ranks) and not export_ranks
+    sales_filters = replace(filters, effective_ranks=export_ranks)
     try:
-        count = store.count(filters)
+        count = 0 if non_ab_only_selected else store.count(sales_filters)
     except SalesClassificationUnavailableError as exc:
         st.error(str(exc))
         return
@@ -758,7 +827,7 @@ def simple_sales_ui(store, demo=False):
     summary = sales_classification_summary()
     if summary:
         st.caption(
-            f"Sales Tier分類（{summary['source_path'].name}）："
+            f"参考：Sales Tier分類（{summary['source_path'].name}、HP ABC判定とは別軸）："
             f"A={summary['by_tier']['A']:,}　B={summary['by_tier']['B']:,}　"
             f"C={summary['by_tier']['C']:,}　D={summary['by_tier']['D']:,}（営業対象外）　"
             f"｜営業利用可能(A+B+C)：{summary['sales_usable']:,}件"
@@ -768,31 +837,44 @@ def simple_sales_ui(store, demo=False):
         listing(store, filters, "simple_sales_results")
 
     st.subheader("Comdesk形式で出力")
-    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。D UNKNOWNとUUID未登録の医院は出力しません。")
+    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。HP ABC判定がA・B以外の医院は出力しません。")
 
-    # D UNKNOWNは営業対象外のため、選択内容に関わらずComdesk出力からは常に除外する。
-    # 既存UUIDは営業担当が意識しなくても安全なよう、出力時だけ内部でUUIDありに限定する(通常画面には選択肢を出さない)。
-    export_tiers = [t for t in sales_tiers if t != "D"]
-    # D UNKNOWNのみを選択した場合、export_tiersが空になりsales_tiers未指定(全tier許可)と
-    # 区別できなくなる。空=無制限ではなく「0件」として扱い、意図せずD/他tierを出力しない。
-    d_only_selected = bool(sales_tiers) and not export_tiers
-    if d_only_selected:
-        st.caption("D UNKNOWNのみが選択されています。D UNKNOWNは営業対象外のためComdesk出力はできません。")
-    export_filters = replace(filters, sales_tiers=export_tiers, uuid_mode="あり")
+    # 営業対象はHP ABC判定のA+Bのみ。選択内容に関わらずComdesk出力はA/Bに限定する
+    # （C/D/UNKNOWN/NO_HPを選んで一覧確認はできるが、出力対象にはならない）。
+    # UUIDの有無では絞り込まない。UUIDなし（新規案件）もUUIDあり（既存案件）と同様に出力する。
+    export_ranks = [r for r in (hp_ranks or ["A", "B"]) if r in ("A", "B")]
+    # A+B以外だけを選択した場合、export_ranksが空になりranks未指定(無制限)と区別できなくなる。
+    # 空=無制限ではなく「0件」として扱い、意図せずC/D/UNKNOWN/NO_HPを出力しない。
+    non_ab_only_selected = bool(hp_ranks) and not export_ranks
+    if non_ab_only_selected:
+        st.caption(f"選択されたHP ABC判定「{rank_choice}」は営業対象外のため、Comdesk出力はできません。")
+    export_filters = sales_filters
 
     try:
-        export_count = 0 if d_only_selected else store.count(export_filters)
+        export_count = 0 if non_ab_only_selected else store.count(export_filters)
+        uuid_yes_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="あり"))
+        uuid_no_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="なし"))
     except SalesClassificationUnavailableError as exc:
         st.error(str(exc))
         return
+
+    export_cols = st.columns(3)
+    export_cols[0].metric("Comdesk出力対象", f"{export_count:,}件")
+    export_cols[1].metric("既存案件(UUIDあり)", f"{uuid_yes_count:,}件")
+    export_cols[2].metric("新規案件(UUIDなし)", f"{uuid_no_count:,}件")
+    if not non_ab_only_selected and set(hp_ranks or ["A", "B"]) <= {"A", "B"} and export_count != count:
+        st.caption(
+            f"注意：営業対象（{count:,}件）とComdesk出力対象（{export_count:,}件）が一致していません。"
+            "絞り込み条件がA+B以外を含んでいないか確認してください。"
+        )
 
     signature = json.dumps(
         [str(store.path), asdict(export_filters), COMDESK_HEADERS, store.revision()],
         ensure_ascii=False,
         sort_keys=True,
     )
-    export_disabled = d_only_selected or export_count == 0
-    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True) and not d_only_selected:
+    export_disabled = non_ab_only_selected or export_count == 0
+    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True) and not non_ab_only_selected:
         st.session_state["simple_export_files"] = {
             "signature": signature,
             "files": store.export(export_filters),

@@ -44,6 +44,34 @@ CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE = f"{RESEARCH_SIDECAR_ATTACH_NAME}.{CLINI
 RESEARCH_STATUS_VALUES = ("DONE", "FETCH_FAILED")
 RESEARCH_STATUS_UI_OPTIONS = (*RESEARCH_STATUS_VALUES, "NOT_RESEARCHED")
 
+# Treatment状態の4分類（UI表示専用。HP ABC判定には一切使わない）。
+# 優先順位: CONFIRMED行の有無を最優先でチェックし（research_statusの値に関わらず「取得済み」）、
+# 次にclinic_research_status.research_statusを見る。行が無ければ常にNOT_RESEARCHED。
+TREATMENT_STATUS_FETCHED = "FETCHED"
+TREATMENT_STATUS_DONE_NO_CATEGORY = "DONE_NO_CATEGORY"
+TREATMENT_STATUS_FETCH_FAILED = "FETCH_FAILED"
+TREATMENT_STATUS_NOT_RESEARCHED = "NOT_RESEARCHED"
+TREATMENT_STATUS_VALUES = (
+    TREATMENT_STATUS_FETCHED,
+    TREATMENT_STATUS_DONE_NO_CATEGORY,
+    TREATMENT_STATUS_FETCH_FAILED,
+    TREATMENT_STATUS_NOT_RESEARCHED,
+)
+
+
+def treatment_status_case_sql(clinic_id_column="clinics.id"):
+    """4分類を1列で返すCASE式のSQL断片（READ ONLYのSELECTでのみ使う）。"""
+    return (
+        "CASE "
+        f"WHEN EXISTS(SELECT 1 FROM {RESEARCH_SIDECAR_QUALIFIED_TABLE} r "
+        f"WHERE r.clinic_id={clinic_id_column} AND r.research_status='CONFIRMED') THEN '{TREATMENT_STATUS_FETCHED}' "
+        f"WHEN (SELECT rs.research_status FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs "
+        f"WHERE rs.clinic_id={clinic_id_column})='DONE' THEN '{TREATMENT_STATUS_DONE_NO_CATEGORY}' "
+        f"WHEN (SELECT rs.research_status FROM {CLINIC_RESEARCH_STATUS_QUALIFIED_TABLE} rs "
+        f"WHERE rs.clinic_id={clinic_id_column})='FETCH_FAILED' THEN '{TREATMENT_STATUS_FETCH_FAILED}' "
+        f"ELSE '{TREATMENT_STATUS_NOT_RESEARCHED}' END"
+    )
+
 
 class ResearchSidecarUnavailableError(RuntimeError):
     pass

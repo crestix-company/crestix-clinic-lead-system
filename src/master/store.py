@@ -16,7 +16,10 @@ from src.master.matching import match_record, medical_key, MasterMatch
 from src.master.filters import Filters, where, clauses
 from src.normalizer.phone import normalize_phone, tel_match_key
 from src.normalizer.address import normalize_address, extract_municipality
-from src.master.research_sidecar import research_sidecar_path, research_sidecar_readonly_uri, RESEARCH_SIDECAR_ATTACH_NAME, ensure_research_sidecar
+from src.master.research_sidecar import (
+    research_sidecar_path, research_sidecar_readonly_uri, RESEARCH_SIDECAR_ATTACH_NAME, ensure_research_sidecar,
+    research_sidecar_available, clinic_research_status_available, treatment_status_case_sql, TREATMENT_STATUS_VALUES,
+)
 from src.master.sales_classification import (
     SALES_CLASSIFICATION_SIDECAR_PATH, SALES_CLASSIFICATION_ATTACH_NAME,
     ensure_sales_classification, ensure_sales_classification_sidecar,
@@ -24,6 +27,10 @@ from src.master.sales_classification import (
 from src.normalizer.clinic_name import normalize_clinic_name, normalize_person, person_from_owner
 from src.normalizer.departments import normalize_departments
 from src.utils.date_utils import parse_date, today_japan
+from src.master.hp_effective_rank import (
+    HP_BATCH_ENV_VAR, DEFAULT_HP_BATCH_PATH, effective_hp_rank, effective_rank_reason, load_machine_ranks,
+)
+from src.master.hp_site_type import classify_site, load_batch_treatments, load_batch_urls
 
 
 def now():
@@ -238,6 +245,24 @@ class ClinicStore:
             except sqlite3.Error:
                 pass
         conn.create_function("municipality_of", 1, extract_municipality)
+        # Production DBのhp_rankは旧値として不変のまま保持する。v2 sidecarはREAD ONLYで
+        # メモリへ読み、同じSQLite関数をUI count/query/exportの全経路で共有する。
+        configured_batch = os.getenv(HP_BATCH_ENV_VAR)
+        production_default = Path.home() / "CrestixData" / "clinic-lead" / "clinics.sqlite3"
+        use_batch = bool(configured_batch) or self.path.resolve() == production_default.resolve()
+        machine_ranks = load_machine_ranks(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
+        batch_urls = load_batch_urls(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
+        conn.create_function(
+            "effective_hp_rank_for_id", 2,
+            lambda cid, old: effective_hp_rank(machine_ranks.get(int(cid), "UNKNOWN"), old)
+            if use_batch else effective_hp_rank(old, old),
+        )
+        conn.create_function(
+            "hp_site_type_for_id", 4,
+            lambda cid, status, hp_url, maps_url: classify_site(
+                status, hp_url, *((batch_urls.get(int(cid), (maps_url or "", ""))))
+            )[0],
+        )
         try:
             yield conn
             conn.commit()
@@ -266,10 +291,27 @@ class ClinicStore:
             return self._get(c, r["merged_into"])
         # normalized_departmentsはeffective_jsonのcacheではなく、SQL filterと同じclinics.departments_json列を
         # runtime sourceにする（reprojectでdepartments_jsonだけ更新してもfilter/pair判定がずれないように）。
-        return {**json.loads(r["effective_json"]), "id": r["id"], "uuid": r["uuid"], "tel_match_key":r["tel_match_key"],
+        data = {**json.loads(r["effective_json"]), "id": r["id"], "uuid": r["uuid"], "tel_match_key":r["tel_match_key"],
                 "first_seen_at":r["first_seen_at"], "last_seen_at":r["last_seen_at"],
                 "source_as_of_date":r["source_as_of_date"], "is_new_since_last_update":bool(r["is_new"]),
                 "normalized_departments": json.loads(r["departments_json"])}
+        machine = c.execute("SELECT effective_hp_rank_for_id(?,?)", (r["id"], r["hp_rank"])).fetchone()[0]
+        configured_batch = os.getenv(HP_BATCH_ENV_VAR)
+        production_default = Path.home() / "CrestixData" / "clinic-lead" / "clinics.sqlite3"
+        use_batch = bool(configured_batch) or self.path.resolve() == production_default.resolve()
+        ranks = load_machine_ranks(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
+        machine_raw = ranks.get(r["id"], "UNKNOWN") if use_batch else r["hp_rank"]
+        data.update(machine_rank=machine_raw, old_hp_rank_db=r["hp_rank"], effective_hp_rank=machine,
+                    effective_rank_reason=effective_rank_reason(machine_raw, r["hp_rank"]))
+        source_url, final_url = load_batch_urls(configured_batch or DEFAULT_HP_BATCH_PATH).get(r["id"], ("", "")) if use_batch else ("", "")
+        site_type, portal_name = classify_site(r["hp_status"], r["hp_url"], source_url or r["maps_website_url"], final_url)
+        data.update(site_type=site_type, portal_name=portal_name,
+                    site_source_url=source_url, site_final_url=final_url,
+                    website_treatment_categories=(
+                        load_batch_treatments(configured_batch or DEFAULT_HP_BATCH_PATH).get(r["id"], [])
+                        if use_batch else []
+                    ))
+        return data
 
     def get(self, cid):
         with self.connect() as c:
@@ -490,6 +532,38 @@ class ClinicStore:
         sql,args = where(filters,as_of)
         with self.connect() as c:
             return c.execute("SELECT count(*) FROM clinics WHERE "+sql,args).fetchone()[0]
+
+    def treatment_status_counts(self, filters=None, as_of=None):
+        """現在のfilterに合致する医院を、Treatment調査状態の4分類（表示専用）で集計する。
+        HP ABC判定（hp_rank）には一切影響しない、READ ONLYの補助情報。
+        sidecarが利用できない場合はNoneを返す（呼び出し側は表示を省略する）。
+        """
+        if not (research_sidecar_available() and clinic_research_status_available()):
+            return None
+        filters = filters or Filters(active_only=False, hp_only=False)
+        _ensure_mhlw_sidecar(filters)
+        ensure_sales_classification(filters)
+        sql, args = where(filters, as_of)
+        case_sql = treatment_status_case_sql()
+        with self.connect() as c:
+            rows = c.execute(
+                f"SELECT {case_sql} AS status, count(*) FROM clinics WHERE {sql} GROUP BY status", args
+            ).fetchall()
+        counts = {status: 0 for status in TREATMENT_STATUS_VALUES}
+        for status, n in rows:
+            counts[status] = n
+        return counts
+
+    def treatment_status_for_ids(self, ids):
+        """指定clinic_idそれぞれのTreatment調査状態（表示専用、4分類）。"""
+        ids = list(ids)
+        if not ids or not (research_sidecar_available() and clinic_research_status_available()):
+            return {}
+        case_sql = treatment_status_case_sql()
+        placeholders = ",".join("?" for _ in ids)
+        with self.connect() as c:
+            rows = c.execute(f"SELECT id, {case_sql} FROM clinics WHERE id IN ({placeholders})", ids).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         filters = filters or Filters(active_only=False,hp_only=False)

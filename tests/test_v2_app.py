@@ -1,4 +1,5 @@
 import importlib.util
+import sqlite3
 from pathlib import Path
 from streamlit.testing.v1 import AppTest
 from src.utils.config import ROOT
@@ -23,11 +24,18 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     monkeypatch.setenv("CLINIC_DB_PATH",str(db_path))
     # サンプル用のパスも隔離し、pytestで配布dataにDBを残さない。
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH",str(tmp_path/"demo.db"))
+    batch_path = tmp_path / "hp_batch.sqlite3"
+    with sqlite3.connect(batch_path) as conn:
+        conn.execute("CREATE TABLE hp_research_batch_results(clinic_id INTEGER PRIMARY KEY, fetch_status TEXT, treatment_categories TEXT)")
+        conn.executemany("INSERT INTO hp_research_batch_results VALUES(?,?,?)", [
+            (1, "OK", '["x"]'), (2, "OK", '[]'), (3, "OK", '[]'),
+        ])
+    monkeypatch.setenv("HP_RESEARCH_BATCH_DB_PATH", str(batch_path))
     app=AppTest.from_file(str(ROOT/"app_v2.py"),default_timeout=30).run()
     assert not app.exception and not app.error
     app.toggle[0].set_value(True).run()
     assert not app.exception and not app.error
-    assert any(m.label=="HP確認済み" and m.value=="3件" for m in app.metric)
+    assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
     app.radio[0].set_value("営業対象・出力").run()
     assert not app.exception and not app.error
     # デモデータはimport時にfirst_seen_at=現在時刻となり既定の既存営業リスト（legacy cutoff）から外れるため、

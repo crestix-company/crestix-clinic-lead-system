@@ -16,6 +16,9 @@ class Filters:
     recent_only: bool = False
     age_min: float | None = None
     ranks: list[str] = field(default_factory=list)
+    # 通常営業UI/Comdesk専用。v2 machine rank + 旧hp_rankからruntime導出するA/B/C/D。
+    effective_ranks: list[str] = field(default_factory=list)
+    site_types: list[str] = field(default_factory=list)
     prefectures: list[str] = field(default_factory=list)
     municipalities: list[str] = field(default_factory=list)
     medical_types: list[str] = field(default_factory=list)
@@ -75,10 +78,12 @@ def clauses(f, as_of=None):
         if not 0 <= f.age_min <= 1:
             raise ValueError("年齢確率は0〜100%で指定してください。")
         add(f"59歳以下確率{f.age_min:.0%}以上", "age_probability>=?", f.age_min)
-    for values, col, label in [(f.ranks,"hp_rank","HPランク"), (f.prefectures,"prefecture","都道府県"),
+    for values, col, label in [(f.ranks,"hp_rank","旧HPランク"), (f.effective_ranks,"effective_hp_rank_for_id(id,hp_rank)","HP ABC判定"), (f.prefectures,"prefecture","都道府県"),
                                (f.medical_types,"medical_type","医科・歯科"), (f.hot,"hot_status","アツさ")]:
         if values:
             add(label, f"{col} IN ({','.join('?' for _ in values)})", *values)
+    if f.site_types:
+        add("サイト種別", f"hp_site_type_for_id(id,hp_status,hp_url,maps_website_url) IN ({','.join('?' for _ in f.site_types)})", *f.site_types)
     if f.municipalities:
         add("市区町村", f"municipality_of(address) IN ({','.join('?' for _ in f.municipalities)})", *f.municipalities)
     # 診療科/治療の複数選択は同一項目内OR、項目間AND。特定シグナルは全選択AND。
