@@ -27,6 +27,7 @@ sidecarが存在しない間はfilterが安全に0件扱いになるよう、既
 import os
 import sqlite3
 from pathlib import Path
+from src.master.data_paths import treatment_sidecar_path
 
 RESEARCH_SIDECAR_ENV_VAR = "TREATMENT_RESEARCH_DB_PATH"
 RESEARCH_SIDECAR_DEFAULT_PATH = Path.home() / "CrestixData" / "clinic-lead" / "treatment_research_final.sqlite3"
@@ -79,8 +80,7 @@ class ResearchSidecarUnavailableError(RuntimeError):
 
 def research_sidecar_path():
     """共通Runtime DBの絶対パス。TREATMENT_RESEARCH_DB_PATHで都度override可能（frozen定数にしない）。"""
-    raw = os.getenv(RESEARCH_SIDECAR_ENV_VAR)
-    return Path(raw).expanduser() if raw else RESEARCH_SIDECAR_DEFAULT_PATH
+    return treatment_sidecar_path()
 
 
 def research_sidecar_readonly_uri(path=None):

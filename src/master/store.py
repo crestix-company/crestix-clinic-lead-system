@@ -28,9 +28,10 @@ from src.normalizer.clinic_name import normalize_clinic_name, normalize_person, 
 from src.normalizer.departments import normalize_departments
 from src.utils.date_utils import parse_date, today_japan
 from src.master.hp_effective_rank import (
-    HP_BATCH_ENV_VAR, DEFAULT_HP_BATCH_PATH, effective_hp_rank, effective_rank_reason, load_machine_ranks,
+    HP_BATCH_ENV_VAR, effective_hp_rank, effective_rank_reason, hp_batch_path, load_machine_ranks,
 )
 from src.master.hp_site_type import classify_site, load_batch_treatments, load_batch_urls
+from src.master.data_paths import production_db_path
 
 
 def now():
@@ -248,10 +249,10 @@ class ClinicStore:
         # Production DBのhp_rankは旧値として不変のまま保持する。v2 sidecarはREAD ONLYで
         # メモリへ読み、同じSQLite関数をUI count/query/exportの全経路で共有する。
         configured_batch = os.getenv(HP_BATCH_ENV_VAR)
-        production_default = Path.home() / "CrestixData" / "clinic-lead" / "clinics.sqlite3"
-        use_batch = bool(configured_batch) or self.path.resolve() == production_default.resolve()
-        machine_ranks = load_machine_ranks(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
-        batch_urls = load_batch_urls(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
+        use_batch = bool(configured_batch) or self.path.resolve() == production_db_path().resolve()
+        batch_path = hp_batch_path()
+        machine_ranks = load_machine_ranks(batch_path) if use_batch else {}
+        batch_urls = load_batch_urls(batch_path) if use_batch else {}
         conn.create_function(
             "effective_hp_rank_for_id", 2,
             lambda cid, old: effective_hp_rank(machine_ranks.get(int(cid), "UNKNOWN"), old)
@@ -297,18 +298,18 @@ class ClinicStore:
                 "normalized_departments": json.loads(r["departments_json"])}
         machine = c.execute("SELECT effective_hp_rank_for_id(?,?)", (r["id"], r["hp_rank"])).fetchone()[0]
         configured_batch = os.getenv(HP_BATCH_ENV_VAR)
-        production_default = Path.home() / "CrestixData" / "clinic-lead" / "clinics.sqlite3"
-        use_batch = bool(configured_batch) or self.path.resolve() == production_default.resolve()
-        ranks = load_machine_ranks(configured_batch or DEFAULT_HP_BATCH_PATH) if use_batch else {}
+        use_batch = bool(configured_batch) or self.path.resolve() == production_db_path().resolve()
+        batch_path = hp_batch_path()
+        ranks = load_machine_ranks(batch_path) if use_batch else {}
         machine_raw = ranks.get(r["id"], "UNKNOWN") if use_batch else r["hp_rank"]
         data.update(machine_rank=machine_raw, old_hp_rank_db=r["hp_rank"], effective_hp_rank=machine,
                     effective_rank_reason=effective_rank_reason(machine_raw, r["hp_rank"]))
-        source_url, final_url = load_batch_urls(configured_batch or DEFAULT_HP_BATCH_PATH).get(r["id"], ("", "")) if use_batch else ("", "")
+        source_url, final_url = load_batch_urls(batch_path).get(r["id"], ("", "")) if use_batch else ("", "")
         site_type, portal_name = classify_site(r["hp_status"], r["hp_url"], source_url or r["maps_website_url"], final_url)
         data.update(site_type=site_type, portal_name=portal_name,
                     site_source_url=source_url, site_final_url=final_url,
                     website_treatment_categories=(
-                        load_batch_treatments(configured_batch or DEFAULT_HP_BATCH_PATH).get(r["id"], [])
+                        load_batch_treatments(batch_path).get(r["id"], [])
                         if use_batch else []
                     ))
         return data

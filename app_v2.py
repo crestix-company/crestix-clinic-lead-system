@@ -33,6 +33,7 @@ from src.master.sales_classification import (
 )
 from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvariantError
 from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
+from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -104,10 +105,7 @@ def resolve_production_db_path():
     CLINIC_DB_PATH未設定時にrepo内の古いDBへ黙ってfallbackし、
     利用者が気づかないまま古いデータを見てしまう事故を防ぐ。
     """
-    raw = os.getenv("CLINIC_DB_PATH")
-    if not raw:
-        return None, "CLINIC_DB_PATHが設定されていません。Production DBの絶対パスを環境変数CLINIC_DB_PATHに設定してから起動してください。"
-    path = Path(raw)
+    path = production_db_path()
     if not path.exists():
         return None, f"CLINIC_DB_PATHで指定されたファイルが見つかりません： {path}"
     if not path.is_file():

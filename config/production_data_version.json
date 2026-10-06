@@ -5,5 +5,10 @@
   "treatment_clinics": 6303,
   "treatment_rows": 79650,
   "done": 9867,
-  "fetch_failed": 302
+  "fetch_failed": 302,
+  "hp_batch_clinics": 10313,
+  "hp_researched": 9751,
+  "hp_failed": 562,
+  "hp_treatment_detected": 3033,
+  "hp_treatment_not_detected": 6718
 }

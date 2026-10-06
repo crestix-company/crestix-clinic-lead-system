@@ -7,7 +7,7 @@ if not exist ".venv\Scripts\python.exe" goto missing
 if errorlevel 1 goto missing
 echo 起動中です。ブラウザーが開かない場合は、表示されるURLをアドレスバーに貼り付けてください。
 echo 終了するまでこの画面を閉じないでください。終了はCtrl+Cです。
-".venv\Scripts\python.exe" scripts\launch_v2.py
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\update_and_launch_windows.ps1"
 if errorlevel 1 pause
 exit /b
 :missing

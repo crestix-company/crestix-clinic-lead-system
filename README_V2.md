@@ -41,7 +41,55 @@ UUID,種別,名前,カナ,郵便番号,都道府県,住所１,住所２,住所�
 
 ## Windows
 
+### ISリーダー向け正式手順
+
+標準データフォルダーは次の場所です。3DBはGit管理せず、リポジトリ外へ配置します。
+
+```text
+%USERPROFILE%\CrestixData\clinic-lead\
+  clinics.sqlite3
+  treatment_research_final.sqlite3
+  hp_abc_batch_sidecar.sqlite3
+```
+
 初回:
+
+1. GitHubからリポジトリをcloneする。
+2. 上記データフォルダーを作成する。
+3. 3つのSQLiteスナップショットを配置する。
+4. `setup_v2_windows.bat`をダブルクリックする。
+5. 完了後、`start_v2_windows.bat`をダブルクリックする。
+
+以後は`start_v2_windows.bat`だけで、未コミット変更がないことを確認し、`git pull --ff-only`で
+GitHubのmainを最新版へ更新してから、3DBをREAD ONLYでpreflightし、アプリを1つ起動します。
+不足DBがある場合は空DBを作成せず、ファイル名を日本語で表示して停止します。
+
+個別パスを変更する場合、既存env varが`CLINIC_DATA_DIR`より優先されます。
+
+```text
+CLINIC_DB_PATH
+TREATMENT_RESEARCH_DB_PATH
+HP_RESEARCH_BATCH_DB_PATH
+  ↓ 未設定の場合
+CLINIC_DATA_DIR（未設定時は %USERPROFILE%\CrestixData\clinic-lead）
+```
+
+最新版へ手動更新する場合:
+
+1. アプリを`Ctrl+C`で停止する。
+2. `git status --short`で変更がないことを確認する。
+3. `git switch main`を実行する。
+4. `git pull --ff-only origin main`を実行する。
+5. 必要な場合だけ、管理者から受領した3DBのsnapshotへ入れ替える。
+6. `start_v2_windows.bat`をダブルクリックする。
+
+禁止事項:
+
+- `git reset --hard`、`git clean -fd`、`git push --force`を使用しない。
+- Production DBやsidecarをリポジトリ内へ配置しない。
+- OneDrive、Google Drive等で同一SQLiteを複数PCから同時writeしない。
+
+コマンドで初回セットアップする場合:
 
 ```powershell
 py -3.12 -m venv .venv
@@ -49,7 +97,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe scripts\launch_v2.py
 ```
 
-または `setup_v2_windows.bat` → `start_v2_windows.bat` を使用します。2回目以降は `start_v2_windows.bat` だけで起動できます。
+通常は上記コマンドではなく、BATファイルを使用してください。
 
 ## DB更新
 

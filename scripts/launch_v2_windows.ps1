@@ -82,6 +82,10 @@ $PythonExe = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path $PythonExe)) {
     Stop-WithError "仮想環境が見つかりません（$PythonExe）。先に setup_v2_windows.bat を実行してください。"
 }
+& $PythonExe -c "import streamlit,pandas,openpyxl,yaml,requests,bs4,rapidfuzz,filelock,tzdata" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Stop-WithError "必要なPython依存関係が不足しています。setup_v2_windows.bat を再実行してください。"
+}
 
 # ---------------------------------------------------------------------------
 # DB確認（Production DB / 研究結果サイドカーのパス解決と存在確認のみ。
@@ -89,29 +93,42 @@ if (-not (Test-Path $PythonExe)) {
 # ---------------------------------------------------------------------------
 Write-Step "Production DBを確認しています"
 
+if (-not $env:CLINIC_DATA_DIR) {
+    $env:CLINIC_DATA_DIR = Join-Path $HOME "CrestixData\clinic-lead"
+}
 if (-not $env:CLINIC_DB_PATH) {
-    $env:CLINIC_DB_PATH = Join-Path $HOME "CrestixData\clinic-lead\clinics.sqlite3"
+    $env:CLINIC_DB_PATH = Join-Path $env:CLINIC_DATA_DIR "clinics.sqlite3"
 }
 $ClinicDbPath = $env:CLINIC_DB_PATH
 
 if (-not $env:TREATMENT_RESEARCH_DB_PATH) {
-    $env:TREATMENT_RESEARCH_DB_PATH = Join-Path $HOME "CrestixData\clinic-lead\treatment_research_final.sqlite3"
+    $env:TREATMENT_RESEARCH_DB_PATH = Join-Path $env:CLINIC_DATA_DIR "treatment_research_final.sqlite3"
 }
 $SidecarDbPath = $env:TREATMENT_RESEARCH_DB_PATH
+if (-not $env:HP_RESEARCH_BATCH_DB_PATH) {
+    $env:HP_RESEARCH_BATCH_DB_PATH = Join-Path $env:CLINIC_DATA_DIR "hp_abc_batch_sidecar.sqlite3"
+}
+$HpBatchDbPath = $env:HP_RESEARCH_BATCH_DB_PATH
 
 Write-Info "Production DB: $ClinicDbPath"
 Write-Info "研究結果サイドカー: $SidecarDbPath"
+Write-Info "HP Research Batchサイドカー: $HpBatchDbPath"
 
-if (-not (Test-Path $ClinicDbPath)) {
-    Stop-WithError ("Production DBが見つかりません: $ClinicDbPath`n" +
-        "CLINIC_DB_PATH を正しいパスに設定するか、Mac側の運用（.backup -> ZIP -> Windowsの" +
-        "CrestixDataフォルダーへ配置）でDBを移行してから再実行してください。" +
-        "`nこのスクリプトはDBを自動取得・自動生成しません。")
+$missingDbs = @()
+if (-not (Test-Path -LiteralPath $ClinicDbPath -PathType Leaf)) {
+    $missingDbs += "clinics.sqlite3 (Production): $ClinicDbPath"
 }
-if (-not (Test-Path $SidecarDbPath)) {
-    Stop-WithError ("研究結果サイドカーDBが見つかりません: $SidecarDbPath`n" +
-        "Mac側の運用（.backup -> ZIP -> Windowsへ配置）でDBを移行してから再実行してください。" +
-        "`nこのスクリプトはDBを自動取得・自動生成しません。")
+if (-not (Test-Path -LiteralPath $SidecarDbPath -PathType Leaf)) {
+    $missingDbs += "treatment_research_final.sqlite3: $SidecarDbPath"
+}
+if (-not (Test-Path -LiteralPath $HpBatchDbPath -PathType Leaf)) {
+    $missingDbs += "hp_abc_batch_sidecar.sqlite3: $HpBatchDbPath"
+}
+if ($missingDbs.Count -gt 0) {
+    $missingDetail = ($missingDbs | ForEach-Object { "  - $_" }) -join "`n"
+    Stop-WithError ("必要なDBが不足しています：`n$missingDetail`n" +
+        "3DBをCrestixDataフォルダーへ配置してから再実行してください。`n" +
+        "このスクリプトはDBを自動取得・自動生成・copy・migrateしません。")
 }
 
 # 行数/整合性の取得は読み取り専用（mode=ro）でのみ行う。書き込みは一切行わない。
@@ -120,17 +137,17 @@ import json
 import sqlite3
 import sys
 
-clinic_path, sidecar_path = sys.argv[1], sys.argv[2]
+clinic_path, sidecar_path, hp_batch_path = sys.argv[1], sys.argv[2], sys.argv[3]
 result = {}
 try:
-    db = sqlite3.connect(f"file:{clinic_path}?mode=ro", uri=True)
+    db = sqlite3.connect(f"file:{clinic_path}?mode=ro&immutable=1", uri=True)
     result["clinics_integrity"] = db.execute("PRAGMA integrity_check").fetchone()[0]
     result["clinics_count"] = db.execute("SELECT COUNT(*) FROM clinics").fetchone()[0]
 except Exception as exc:
     result["clinics_error"] = str(exc)
 
 try:
-    db2 = sqlite3.connect(f"file:{sidecar_path}?mode=ro", uri=True)
+    db2 = sqlite3.connect(f"file:{sidecar_path}?mode=ro&immutable=1", uri=True)
     result["sidecar_integrity"] = db2.execute("PRAGMA integrity_check").fetchone()[0]
     result["treatment_rows"] = db2.execute(
         "SELECT COUNT(*) FROM clinic_treatment_research_final").fetchone()[0]
@@ -143,6 +160,20 @@ try:
 except Exception as exc:
     result["sidecar_error"] = str(exc)
 
+try:
+    db3 = sqlite3.connect(f"file:{hp_batch_path}?mode=ro&immutable=1", uri=True)
+    result["hp_integrity"] = db3.execute("PRAGMA integrity_check").fetchone()[0]
+    row = db3.execute("""
+        SELECT COUNT(*), SUM(fetch_status='OK'), SUM(fetch_status<>'OK'),
+               SUM(fetch_status='OK' AND json_array_length(treatment_categories)>0),
+               SUM(fetch_status='OK' AND json_array_length(treatment_categories)=0)
+        FROM hp_research_batch_results
+    """).fetchone()
+    (result["hp_batch_clinics"], result["hp_researched"], result["hp_failed"],
+     result["hp_treatment_detected"], result["hp_treatment_not_detected"]) = row
+except Exception as exc:
+    result["hp_error"] = str(exc)
+
 print(json.dumps(result, ensure_ascii=False))
 '@
 
@@ -154,7 +185,7 @@ $dbStatsScript = [System.IO.Path]::GetTempFileName()
 Set-Content -Path $dbStatsScript -Value $dbStatsCode -Encoding UTF8
 
 try {
-    $dbStatsJson = & $PythonExe $dbStatsScript "$ClinicDbPath" "$SidecarDbPath"
+    $dbStatsJson = & $PythonExe $dbStatsScript "$ClinicDbPath" "$SidecarDbPath" "$HpBatchDbPath"
 } finally {
     Remove-Item -Path $dbStatsScript -ErrorAction SilentlyContinue
 }
@@ -169,10 +200,16 @@ if ($dbStats.PSObject.Properties.Name -contains "clinics_error") {
 if ($dbStats.PSObject.Properties.Name -contains "sidecar_error") {
     Stop-WithError "研究結果サイドカーDBを開けませんでした: $($dbStats.sidecar_error)"
 }
+if ($dbStats.PSObject.Properties.Name -contains "hp_error") {
+    Stop-WithError "HP Research BatchサイドカーDBを開けませんでした: $($dbStats.hp_error)"
+}
 
 Write-Info ("Production DB: clinics={0}件" -f $dbStats.clinics_count)
 Write-Info ("サイドカー: treatment_rows={0} / treatment_clinics={1} / DONE={2} / FETCH_FAILED={3}" -f `
     $dbStats.treatment_rows, $dbStats.treatment_clinics, $dbStats.done, $dbStats.fetch_failed)
+Write-Info ("HP Batch: total={0} / 完了={1} / 失敗={2} / 治療カテゴリあり={3} / なし={4}" -f `
+    $dbStats.hp_batch_clinics, $dbStats.hp_researched, $dbStats.hp_failed, `
+    $dbStats.hp_treatment_detected, $dbStats.hp_treatment_not_detected)
 
 # ---------------------------------------------------------------------------
 # DBバージョン確認（config/production_data_version.json の期待値との完全一致確認）
@@ -203,6 +240,17 @@ if ($dbStats.done -ne $expected.done) {
 if ($dbStats.fetch_failed -ne $expected.fetch_failed) {
     $mismatches += "fetch_failed: 期待値={0} 実際={1}" -f $expected.fetch_failed, $dbStats.fetch_failed
 }
+foreach ($field in @("hp_batch_clinics", "hp_researched", "hp_failed", "hp_treatment_detected", "hp_treatment_not_detected")) {
+    if ($dbStats.$field -ne $expected.$field) {
+        $mismatches += "${field}: 期待値=$($expected.$field) 実際=$($dbStats.$field)"
+    }
+}
+if ($dbStats.hp_batch_clinics -ne ($dbStats.hp_researched + $dbStats.hp_failed)) {
+    $mismatches += "HP Batch invariant: total != researched + failed"
+}
+if ($dbStats.hp_researched -ne ($dbStats.hp_treatment_detected + $dbStats.hp_treatment_not_detected)) {
+    $mismatches += "HP Batch invariant: researched != treatment detected + not detected"
+}
 
 if ($mismatches.Count -gt 0) {
     $detail = ($mismatches | ForEach-Object { "  - $_" }) -join "`n"
@@ -229,7 +277,10 @@ if ($dbStats.clinics_integrity -ne "ok") {
 if ($dbStats.sidecar_integrity -ne "ok") {
     Stop-WithError "研究結果サイドカーDBのintegrity_checkがokではありません: $($dbStats.sidecar_integrity)"
 }
-Write-Info "Production DB / サイドカーともにintegrity_check: ok"
+if ($dbStats.hp_integrity -ne "ok") {
+    Stop-WithError "HP Research BatchサイドカーDBのintegrity_checkがokではありません: $($dbStats.hp_integrity)"
+}
+Write-Info "Production DB / Treatmentサイドカー / HP Batchサイドカーすべてintegrity_check: ok"
 
 # ---------------------------------------------------------------------------
 # アプリ起動

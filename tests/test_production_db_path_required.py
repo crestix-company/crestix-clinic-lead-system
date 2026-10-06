@@ -14,12 +14,13 @@ def _import_app_v2():
     return mod
 
 
-def test_resolve_production_db_path_requires_env_var(monkeypatch):
+def test_resolve_production_db_path_uses_shared_data_dir(tmp_path, monkeypatch):
     monkeypatch.delenv("CLINIC_DB_PATH", raising=False)
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(tmp_path))
     app_v2 = _import_app_v2()
     path, error = app_v2.resolve_production_db_path()
     assert path is None
-    assert "CLINIC_DB_PATH" in error and "設定されていません" in error
+    assert str(tmp_path / "clinics.sqlite3") in error and "見つかりません" in error
 
 
 def test_resolve_production_db_path_rejects_nonexistent_file(tmp_path, monkeypatch):
@@ -67,6 +68,7 @@ def test_resolve_production_db_path_accepts_valid_store(tmp_path, monkeypatch):
 
 def test_app_fails_loudly_when_clinic_db_path_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CLINIC_DB_PATH", raising=False)
+    monkeypatch.setenv("CLINIC_DATA_DIR", str(tmp_path / "external-data"))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     old_repo_db = ROOT / "data/clinics.sqlite3"
     before_exists = old_repo_db.exists()
@@ -74,7 +76,7 @@ def test_app_fails_loudly_when_clinic_db_path_unset(tmp_path, monkeypatch):
     app = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()
 
     assert not app.exception  # st.error+st.stop()で処理し、未処理の例外にはしない
-    assert any("CLINIC_DB_PATH" in e.value for e in app.error)
+    assert any("clinics.sqlite3" in e.value and "見つかりません" in e.value for e in app.error)
     assert not any(m.label == "HP確認済み" for m in app.metric)  # 本編は描画されていない
     # 旧repo内DBが「たまたま存在していても」変化しないこと（作成も削除もしない）
     assert old_repo_db.exists() == before_exists

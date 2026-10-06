@@ -3,10 +3,11 @@ import os
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
+from src.master.data_paths import hp_batch_sidecar_path
 
 
 HP_BATCH_ENV_VAR = "HP_RESEARCH_BATCH_DB_PATH"
-DEFAULT_HP_BATCH_PATH = Path(__file__).resolve().parents[2] / "artifacts" / "hp_research_batch" / "hp_abc_batch_sidecar.sqlite3"
+DEFAULT_HP_BATCH_PATH = Path.home() / "CrestixData" / "clinic-lead" / "hp_abc_batch_sidecar.sqlite3"
 
 
 def effective_hp_rank(machine_rank, old_hp_rank_db):
@@ -33,7 +34,7 @@ def effective_rank_reason(machine_rank, old_hp_rank_db):
 
 
 def hp_batch_path():
-    return Path(os.getenv(HP_BATCH_ENV_VAR, str(DEFAULT_HP_BATCH_PATH))).expanduser()
+    return hp_batch_sidecar_path()
 
 
 @lru_cache(maxsize=8)
