@@ -8,6 +8,30 @@ def _text(relative):
     return (ROOT / relative).read_text(encoding="utf-8-sig")
 
 
+def _bytes(relative):
+    return (ROOT / relative).read_bytes()
+
+
+def test_powershell_launchers_use_utf8_bom_and_decode_as_utf8_sig():
+    for relative in ("scripts/update_and_launch_windows.ps1", "scripts/launch_v2_windows.ps1"):
+        payload = _bytes(relative)
+        assert payload.startswith(b"\xef\xbb\xbf")
+        payload.decode("utf-8-sig")
+
+
+def test_windows_batch_launchers_use_crlf_only():
+    for relative in ("start_v2_windows.bat", "setup_v2_windows.bat"):
+        payload = _bytes(relative)
+        assert b"\n" in payload
+        assert b"\n" not in payload.replace(b"\r\n", b"")
+
+
+def test_gitattributes_preserves_windows_script_line_endings():
+    attributes = _text(".gitattributes")
+    assert "*.bat text eol=crlf" in attributes
+    assert "*.ps1 text eol=crlf" in attributes
+
+
 def test_start_bat_uses_update_launcher_and_launch_v2_is_single_runtime():
     start = _text("start_v2_windows.bat")
     update = _text("scripts/update_and_launch_windows.ps1")
