@@ -25,12 +25,11 @@ Classification CSV) or whose translation is deliberately deferred past Stage4-A 
 hp_treatment_categories, research_status) raise BackendNotSupportedError instead of silently
 producing a wrong answer. See docs/supabase_migration/ for the Stage3 mapping that backs this.
 
-effective_ranks / site_types / municipalities / production_companies are NOT translated to SQL
-at all: their source logic (effective_hp_rank(), classify_site(), extract_municipality(), and
-reading the hp_production_companies array out of effective_json) stays the single pure-Python
-implementation already used by the SQLite path -- the last one specifically so it never needs a
-jsonb cast either -- applied here as a post-filter in Python so there is never a second,
-divergent implementation of that logic.
+site_types / municipalities / production_companies are NOT translated to SQL at all: their
+source logic (classify_site(), extract_municipality(), and reading the hp_production_companies
+array out of effective_json) stays in Python. effective_ranks is the sole exception: Stage4-B.7
+proved the SQL CASE below against effective_hp_rank() for all 162,258 clinics (mismatch=0), so it
+is pushed down to PostgreSQL to avoid fetching and post-filtering the full candidate population.
 """
 import json
 
@@ -56,7 +55,7 @@ UNSUPPORTED_FIELDS = (
     "sales_tiers", "sales_confidence", "exclude_human_review",
 )
 
-POST_FILTER_FIELDS = ("effective_ranks", "site_types", "municipalities", "production_companies")
+POST_FILTER_FIELDS = ("site_types", "municipalities", "production_companies")
 
 _AD_NAMES_SQL = ",".join("'" + n.replace("'", "''") + "'" for n in AD_SIGNAL_NAMES)
 
@@ -72,8 +71,7 @@ def raise_if_unsupported(filters):
 
 def needs_post_filter(filters):
     return bool(
-        filters.effective_ranks or filters.site_types or filters.municipalities
-        or filters.production_companies
+        filters.site_types or filters.municipalities or filters.production_companies
     )
 
 
@@ -159,6 +157,45 @@ def clauses(filters, as_of=None, excluded_ids=None):
                                 (filters.medical_types, "medical_type", "医科・歯科"), (filters.hot, "hot_status", "アツさ")]:
         if values:
             add(label, f"{col} IN ({','.join('%s' for _ in values)})", *values)
+    if filters.effective_ranks:
+        # Exact SQL translation of effective_hp_rank(), including adapter availability rules:
+        # only non-blank machine output with fetch_status='OK' is canonical input; otherwise
+        # UNKNOWN is supplied. btrim/upper mirror Python's strip().upper().
+        machine = (
+            "upper(btrim(CASE WHEN _effective_hp._fetch_status='OK' "
+            "AND coalesce(_effective_hp._machine_hp_rank,'')<>'' "
+            "THEN _effective_hp._machine_hp_rank ELSE 'UNKNOWN' END))"
+        )
+        old = "upper(btrim(coalesce(hp_rank,'')))"
+        if set(filters.effective_ranks) <= {"A", "B"}:
+            # Fast canonical decomposition for the hot UI path (A and/or B): either an
+            # authoritative successful machine result selects the rank, or the machine input
+            # normalizes to UNKNOWN and legacy A/B is allowed to fall back. The correlated
+            # probes use clinic_hp_research's clinic_id PK. A temporary normalized-rank index
+            # was evaluated in Stage4-B.7, not selected by the planner, and removed again.
+            wanted = ",".join("%s" for _ in filters.effective_ranks)
+            authoritative = (
+                "_h.fetch_status='OK' AND coalesce(_h.machine_hp_rank,'')<>''"
+            )
+            add(
+                "HP ABC判定",
+                f"(({old} IN ({wanted}) AND NOT EXISTS ("
+                "SELECT 1 FROM hp_research.clinic_hp_research _h "
+                f"WHERE _h.clinic_id=clinics.id AND {authoritative} "
+                "AND upper(btrim(_h.machine_hp_rank))<>'UNKNOWN')) OR EXISTS ("
+                "SELECT 1 FROM hp_research.clinic_hp_research _h "
+                f"WHERE _h.clinic_id=clinics.id AND {authoritative} "
+                f"AND upper(btrim(_h.machine_hp_rank)) IN ({wanted})))",
+                *filters.effective_ranks,
+                *filters.effective_ranks,
+            )
+        else:
+            effective = (
+                f"CASE WHEN {machine} IN ('A','B','C','D') THEN {machine} "
+                f"WHEN {machine}='UNKNOWN' AND {old} IN ('A','B') THEN {old} ELSE 'D' END"
+            )
+            add("HP ABC判定", f"({effective}) IN ({','.join('%s' for _ in filters.effective_ranks)})",
+                *filters.effective_ranks)
     # P0-4 (Stage4-B.6): `col @> '["x"]'::jsonb` (array containment) is semantically identical to
     # `EXISTS(SELECT 1 FROM jsonb_array_elements_text(col) v WHERE v=x)` for a flat string array
     # (both ask "is x present as an element") -- but containment can use the existing GIN

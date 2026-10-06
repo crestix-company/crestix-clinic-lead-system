@@ -145,6 +145,19 @@ class SupabaseClinicRepository:
     def _where(self, filters, as_of):
         return sf.where(filters, as_of, excluded_ids=self._excluded_clinic_ids())
 
+    @staticmethod
+    def _from_sql(filters):
+        """Return the FROM fragment required by SQL-pushed filters."""
+        sql = "public.clinics"
+        if filters.effective_ranks and not set(filters.effective_ranks) <= {"A", "B"}:
+            # Collision-free aliases keep existing unqualified clinic predicates valid.
+            sql += (
+                " LEFT JOIN (SELECT clinic_id, machine_hp_rank AS _machine_hp_rank, "
+                "fetch_status AS _fetch_status FROM hp_research.clinic_hp_research) _effective_hp "
+                "ON _effective_hp.clinic_id=clinics.id"
+            )
+        return sql
+
     def _clauses(self, filters, as_of):
         return sf.clauses(filters, as_of, excluded_ids=self._excluded_clinic_ids())
 
@@ -242,7 +255,7 @@ class SupabaseClinicRepository:
     def _candidate_ids(self, filters, as_of):
         sql, args = self._where(filters, as_of)
         if sf.needs_post_filter(filters):
-            need_hp = bool(filters.effective_ranks or filters.site_types)
+            need_hp = bool(filters.site_types)
             cols = ["id"]
             if need_hp:
                 cols += ["hp_rank", "hp_status", "hp_url", "maps_website_url"]
@@ -252,7 +265,7 @@ class SupabaseClinicRepository:
                 cols += ["effective_json"]
             with self._conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT {','.join(cols)} FROM public.clinics WHERE {sql} ORDER BY signal_count DESC, id",
+                    f"SELECT {','.join(cols)} FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id",
                     args,
                 )
                 rows = cur.fetchall()
@@ -275,9 +288,6 @@ class SupabaseClinicRepository:
                 d = dict(zip(cols, row))
                 machine_hp_rank, fetch_status, hp_batch_url, final_url = hp_by_id.get(d["id"], ("", "", "", ""))
                 machine = machine_hp_rank if (fetch_status == "OK" and machine_hp_rank) else "UNKNOWN"
-                if filters.effective_ranks:
-                    if effective_hp_rank(machine, d["hp_rank"]) not in filters.effective_ranks:
-                        continue
                 if filters.site_types:
                     site_type, _ = classify_site(d["hp_status"], d["hp_url"], (hp_batch_url or "") or d["maps_website_url"], final_url or "")
                     if site_type not in filters.site_types:
@@ -292,17 +302,29 @@ class SupabaseClinicRepository:
                 ids.append(d["id"])
             return ids
         with self._conn.cursor() as cur:
-            cur.execute(f"SELECT id FROM public.clinics WHERE {sql} ORDER BY signal_count DESC, id", args)
+            if filters.effective_ranks:
+                # The effective A/B result is highly selective (~1k rows). Sending the cached
+                # 9k excluded-id array to Postgres makes the otherwise fast query noisier than
+                # returning those ~1k ids and applying the exact same cached set locally. This
+                # remains one DB round trip and preserves ordering byte-for-byte.
+                sql, args = sf.where(filters, as_of, excluded_ids=[])
+                cur.execute(
+                    f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id",
+                    args,
+                )
+                excluded = set(self._excluded_clinic_ids())
+                return [r[0] for r in cur.fetchall() if r[0] not in excluded]
+            cur.execute(f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id", args)
             return [r[0] for r in cur.fetchall()]
 
     def count(self, filters=None, as_of=None):
         filters = filters or Filters(active_only=False, hp_only=False)
         sf.raise_if_unsupported(filters)
-        if sf.needs_post_filter(filters):
+        if sf.needs_post_filter(filters) or filters.effective_ranks:
             return len(self._candidate_ids(filters, as_of))
         sql, args = self._where(filters, as_of)
         with self._conn.cursor() as cur:
-            cur.execute(f"SELECT count(*) FROM public.clinics WHERE {sql}", args)
+            cur.execute(f"SELECT count(*) FROM {self._from_sql(filters)} WHERE {sql}", args)
             return cur.fetchone()[0]
 
     def query(self, filters=None, limit=100, offset=0, as_of=None):
@@ -326,7 +348,10 @@ class SupabaseClinicRepository:
             for label, clause_sql, params in self._clauses(filters, as_of):
                 conditions.append(clause_sql)
                 args.extend(params)
-                cur.execute(f"SELECT count(*) FROM public.clinics WHERE {' AND '.join(conditions)}", args)
+                cur.execute(
+                    f"SELECT count(*) FROM {self._from_sql(filters)} WHERE {' AND '.join(conditions)}",
+                    args,
+                )
                 output.append((label, cur.fetchone()[0]))
         output.append(("最終営業対象", output[-1][1]))
         return output

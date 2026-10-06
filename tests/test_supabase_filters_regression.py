@@ -140,3 +140,23 @@ def test_metrics_aggregation_matches_sqlite(repos):
 def test_funnel_labels_and_counts_match_sqlite(repos):
     f = Filters(active_only=False, hp_only=False)
     assert repos["sqlite"].clinics.funnel(f) == repos["supabase"].clinics.funnel(f)
+
+
+@pytest.mark.parametrize("ranks", [["A"], ["B"], ["C"], ["D"], ["A", "B"]])
+def test_effective_rank_sql_pushdown_matches_sqlite(repos, ranks):
+    """Stage4-B.7: DB-side effective-rank filtering remains canonical for every output rank."""
+    f = Filters(active_only=False, hp_only=False, effective_ranks=ranks)
+    assert repos["sqlite"].clinics.count(f) == repos["supabase"].clinics.count(f)
+
+
+def test_effective_rank_sql_pushdown_preserves_page_order(repos):
+    f = Filters(
+        active_only=False,
+        hp_only=False,
+        prefectures=["東京都"],
+        medical_types=["医科"],
+        effective_ranks=["A", "B"],
+    )
+    sqlite_ids = [r["id"] for r in repos["sqlite"].clinics.query(f, limit=100, offset=0)]
+    supabase_ids = [r["id"] for r in repos["supabase"].clinics.query(f, limit=100, offset=0)]
+    assert sqlite_ids == supabase_ids
