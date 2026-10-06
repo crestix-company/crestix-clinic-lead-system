@@ -19,14 +19,23 @@ from src.repository.errors import BackendNotSupportedError
 from src.repository import supabase_filters as sf
 
 
-def connect(url, *, connect_timeout=20):
+def connect(url, *, connect_timeout=20, autocommit=False):
     """Opens a Postgres connection with the Stage3 root-caused float-readback fix applied
     (extra_float_digits=0 is this project's session default; raised to 3 here so float8 text
     output is shortest-round-trip-safe again -- see docs/supabase_migration root cause writeup).
     This changes output FORMATTING only, never stored bytes, and keeps every comparison exact.
+
+    autocommit must be set here, before the first statement -- psycopg refuses to change it once
+    a connection is already mid-transaction (ProgrammingError: "can't change 'autocommit' now"),
+    which the SET below would otherwise immediately cause. Default stays False (unchanged
+    behavior for existing callers); pass True for a connection that will be reused across many
+    independent statements over a long lifetime (see src.repository.shadow), where one
+    cancelled/failed statement must never leave the connection stuck for every statement after.
     """
     import psycopg
     conn = psycopg.connect(url, connect_timeout=connect_timeout)
+    if autocommit:
+        conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("SET extra_float_digits = 3")
     return conn
@@ -108,6 +117,36 @@ class SupabaseClinicRepository:
     def __init__(self, conn, hp_repository: SupabaseHpResearchRepository):
         self._conn = conn
         self._hp = hp_repository
+        self._excluded_ids_cache = None  # Stage4-B.6 P0-1, see _excluded_clinic_ids()
+
+    def _excluded_clinic_ids(self):
+        """Stage4-B.6 P0-1: computes the exact clinic_id set the hospital/center exclusion
+        predicate produces, ONCE per repository instance, then caches it. See the long comment
+        in supabase_filters.clauses() for why this predicate can't be simplified and why caching
+        it is safe (Supabase is never written to during Stage4-B/C shadow-read usage).
+        """
+        if self._excluded_ids_cache is None:
+            # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one
+            # and only place it is still evaluated row-by-row. Its result is cached and reused by
+            # every subsequent query via the `NOT EXISTS (SELECT 1 FROM unnest(...))` anti-join
+            # in supabase_filters.clauses(excluded_ids=...), which EXPLAIN confirmed is a 4.7x
+            # faster equivalent (4690ms -> 993ms) because it lets Postgres use a Merge Anti Join
+            # against clinics_pkey instead of evaluating an unindexable regex+LIKE per row.
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM public.clinics WHERE "
+                    "exclude_reason IN ('hospital','center') "
+                    "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
+                    "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                )
+                self._excluded_ids_cache = [r[0] for r in cur.fetchall()]
+        return self._excluded_ids_cache
+
+    def _where(self, filters, as_of):
+        return sf.where(filters, as_of, excluded_ids=self._excluded_clinic_ids())
+
+    def _clauses(self, filters, as_of):
+        return sf.clauses(filters, as_of, excluded_ids=self._excluded_clinic_ids())
 
     def _fetch_row(self, where_sql, param):
         cols = ",".join(self._COLUMNS)
@@ -116,12 +155,10 @@ class SupabaseClinicRepository:
             row = cur.fetchone()
         return dict(zip(self._COLUMNS, row)) if row else None
 
-    def get(self, clinic_id):
-        d = self._fetch_row("id=%s", int(clinic_id))
-        if d is None:
-            raise ValueError("医院が見つかりません。")
-        if d["merged_into"]:
-            return self.get(d["merged_into"])
+    def _build_record(self, d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories):
+        """Shared by get() and the batch path used by query() (P0-2) -- exactly one place builds
+        the record shape, so there is no risk of the two paths drifting apart.
+        """
         data = {
             **json.loads(d["effective_json"]),
             "id": d["id"], "uuid": d["uuid"], "tel_match_key": d["tel_match_key"],
@@ -130,20 +167,36 @@ class SupabaseClinicRepository:
             "is_new_since_last_update": bool(d["is_new"]),
             "normalized_departments": d["departments_json"],
         }
-        machine_raw = self._hp.machine_rank(d["id"])
+        machine = machine_hp_rank if (fetch_status == "OK" and machine_hp_rank) else "UNKNOWN"
         data.update(
-            machine_rank=machine_raw, old_hp_rank_db=d["hp_rank"],
-            effective_hp_rank=effective_hp_rank(machine_raw, d["hp_rank"]),
-            effective_rank_reason=effective_rank_reason(machine_raw, d["hp_rank"]),
+            machine_rank=machine, old_hp_rank_db=d["hp_rank"],
+            effective_hp_rank=effective_hp_rank(machine, d["hp_rank"]),
+            effective_rank_reason=effective_rank_reason(machine, d["hp_rank"]),
         )
-        source_url, final_url = self._hp.batch_urls(d["id"])
-        site_type, portal_name = classify_site(d["hp_status"], d["hp_url"], source_url or d["maps_website_url"], final_url)
+        source_url = hp_batch_url or ""
+        site_type, portal_name = classify_site(d["hp_status"], d["hp_url"], source_url or d["maps_website_url"], final_url or "")
         data.update(
             site_type=site_type, portal_name=portal_name,
-            site_source_url=source_url, site_final_url=final_url,
-            website_treatment_categories=self._hp.website_treatment_categories(d["id"]),
+            site_source_url=source_url, site_final_url=final_url or "",
+            website_treatment_categories=treatment_categories if (fetch_status == "OK" and isinstance(treatment_categories, list)) else [],
         )
         return data
+
+    def get(self, clinic_id):
+        d = self._fetch_row("id=%s", int(clinic_id))
+        if d is None:
+            raise ValueError("医院が見つかりません。")
+        if d["merged_into"]:
+            return self.get(d["merged_into"])
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories "
+                "FROM hp_research.clinic_hp_research WHERE clinic_id=%s",
+                (d["id"],),
+            )
+            hp_row = cur.fetchone()
+        machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories = hp_row or ("", "", "", "", [])
+        return self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories)
 
     def get_by_uuid(self, uuid):
         d = self._fetch_row("uuid=%s AND merged_into IS NULL", uuid)
@@ -155,8 +208,39 @@ class SupabaseClinicRepository:
             row = cur.fetchone()
         return self.get(row[0]) if row else None
 
+    def _batch_get(self, ids):
+        """P0-2: fetches `ids` (already-resolved, merged_into-IS-NULL candidates, in caller's
+        desired order) in a small, fixed number of round trips instead of 4 per row. Returns
+        records in the SAME order as `ids`.
+        """
+        if not ids:
+            return []
+        cols = ",".join(self._COLUMNS)
+        with self._conn.cursor() as cur:
+            cur.execute(f"SELECT {cols} FROM public.clinics WHERE id = ANY(%s)", (list(ids),))
+            rows_by_id = {row[0]: dict(zip(self._COLUMNS, row)) for row in cur.fetchall()}
+            cur.execute(
+                "SELECT clinic_id, machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories "
+                "FROM hp_research.clinic_hp_research WHERE clinic_id = ANY(%s)",
+                (list(ids),),
+            )
+            hp_by_id = {r[0]: r[1:] for r in cur.fetchall()}
+        records = []
+        for cid in ids:
+            d = rows_by_id.get(cid)
+            if d is None:
+                continue
+            if d["merged_into"]:
+                # Candidates come from a merged_into IS NULL predicate, so this should not
+                # normally happen; fall back to the single-row path for correctness if it does.
+                records.append(self.get(d["merged_into"]))
+                continue
+            machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories = hp_by_id.get(cid, ("", "", "", "", []))
+            records.append(self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories))
+        return records
+
     def _candidate_ids(self, filters, as_of):
-        sql, args = sf.where(filters, as_of)
+        sql, args = self._where(filters, as_of)
         if sf.needs_post_filter(filters):
             need_hp = bool(filters.effective_ranks or filters.site_types)
             cols = ["id"]
@@ -216,7 +300,7 @@ class SupabaseClinicRepository:
         sf.raise_if_unsupported(filters)
         if sf.needs_post_filter(filters):
             return len(self._candidate_ids(filters, as_of))
-        sql, args = sf.where(filters, as_of)
+        sql, args = self._where(filters, as_of)
         with self._conn.cursor() as cur:
             cur.execute(f"SELECT count(*) FROM public.clinics WHERE {sql}", args)
             return cur.fetchone()[0]
@@ -227,7 +311,8 @@ class SupabaseClinicRepository:
         limit = min(100000, max(0, int(limit)))
         offset = max(0, int(offset))
         ids = self._candidate_ids(filters, as_of)
-        return [self.get(cid) for cid in ids[offset:offset + limit]]
+        page_ids = ids[offset:offset + limit]
+        return self._batch_get(page_ids)  # P0-2: batched, preserves page_ids order
 
     def funnel(self, filters, as_of=None):
         sf.raise_if_unsupported(filters)
@@ -238,7 +323,7 @@ class SupabaseClinicRepository:
             output = [("全マスター", cur.fetchone()[0])]
             cur.execute("SELECT count(*) FROM public.clinics WHERE merged_into IS NULL AND merge_hold=false")
             output.append(("重複確認待ちを除く", cur.fetchone()[0]))
-            for label, clause_sql, params in sf.clauses(filters, as_of):
+            for label, clause_sql, params in self._clauses(filters, as_of):
                 conditions.append(clause_sql)
                 args.extend(params)
                 cur.execute(f"SELECT count(*) FROM public.clinics WHERE {' AND '.join(conditions)}", args)
@@ -247,36 +332,41 @@ class SupabaseClinicRepository:
         return output
 
     def metrics(self):
-        items = {
-            "全マスター": "true", "既存UUIDあり": "uuid<>''", "新規医院（UUIDなし）": "uuid=''",
-            "現存クリニック": "active=true", "HP確認済み": "hp_status='VERIFIED'", "HP未発見": "hp_status='NOT_FOUND'",
-            "年齢推定済み": "age_probability IS NOT NULL", "HP要確認": "hp_status IN ('REVIEW','ERROR')",
-            "アツい（2個以上）": "signal_count>=2", "かなりアツい": "signal_count>=3",
-        }
-        result = {}
+        # P0-3: 15 independent round trips -> 1. The 10 per-clinics-item counts become FILTER
+        # aggregates over a single scan; the 2 provenance-schema counts (different tables, can't
+        # join into the same FROM) become scalar subqueries in the same SELECT; the 3 Google Maps
+        # counts join the same FILTER-aggregate pattern. Same labels, same predicates, same
+        # result dict shape as the original per-item queries -- just issued together.
         with self._conn.cursor() as cur:
-            for label, sql in items.items():
-                cur.execute(f"SELECT count(*) FROM public.clinics WHERE merged_into IS NULL AND {sql}")
-                result[label] = cur.fetchone()[0]
-            cur.execute("SELECT count(*) FROM provenance.match_reviews WHERE status='PENDING'")
-            result["要確認重複（保留レコード）"] = cur.fetchone()[0]
-            cur.execute("SELECT count(*) FROM provenance.source_records WHERE source='厚生局'")
-            result["厚生局取込レコード"] = cur.fetchone()[0]
             cur.execute(
-                "SELECT count(*) FROM public.clinics WHERE merged_into IS NULL "
-                "AND maps_presence_status IN ('MAPS_MATCHED_WEBSITE','MAPS_MATCHED_NO_WEBSITE')"
+                """
+                SELECT
+                  count(*) FILTER (WHERE true),
+                  count(*) FILTER (WHERE uuid<>''),
+                  count(*) FILTER (WHERE uuid=''),
+                  count(*) FILTER (WHERE active),
+                  count(*) FILTER (WHERE hp_status='VERIFIED'),
+                  count(*) FILTER (WHERE hp_status='NOT_FOUND'),
+                  count(*) FILTER (WHERE age_probability IS NOT NULL),
+                  count(*) FILTER (WHERE hp_status IN ('REVIEW','ERROR')),
+                  count(*) FILTER (WHERE signal_count>=2),
+                  count(*) FILTER (WHERE signal_count>=3),
+                  count(*) FILTER (WHERE maps_presence_status IN ('MAPS_MATCHED_WEBSITE','MAPS_MATCHED_NO_WEBSITE')),
+                  count(*) FILTER (WHERE maps_presence_status='MAPS_MATCHED_WEBSITE' AND maps_website_url<>''),
+                  count(*) FILTER (WHERE maps_presence_status='MAPS_NOT_FOUND'),
+                  (SELECT count(*) FROM provenance.match_reviews WHERE status='PENDING'),
+                  (SELECT count(*) FROM provenance.source_records WHERE source='厚生局')
+                FROM public.clinics WHERE merged_into IS NULL
+                """
             )
-            result["Google Maps掲載確認"] = cur.fetchone()[0]
-            cur.execute(
-                "SELECT count(*) FROM public.clinics WHERE merged_into IS NULL "
-                "AND maps_presence_status='MAPS_MATCHED_WEBSITE' AND maps_website_url<>''"
-            )
-            result["Google Maps HP取得"] = cur.fetchone()[0]
-            cur.execute(
-                "SELECT count(*) FROM public.clinics WHERE merged_into IS NULL AND maps_presence_status='MAPS_NOT_FOUND'"
-            )
-            result["Google Maps未発見"] = cur.fetchone()[0]
-        return result
+            row = cur.fetchone()
+        labels = (
+            "全マスター", "既存UUIDあり", "新規医院（UUIDなし）", "現存クリニック", "HP確認済み", "HP未発見",
+            "年齢推定済み", "HP要確認", "アツい（2個以上）", "かなりアツい",
+            "Google Maps掲載確認", "Google Maps HP取得", "Google Maps未発見",
+            "要確認重複（保留レコード）", "厚生局取込レコード",
+        )
+        return dict(zip(labels, row))
 
 
 class SupabaseTreatmentRepository:

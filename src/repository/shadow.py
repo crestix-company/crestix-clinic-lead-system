@@ -23,7 +23,16 @@ from pathlib import Path
 from src.repository.errors import BackendNotSupportedError
 
 SHADOW_ENV_VAR = "CLINIC_SHADOW_READ_ENABLED"
-SHADOW_TIMEOUT_SECONDS = float(os.environ.get("CLINIC_SHADOW_READ_TIMEOUT_SECONDS", "3"))
+# Stage4-B.6 P0-1 note: the hospital/center excluded_ids cache (SupabaseClinicRepository._excluded_
+# clinic_ids) costs ~4.2s the first time any count()/query()/funnel() runs on a given connection
+# (one-time per thread-local connection, never repeated after) -- the timeout must comfortably
+# exceed that, or that one query gets killed by statement_timeout every single time (never
+# finishing, never caching) and -- since it runs on a non-autocommit connection -- the resulting
+# QueryCanceled left every later query on that connection failing with InFailedSqlTransaction
+# until the process restarted. Both found and fixed together: raised the default here, and
+# _shadow_repos() below now opens its connection with autocommit=True so a failed/cancelled
+# statement can never poison later statements on the same reused connection.
+SHADOW_TIMEOUT_SECONDS = float(os.environ.get("CLINIC_SHADOW_READ_TIMEOUT_SECONDS", "10"))
 SHADOW_MAX_WORKERS = int(os.environ.get("CLINIC_SHADOW_READ_MAX_WORKERS", "4"))
 
 _LOG_PATH = Path(__file__).resolve().parents[2] / "logs" / "shadow_read.log"
@@ -85,7 +94,14 @@ def _shadow_repos():
     url = os.environ.get("SUPABASE_DB_URL")
     if not url:
         raise RuntimeError("SUPABASE_DB_URL is not set")
-    conn = connect(url, connect_timeout=5)
+    # autocommit=True: without this, a cancelled/failed statement (e.g. a statement_timeout hit)
+    # left this reused connection in an open, aborted transaction -- every later statement on it
+    # then failed with InFailedSqlTransaction until the process restarted (found via the shadow
+    # log during Stage4-B.6 UI testing: 21 of 23 shadow attempts failed this way). With
+    # autocommit, each statement is independent, so one failure can never poison the ones after
+    # it. Must be passed into connect() itself -- psycopg refuses to flip autocommit after the
+    # connection's first statement, which already runs inside connect().
+    conn = connect(url, connect_timeout=5, autocommit=True)
     with conn.cursor() as cur:
         # Server-side bound: a hung/slow shadow query is killed by Postgres itself, so a stuck
         # shadow task can never occupy its worker slot indefinitely. SET does not support bind

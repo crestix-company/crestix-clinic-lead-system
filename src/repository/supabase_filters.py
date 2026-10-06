@@ -32,6 +32,8 @@ implementation already used by the SQLite path -- the last one specifically so i
 jsonb cast either -- applied here as a post-filter in Python so there is never a second,
 divergent implementation of that logic.
 """
+import json
+
 from src.master.filters import AD_COUNT_SQL as _SQLITE_AD_COUNT_SQL  # noqa: F401 (kept for cross-reference)
 from src.master.scope import SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
@@ -84,10 +86,32 @@ def _minus_one_year(iso_date):
         return d.replace(year=d.year - 1, day=28).isoformat()
 
 
-def clauses(filters, as_of=None):
+def clauses(filters, as_of=None, excluded_ids=None):
     """Mirrors src.master.filters.clauses() field-for-field, Postgres dialect only.
     Returns [(label, sql_with_%s_placeholders, [args])]. Raises for UNSUPPORTED_FIELDS;
     silently skips POST_FILTER_FIELDS (callers must apply those separately in Python).
+
+    excluded_ids: Stage4-B.6 P0-1 performance fix. The original "hospital/center exclusion"
+    predicate (exclude_reason IN (...) OR facility_type-from-effective_json='病院' OR clinic_name
+    LIKE '%病院%' OR LIKE '%センター%') forces an unindexable Seq Scan of all 162,258 rows on
+    *every* count()/query()/funnel() call (measured: ~4.7s). Stage4-B.5 found no subset of that
+    predicate (exclude_reason alone, or +clinic_name) reproduces the same clinic_id set -- the
+    `facility_type` signal buried in effective_json genuinely excludes 206 rows nothing else
+    catches, confirmed by exact symmetric-difference comparison, so it cannot be dropped.
+    What changes instead is *how often* that expensive predicate is evaluated: the caller
+    (SupabaseClinicRepository) computes the exact id set it produces ONCE per repository
+    instance (same bytes, same rows -- not an approximation) and passes it back in here as
+    excluded_ids. Every subsequent call then swaps the regex/LIKE predicate for a
+    `NOT EXISTS (SELECT 1 FROM unnest(%s) ...)` anti-join against that cached set, which lets
+    Postgres plan a Merge Anti Join against clinics_pkey instead of scanning+evaluating the
+    regex row by row -- confirmed via EXPLAIN (ANALYZE, BUFFERS): 4690ms -> 993ms (4.7x), with
+    the output clinic_id set verified byte-identical (it's the same cached set, so mismatch is
+    structurally impossible, not just empirically unobserved). If excluded_ids is None, the
+    original regex/LIKE predicate is used (needed the first time, before anything is cached, and
+    is also what computes the cache itself -- see SupabaseClinicRepository._excluded_clinic_ids).
+    This cache assumes exclude_reason/facility_type/clinic_name do not change during the
+    repository instance's lifetime; true for Stage4-B/C shadow-read usage since nothing writes
+    to Supabase at this stage, but would need an invalidation strategy if that ever changes.
     """
     from src.utils.date_utils import today_japan
     raise_if_unsupported(filters)
@@ -101,19 +125,26 @@ def clauses(filters, as_of=None):
         raise ValueError("対象データ（scope）の指定を確認してください。")
     if filters.scope == SCOPE_LEGACY_PRE_NATIONAL:
         add("既存営業リスト（全国append前）", "first_seen_at<%s", LEGACY_PRE_NATIONAL_CUTOFF)
-    # effective_json is PostgreSQL `text`, never `jsonb` (Stage3 kept it that way deliberately:
-    # some rows contain a NUL-character JSON escape inside a string value -- valid JSON, valid SQLite
-    # TEXT, but jsonb rejects it outright with "unsupported Unicode escape sequence", which would
-    # make this *unconditional* base clause fail on every count()/query() call). A plain substring
-    # regex reads the one short, quote-free enum value we need without ever parsing the document,
-    # so it is immune to that. (production_companies, which also reads effective_json but needs a
-    # whole array, is handled as a Python post-filter instead -- see needs_post_filter().)
-    add(
-        "病院・センター除外（営業対象外）",
-        "NOT (exclude_reason IN ('hospital','center') "
-        "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
-        "OR clinic_name LIKE '%%病院%%' OR clinic_name LIKE '%%センター%%')",
-    )
+    if excluded_ids is None:
+        # effective_json is PostgreSQL `text`, never `jsonb` (Stage3 kept it that way deliberately:
+        # some rows contain a NUL-character JSON escape inside a string value -- valid JSON, valid SQLite
+        # TEXT, but jsonb rejects it outright with "unsupported Unicode escape sequence", which would
+        # make this *unconditional* base clause fail on every count()/query() call). A plain substring
+        # regex reads the one short, quote-free enum value we need without ever parsing the document,
+        # so it is immune to that. (production_companies, which also reads effective_json but needs a
+        # whole array, is handled as a Python post-filter instead -- see needs_post_filter().)
+        add(
+            "病院・センター除外（営業対象外）",
+            "NOT (exclude_reason IN ('hospital','center') "
+            "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
+            "OR clinic_name LIKE '%%病院%%' OR clinic_name LIKE '%%センター%%')",
+        )
+    else:
+        add(
+            "病院・センター除外（営業対象外）",  # must match src.master.filters.clauses()'s label verbatim -- it's user-visible in funnel()
+            "NOT EXISTS (SELECT 1 FROM unnest(%s::bigint[]) ex(id) WHERE ex.id=clinics.id)",
+            list(excluded_ids),
+        )
     if filters.active_only:
         add("現存クリニック（一覧基準日）", "active=true")
     if filters.hp_only:
@@ -128,11 +159,22 @@ def clauses(filters, as_of=None):
                                 (filters.medical_types, "medical_type", "医科・歯科"), (filters.hot, "hot_status", "アツさ")]:
         if values:
             add(label, f"{col} IN ({','.join('%s' for _ in values)})", *values)
-    for values, col, label in [(filters.departments, "departments_json", "診療科"), (filters.treatments, "treatments_json", "治療カテゴリ")]:
+    # P0-4 (Stage4-B.6): `col @> '["x"]'::jsonb` (array containment) is semantically identical to
+    # `EXISTS(SELECT 1 FROM jsonb_array_elements_text(col) v WHERE v=x)` for a flat string array
+    # (both ask "is x present as an element") -- but containment can use the existing GIN
+    # (jsonb_path_ops) index already created in Stage3 (idx_clinics_departments_gin /
+    # _treatments_gin / _signals_gin), while jsonb_array_elements_text+EXISTS cannot. OR-ing one
+    # containment check per selected value preserves the exact "same field OR across selections"
+    # semantics the SQLite side documents in src.master.filters.clauses(). Measured (department,
+    # 1 value): 885ms Seq Scan -> 210ms Bitmap Index Scan on the GIN index (4.2x).
+    for values, col, label in [(filters.departments, "departments_json", "診療科"),
+                                (filters.treatments, "treatments_json", "治療カテゴリ")]:
         if values:
-            add(label, f"EXISTS(SELECT 1 FROM jsonb_array_elements_text({col}) v WHERE v IN ({','.join('%s' for _ in values)}))", *values)
+            add(label, "(" + " OR ".join(f"{col} @> %s::jsonb" for _ in values) + ")",
+                *[json.dumps([v], ensure_ascii=False) for v in values])
     if filters.signals:
-        add("広告・集客施策", f"EXISTS(SELECT 1 FROM jsonb_array_elements_text(signals_json) v WHERE v IN ({','.join('%s' for _ in filters.signals)}))", *filters.signals)
+        add("広告・集客施策", "(" + " OR ".join("signals_json @> %s::jsonb" for _ in filters.signals) + ")",
+            *[json.dumps([v], ensure_ascii=False) for v in filters.signals])
     if filters.ad_min:
         add(f"広告・集客施策{filters.ad_min}個以上",
             f"(SELECT count(DISTINCT v) FROM jsonb_array_elements_text(signals_json) v WHERE v IN ({_AD_NAMES_SQL}))>=%s",
@@ -168,8 +210,8 @@ def clauses(filters, as_of=None):
     return steps
 
 
-def where(filters, as_of=None):
-    steps = clauses(filters, as_of)
+def where(filters, as_of=None, excluded_ids=None):
+    steps = clauses(filters, as_of, excluded_ids=excluded_ids)
     sql = " AND ".join(["merged_into IS NULL", "merge_hold=false"] + [s for _, s, _ in steps])
     args = [a for _, _, args in steps for a in args]
     return sql, args
