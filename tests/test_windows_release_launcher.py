@@ -17,6 +17,20 @@ def test_start_bat_uses_update_launcher_and_launch_v2_is_single_runtime():
     assert update.count('Join-Path $RepoRoot "scripts\\launch_v2.py"') == 1
 
 
+def test_clinic_lead_one_click_path_reaches_three_db_preflight_before_runtime():
+    clinic_lead = _text("ClinicLead.bat")
+    update = _text("scripts/update_and_launch_windows.ps1")
+    assert clinic_lead.count("update_and_launch_windows.ps1") >= 2
+    assert "launch_v2.py" not in clinic_lead
+    hp_env = update.index("if (-not $env:HP_RESEARCH_BATCH_DB_PATH)")
+    hp_exists = update.index("Test-Path -LiteralPath $HpBatchDbPath")
+    hp_readonly = update.index('sqlite3.connect(f"file:{hp_batch_path}?mode=ro&immutable=1"')
+    hp_integrity = update.index('result["hp_integrity"]')
+    hp_rows = update.index("FROM hp_research_batch_results")
+    runtime = update.index('Join-Path $RepoRoot "scripts\\launch_v2.py"')
+    assert hp_env < hp_exists < hp_readonly < hp_integrity < hp_rows < runtime
+
+
 def test_both_windows_launchers_fail_closed_for_all_three_databases():
     for relative in ("scripts/update_and_launch_windows.ps1", "scripts/launch_v2_windows.ps1"):
         text = _text(relative)
@@ -31,6 +45,8 @@ def test_both_windows_launchers_fail_closed_for_all_three_databases():
         assert "自動取得・自動生成・copy・migrateしません" in text
         assert "hp_batch_clinics" in text
         assert "hp_treatment_detected" in text
+        assert 'Join-Path $env:CLINIC_DATA_DIR "hp_abc_batch_sidecar.sqlite3"' in text
+        assert "artifacts\\hp_research_batch" not in text
 
 
 def test_release_snapshot_contract_contains_hp_batch_counts():

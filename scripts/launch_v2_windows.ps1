@@ -12,7 +12,8 @@
     Production DBに関する安全要件はこのスクリプトでも同じように維持する（起動経路によってDBの
     安全性が変わってはならないため）：
       - DBは絶対に自動取得・自動上書きしない（読み取り専用でのみ確認する）
-      - Production DB / 研究結果サイドカーDBが見つからない場合は起動せず停止する
+      - Production DB / Treatment sidecar / HP Research Batch sidecarのいずれかが
+        見つからない場合は起動せず停止する
       - config/production_data_version.json の期待値と実際の行数が一致しない場合は、
         DB移行が必要である旨を表示して起動せず停止する
       - 両DBの PRAGMA integrity_check が ok 以外の場合は起動せず停止する
@@ -88,7 +89,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# DB確認（Production DB / 研究結果サイドカーのパス解決と存在確認のみ。
+# DB確認（Production DB / Treatment sidecar / HP Research Batch sidecarの
+# パス解決と存在確認のみ。
 # DBそのものは一切取得・生成・上書きしない）
 # ---------------------------------------------------------------------------
 Write-Step "Production DBを確認しています"

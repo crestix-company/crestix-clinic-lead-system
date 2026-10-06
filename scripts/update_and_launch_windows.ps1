@@ -12,7 +12,7 @@
       - ローカルに未コミットの変更がある（dirty working tree）
       - GitHubへの fetch に失敗した（オフライン・接続不可等）
       - git pull --ff-only に失敗した（履歴が分岐している等）
-      - Production DB / 研究結果サイドカーDBが見つからない
+      - Production DB / Treatment sidecar / HP Research Batch sidecarのいずれかが見つからない
       - DBの実際の行数が config/production_data_version.json の期待値と一致しない
       - PRAGMA integrity_check が ok 以外を返した
 
@@ -29,7 +29,7 @@
       1. git status --porcelain が何か返せば即停止（dirty working tree）。
       2. git fetch origin が失敗したら即停止。
       3. git pull --ff-only が失敗したら即停止（履歴の自動修正は行わない）。
-      4. Production DB / 研究結果サイドカーDBの存在と読み取り可否を確認する。
+      4. Production DB / Treatment sidecar / HP Research Batch sidecarの存在と読み取り可否を確認する。
       5. config/production_data_version.json の期待値と実際の行数を比較する
          （完全一致が必要。1件でも違えば停止 -- DB移行が必要）。
       6. 両DBに対して PRAGMA integrity_check を実行する（ok以外なら停止）。
@@ -176,7 +176,8 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # ---------------------------------------------------------------------------
-# 4/6 DB確認（Production DB / 研究結果サイドカーのパス解決と存在確認のみ。
+# 4/6 DB確認（Production DB / Treatment sidecar / HP Research Batch sidecarの
+#    パス解決と存在確認のみ。
 #    DBそのものは一切取得・生成・上書きしない）
 # ---------------------------------------------------------------------------
 Write-Step "4/6 Production DBを確認しています"
