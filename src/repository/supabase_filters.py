@@ -1,7 +1,13 @@
 """Translates src.master.filters.Filters into Postgres SQL for the Supabase adapter.
 
 Behavior-preserving rules applied here:
-  - SQLite's default LIKE is ASCII case-insensitive -> translated to Postgres ILIKE.
+  - SQLite's default LIKE case-folds ASCII A-Z/a-z ONLY -- it does NOT fold fullwidth Latin
+    (e.g. "Ｈ" vs "ｈ") or any other Unicode case pair. Postgres's ILIKE folds all of Unicode
+    (confirmed empirically: 'ＨＩＫＡ' ILIKE '%ｈｉｋａ%' is true in Postgres, false as a plain
+    LIKE in SQLite), which is a wider match than SQLite ever produces -- using ILIKE here would
+    be a real behavior change, not just a dialect difference, so it is never used. Instead
+    `clinic_name`/`phone_norm` and the search pattern are both passed through `_ascii_fold()`
+    (translate() over just A-Z/a-z) and then compared with a plain, case-sensitive LIKE.
   - clinics.active / is_new / merge_hold / owner_equal are `boolean` in Postgres (they were
     `INTEGER` 0/1 in SQLite; Stage3's migration converted them -- see full_shadow_import.py
     bool_cols) -> compared against true/false literals, never 0/1.
@@ -30,6 +36,17 @@ from src.master.filters import AD_COUNT_SQL as _SQLITE_AD_COUNT_SQL  # noqa: F40
 from src.master.scope import SCOPE_LEGACY_PRE_NATIONAL, SCOPE_VALUES, LEGACY_PRE_NATIONAL_CUTOFF
 from src.scoring.research_scoring import AD_SIGNAL_NAMES
 from src.repository.errors import BackendNotSupportedError
+
+_ASCII_UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+_ASCII_LOWER = "abcdefghijklmnopqrstuvwxyz"
+_ASCII_FOLD_TABLE = str.maketrans(_ASCII_UPPER, _ASCII_LOWER)
+_ASCII_FOLD_SQL = f"translate({{col}}, '{_ASCII_UPPER}', '{_ASCII_LOWER}')"
+
+
+def _ascii_fold(text):
+    """Matches SQLite's actual LIKE case-folding scope exactly: ASCII A-Z/a-z only."""
+    return text.translate(_ASCII_FOLD_TABLE)
+
 
 UNSUPPORTED_FIELDS = (
     "mhlw_official_departments", "crestix_sales_departments", "mhlw_departments",
@@ -95,7 +112,7 @@ def clauses(filters, as_of=None):
         "病院・センター除外（営業対象外）",
         "NOT (exclude_reason IN ('hospital','center') "
         "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
-        "OR clinic_name ILIKE '%%病院%%' OR clinic_name ILIKE '%%センター%%')",
+        "OR clinic_name LIKE '%%病院%%' OR clinic_name LIKE '%%センター%%')",
     )
     if filters.active_only:
         add("現存クリニック（一覧基準日）", "active=true")
@@ -140,8 +157,14 @@ def clauses(filters, as_of=None):
     if filters.keyword.strip():
         escaped = filters.keyword.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         digits = "".join(x for x in filters.keyword if x.isdigit())
-        add("医院検索", "(clinic_name ILIKE %s ESCAPE '\\' OR phone_norm ILIKE %s ESCAPE '\\' OR uuid=%s)",
-            "%" + escaped + "%", ("%" + digits + "%") if digits else "__NO_PHONE__", filters.keyword.strip())
+        # ASCII-only fold on both sides (see module docstring) -- NOT ILIKE, which over-matches
+        # relative to SQLite's actual LIKE behavior for non-ASCII "case-like" characters.
+        add("医院検索",
+            f"({_ASCII_FOLD_SQL.format(col='clinic_name')} LIKE %s ESCAPE '\\' OR "
+            f"{_ASCII_FOLD_SQL.format(col='phone_norm')} LIKE %s ESCAPE '\\' OR uuid=%s)",
+            "%" + _ascii_fold(escaped) + "%",
+            ("%" + digits + "%") if digits else "__NO_PHONE__",
+            filters.keyword.strip())
     return steps
 
 

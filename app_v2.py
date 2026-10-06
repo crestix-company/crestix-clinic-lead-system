@@ -72,7 +72,14 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
 }
 @st.cache_resource
 def store_for(path):
-    return ClinicStore(path)
+    store = ClinicStore(path)
+    # Stage4-B Shadow Read: default is off (CLINIC_SHADOW_READ_ENABLED unset/0), in which case
+    # this returns the exact same ClinicStore as before -- no wrapper, no behavior change.
+    from src.repository.shadow import shadow_read_enabled
+    if shadow_read_enabled():
+        from src.repository.shadow import ShadowClinicStore
+        return ShadowClinicStore(store)
+    return store
 
 
 def show_web_research_metrics(store):
