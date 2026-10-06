@@ -1,6 +1,7 @@
-"""Backend selection. Default stays sqlite; Supabase is only used when explicitly selected.
+"""Backend selection for runtime reads.
 
-CLINIC_DATA_BACKEND=sqlite (default, unset also means sqlite) | supabase
+Stage4-C makes Supabase the default READ backend.  SQLite remains the only WRITE backend and
+``CLINIC_DATA_BACKEND=sqlite`` is the immediate rollback switch.
 """
 import os
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ VALID_BACKENDS = (BACKEND_SQLITE, BACKEND_SUPABASE)
 
 
 def active_backend():
-    value = (os.environ.get(BACKEND_ENV_VAR) or BACKEND_SQLITE).strip().lower()
+    value = (os.environ.get(BACKEND_ENV_VAR) or BACKEND_SUPABASE).strip().lower()
     if value not in VALID_BACKENDS:
         raise ValueError(f"{BACKEND_ENV_VAR}は{VALID_BACKENDS}のいずれかにしてください（指定値: {value!r}）。")
     return value
@@ -57,8 +58,12 @@ def build_repositories(backend=None, *, sqlite_path=None, supabase_url=None):
         )
         url = supabase_url or _os.environ.get("SUPABASE_DB_URL")
         if not url:
-            raise SystemExit("SUPABASE_DB_URL is not set")
-        conn = connect(url)
+            # Runtime cutover catches ordinary exceptions and falls back to SQLite.  SystemExit
+            # would terminate Streamlit's script thread and bypass that safety mechanism.
+            raise RuntimeError("SUPABASE_DB_URL is not set")
+        # Stage4-C runtime connections are long-lived.  Autocommit keeps one failed/cancelled
+        # SELECT from poisoning every later read with InFailedSqlTransaction.
+        conn = connect(url, autocommit=True)
         hp = SupabaseHpResearchRepository(conn)
         return Repositories(
             clinics=SupabaseClinicRepository(conn, hp),

@@ -73,6 +73,10 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
 @st.cache_resource
 def store_for(path):
     store = ClinicStore(path)
+    from src.repository.backend import active_backend, BACKEND_SUPABASE
+    if active_backend() == BACKEND_SUPABASE:
+        from src.repository.cutover import Stage4CClinicStore
+        return Stage4CClinicStore(store)
     # Stage4-B Shadow Read: default is off (CLINIC_SHADOW_READ_ENABLED unset/0), in which case
     # this returns the exact same ClinicStore as before -- no wrapper, no behavior change.
     from src.repository.shadow import shadow_read_enabled
@@ -85,7 +89,10 @@ def store_for(path):
 def show_web_research_metrics(store):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
-        counts = web_research_metrics(store.path)
+        if hasattr(store, "web_research_metrics"):
+            counts = store.web_research_metrics()
+        else:
+            counts = web_research_metrics(store.path)
     except BatchMetricInvariantError as exc:
         st.error(f"Webサイト調査件数を表示できません：{exc}")
         return
