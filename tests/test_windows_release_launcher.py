@@ -26,18 +26,36 @@ def test_windows_batch_launchers_use_crlf_only():
         assert b"\n" not in payload.replace(b"\r\n", b"")
 
 
+def test_windows_batch_launchers_are_ascii_only():
+    for relative in ("start_v2_windows.bat", "setup_v2_windows.bat"):
+        payload = _bytes(relative)
+        assert payload.isascii()
+        payload.decode("ascii")
+
+
 def test_gitattributes_preserves_windows_script_line_endings():
     attributes = _text(".gitattributes")
     assert "*.bat text eol=crlf" in attributes
     assert "*.ps1 text eol=crlf" in attributes
 
 
+def test_update_launcher_keeps_native_git_stderr_separate_from_exit_code():
+    update = _text("scripts/update_and_launch_windows.ps1")
+    assert "git switch main 2>&1 | Out-Host" not in update
+    assert "2>&1" not in update
+    assert '$ErrorActionPreference = "Continue"' in update
+    assert "$exitCode = $LASTEXITCODE" in update
+    assert "ExitCode = $exitCode" in update
+    for variable in ("gitStatusResult", "gitSwitchResult", "gitFetchResult", "gitPullResult", "gitRevisionResult"):
+        assert f"${variable}.ExitCode -ne 0" in update
+
+
 def test_start_bat_uses_update_launcher_and_launch_v2_is_single_runtime():
     start = _text("start_v2_windows.bat")
     update = _text("scripts/update_and_launch_windows.ps1")
     assert "update_and_launch_windows.ps1" in start
-    assert "git switch main" in update
-    assert "git pull --ff-only origin main" in update
+    assert 'Invoke-Git -Arguments @("switch", "main")' in update
+    assert 'Invoke-Git -Arguments @("pull", "--ff-only", "origin", "main")' in update
     assert update.count('Join-Path $RepoRoot "scripts\\launch_v2.py"') == 1
 
 
