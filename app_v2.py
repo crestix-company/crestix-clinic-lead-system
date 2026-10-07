@@ -678,13 +678,23 @@ def simple_workflow_ui(store, demo):
     )
 
     runner = runner_for(str(store.path))
-    jobs = recent_jobs(store)
-    current = job_status(store, jobs[0]["id"]) if jobs else None
+    hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
+    current = job_status(store, hp_jobs[0]["id"]) if hp_jobs else None
+    unfinished = bool(current and current["status"] in {"RUNNING", "PAUSED", "BUDGET"})
+    remaining = 0
+    if unfinished:
+        remaining = current["counts"].get("PENDING", 0) + current["counts"].get("RUNNING", 0)
+        st.info(
+            f"未完了のHP調査があります：{current['total']:,}件中 "
+            f"{current['counts'].get('DONE', 0):,}件完了／残り{remaining:,}件。"
+            "上の「ウェブサイト調査対象」は新しいジョブ用の件数で、"
+            "この未完了ジョブの残り件数とは別です。"
+        )
 
     if st.button(
         "HP自動調査を開始",
         type="primary",
-        disabled=demo or runner.running() or actual == 0,
+        disabled=demo or runner.running() or unfinished or actual == 0,
         key="simple_start",
         use_container_width=True,
     ):
@@ -697,15 +707,26 @@ def simple_workflow_ui(store, demo):
     if current:
         st.write("現在の調査")
         st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
-        controls = st.columns(2)
+        controls = st.columns(3)
 
         can_pause = runner.running() or current["status"] == "RUNNING"
         if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
             write_repositories_for(store).jobs.pause_job(current["id"])
             st.rerun()
 
+        can_resume = (
+            not runner.running()
+            and current["status"] in {"PAUSED", "BUDGET"}
+            and current["counts"].get("PENDING", 0) > 0
+        )
+        if controls[1].button("この調査を再開", disabled=not can_resume, key="simple_resume", use_container_width=True):
+            provider = TavilySearchProvider("")
+            st.session_state["active_job"] = current["id"]
+            runner.start(store, current["id"], provider)
+            st.rerun()
+
         can_reset = not runner.running() and current["status"] != "RUNNING"
-        if controls[1].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
+        if controls[2].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
             try:
                 write_repositories_for(store).jobs.reset_job(current["id"])
                 st.rerun()
