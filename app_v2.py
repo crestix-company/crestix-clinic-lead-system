@@ -543,8 +543,15 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
     summary = store.hp_job_export_summary(job["id"])
     # A running Streamlit process may still hold the pre-PR42 runtime_store module
     # after a git pull/hot reload. Keep the UI usable until the process is restarted.
+    stale_runtime = "carryover_count" not in summary
     carryover_count = summary.get("carryover_count", 0)
     st.caption(f"今回のHP調査結果（ジョブ {job['id']}）")
+    if stale_runtime:
+        st.warning(
+            "HP調査の実行プロセスが更新前コードを保持しています。"
+            "調査完了後にアプリを再起動すると、前回分を含むComdesk出力対象へ切り替わります。"
+            "この状態では誤出力防止のためComdeskファイル出力を停止しています。"
+        )
     cols = st.columns(5)
     cols[0].metric("調査対象", f"{job['target_count']:,}件")
     cols[1].metric("調査完了", f"{summary['done_count']:,}件")
@@ -569,7 +576,7 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
         "今回のHP調査結果をComdesk形式で出力",
         type="primary",
         key=key_prefix + "_current_hp_export",
-        disabled=not summary["export_ids"],
+        disabled=stale_runtime or not summary["export_ids"],
         use_container_width=True,
     ):
         st.session_state[key_prefix + "_current_hp_export_files"] = {
