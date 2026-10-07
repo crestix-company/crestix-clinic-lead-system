@@ -362,20 +362,8 @@ def write_clinic_atomic(db: sqlite3.Connection, clinic_id: int, rows: list[dict]
 
 
 def _build_treatment_repo(final_db_conn):
-    """Stage4-D Gate2 WRITE backend selector for this worker, independent of app_v2.py's
-    CLINIC_WRITE_BACKEND plumbing (this is a separate process) but using the same env var and
-    the same default (sqlite) so the two stay consistent if both are configured together."""
-    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
-    if active_write_backend() == WRITE_BACKEND_SQLITE:
-        from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
-        return SqliteTreatmentWriteRepository(final_db_conn)
-    import os as _os
-    from src.repository.supabase_adapter import connect
-    from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
-    url = _os.environ.get("SUPABASE_RUNTIME_DB_URL")
-    if not url:
-        raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
-    return SupabaseTreatmentWriteRepository(connect(url, autocommit=False))
+    from src.repository.treatment_write_backend import build_treatment_write_repository
+    return build_treatment_write_repository(final_db_conn)
 
 
 # ---------------------------------------------------------------------------

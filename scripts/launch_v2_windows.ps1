@@ -16,8 +16,8 @@
       - config/production_data_version.json の期待値と実際の行数が一致しない場合は、
         DB移行が必要である旨を表示して起動せず停止する
       - 両DBの PRAGMA integrity_check が ok 以外の場合は起動せず停止する
-      - Supabase WRITE切替設定はgit-ignore済み .supabase-runtime.env.localから
-        Python launcherが読み込む（credential値はコンソールへ表示しない）
+      - Production routingはconfig\production_runtime.env、credentialはgit-ignore済み
+        .supabase-runtime.env.localからPython launcherが読み込む（値は表示しない）
 
 .PARAMETER Headless
     ブラウザーを自動起動せずアプリを起動する（scripts\launch_v2.py --headless に渡す）。

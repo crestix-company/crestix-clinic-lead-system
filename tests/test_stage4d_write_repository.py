@@ -156,6 +156,31 @@ def test_production_launcher_refuses_supabase_without_runtime_url(tmp_path, monk
         load_runtime_env(tmp_path)
 
 
+def test_production_routing_file_selects_supabase_and_explicit_rollback_wins(tmp_path, monkeypatch):
+    from scripts.launch_v2 import load_runtime_env
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=supabase\nCLINIC_WRITE_BACKEND=supabase\n", encoding="utf-8"
+    )
+    secret = tmp_path / ".supabase-runtime.env.local"
+    secret.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://runtime-only\n", encoding="utf-8")
+    secret.chmod(0o600)
+    monkeypatch.delenv("SUPABASE_RUNTIME_DB_URL", raising=False)
+    monkeypatch.delenv("CLINIC_DATA_BACKEND", raising=False)
+    monkeypatch.delenv("CLINIC_WRITE_BACKEND", raising=False)
+    load_runtime_env(tmp_path)
+    assert os.environ["CLINIC_DATA_BACKEND"] == "supabase"
+    assert os.environ["CLINIC_WRITE_BACKEND"] == "supabase"
+    os.environ.pop("SUPABASE_RUNTIME_DB_URL", None)
+    os.environ.pop("CLINIC_DATA_BACKEND", None)
+    os.environ.pop("CLINIC_WRITE_BACKEND", None)
+
+    monkeypatch.setenv("CLINIC_WRITE_BACKEND", "sqlite")
+    load_runtime_env(tmp_path)
+    assert os.environ["CLINIC_WRITE_BACKEND"] == "sqlite"
+
+
 # ---------------------------------------------------------------------------------------------
 # refresh_clinic_projection_preserving_identity: parity against ClinicStore._project()
 # ---------------------------------------------------------------------------------------------
@@ -526,9 +551,13 @@ def test_normal_runtime_modules_do_not_construct_sqlite_write_adapters():
     import inspect
     import src.master.jobs as jobs
     import src.enrichment.search_provider as search_provider
+    import src.master.hp_research_batch as hp_batch
+    from scripts import research_worker
     assert "SqliteJobsWriteRepository(" not in inspect.getsource(jobs)
     assert "SqliteResearchWriteRepository(" not in inspect.getsource(jobs)
     assert "SqliteSearchWriteRepository(" not in inspect.getsource(search_provider)
+    assert "SqliteHpWriteRepository(" not in inspect.getsource(hp_batch)
+    assert "SqliteTreatmentWriteRepository(" not in inspect.getsource(research_worker)
     assert "write_repositories_for" in inspect.getsource(jobs)
     assert "write_repositories_for" in inspect.getsource(search_provider)
 

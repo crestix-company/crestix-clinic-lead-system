@@ -262,19 +262,8 @@ def upsert_result(sidecar_conn, result):
 
 
 def _build_hp_repo(sidecar_conn):
-    """Stage4-D Gate2 WRITE backend selector for this worker. Same env var/default (sqlite)
-    as app_v2.py's write_repositories_for(), consistent if both are configured together."""
-    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
-    if active_write_backend() == WRITE_BACKEND_SQLITE:
-        from src.repository.hp_sqlite_write_adapter import SqliteHpWriteRepository
-        return SqliteHpWriteRepository(sidecar_conn)
-    import os as _os
-    from src.repository.supabase_adapter import connect
-    from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
-    url = _os.environ.get("SUPABASE_RUNTIME_DB_URL")
-    if not url:
-        raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
-    return SupabaseHpWriteRepository(connect(url, autocommit=False))
+    from src.repository.hp_write_backend import build_hp_write_repository
+    return build_hp_write_repository(sidecar_conn)
 
 
 @dataclass
