@@ -541,6 +541,9 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
         st.info("完了したHP調査ジョブがありません。過去のHP確認済み医院を代わりに出力することはありません。")
         return
     summary = store.hp_job_export_summary(job["id"])
+    # A running Streamlit process may still hold the pre-PR42 runtime_store module
+    # after a git pull/hot reload. Keep the UI usable until the process is restarted.
+    carryover_count = summary.get("carryover_count", 0)
     st.caption(f"今回のHP調査結果（ジョブ {job['id']}）")
     cols = st.columns(5)
     cols[0].metric("調査対象", f"{job['target_count']:,}件")
@@ -552,13 +555,13 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
         f"{len(summary['export_ids']):,}件",
         help=(
             "HP調査成功済み・UUID未付与の累積件数です。"
-            f"今回ジョブ以外から {summary['carryover_count']:,}件を引き継いでいます。"
+            f"今回ジョブ以外から {carryover_count:,}件を引き継いでいます。"
             "CSVをダウンロードしても消えず、UUIDが付与されると自動で対象外になります。"
         ),
     )
     signature = json.dumps(
         [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision(),
-         len(summary["export_ids"]), summary["carryover_count"]],
+         len(summary["export_ids"]), carryover_count],
         ensure_ascii=False,
         sort_keys=True,
     )
