@@ -21,7 +21,8 @@ from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_de
 from src.master.research_sidecar import research_sidecar_available,clinic_research_status_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
-from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
+from src.master.jobs import JobRunner,job_status,recent_jobs
+from src.repository.write_backend import write_repositories_for
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
@@ -71,14 +72,28 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
     "NOT_RESEARCHED": "Webサイト未調査",
 }
 @st.cache_resource
-def store_for(path):
-    return ClinicStore(path)
+def store_for(path=None):
+    from src.repository.backend import active_backend, BACKEND_SUPABASE
+    if active_backend() == BACKEND_SUPABASE:
+        from src.repository.runtime_store import SupabaseRuntimeStore
+        return SupabaseRuntimeStore()
+    store = ClinicStore(path)
+    # Stage4-B Shadow Read: default is off (CLINIC_SHADOW_READ_ENABLED unset/0), in which case
+    # this returns the exact same ClinicStore as before -- no wrapper, no behavior change.
+    from src.repository.shadow import shadow_read_enabled
+    if shadow_read_enabled():
+        from src.repository.shadow import ShadowClinicStore
+        return ShadowClinicStore(store)
+    return store
 
 
 def show_web_research_metrics(store):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
-        counts = web_research_metrics(store.path)
+        if hasattr(store, "web_research_metrics"):
+            counts = store.web_research_metrics()
+        else:
+            counts = web_research_metrics(store.path)
     except BatchMetricInvariantError as exc:
         st.error(f"Webサイト調査件数を表示できません：{exc}")
         return
@@ -130,8 +145,11 @@ def runner_for(path):
 
 def ad_count_options(store):
     # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
-    with store.connect() as c:
-        top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
+    if getattr(store, "is_supabase_runtime", False):
+        top = store.ad_count_max()
+    else:
+        with store.connect() as c:
+            top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
     return [0]+list(range(2,top+1))
 
 
@@ -141,9 +159,12 @@ def ad_count_label(n):
 
 def filters_ui(store,prefix="sales",defaults=None):
     defaults = defaults or Filters()
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
-        municipality_options = [r[0] for r in c.execute("SELECT DISTINCT municipality_of(address) FROM clinics WHERE municipality_of(address)<>'' ORDER BY 1")]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs, municipality_options = store.prefectures(), store.municipalities()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
+            municipality_options = [r[0] for r in c.execute("SELECT DISTINCT municipality_of(address) FROM clinics WHERE municipality_of(address)<>'' ORDER BY 1")]
     treatment_names = treatment_category_names()
     def key(name):
         return prefix+"_"+name
@@ -165,7 +186,7 @@ def filters_ui(store,prefix="sales",defaults=None):
         pref = st.multiselect("都道府県",prefs,default=[x for x in defaults.prefectures if x in prefs],key=key("pref"))
         muni = st.multiselect("市区町村",municipality_options,default=[x for x in defaults.municipalities if x in municipality_options],key=key("municipalities"))
         deps = st.multiselect("診療科",DEPARTMENTS,default=defaults.departments,key=key("departments"))
-        if mhlw_sidecar_available():
+        if not getattr(store, "is_supabase_runtime", False) and mhlw_sidecar_available():
             try:
                 official_options = mhlw_official_department_options()
             except MhlwSidecarUnavailableError as exc:
@@ -186,7 +207,12 @@ def filters_ui(store,prefix="sales",defaults=None):
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
         treatments = st.multiselect("治療カテゴリ",treatment_names,default=defaults.treatments,key=key("treatments"))
-        if research_sidecar_available():
+        if getattr(store, "is_supabase_runtime", False):
+            hp_treatment_options = store.treatment_category_options()
+            hp_treatments = st.multiselect("HP治療カテゴリ（Treatment Research・CONFIRMEDのみ）",hp_treatment_options,
+                default=[x for x in defaults.hp_treatment_categories if x in hp_treatment_options],key=key("hp_treatment_categories"),
+                help="公式HP上でCONFIRMED（提供確認済み）の治療カテゴリのみ営業対象にします。")
+        elif research_sidecar_available():
             try:
                 hp_treatment_options = treatment_research_category_options()
             except ResearchSidecarUnavailableError as exc:
@@ -198,7 +224,7 @@ def filters_ui(store,prefix="sales",defaults=None):
         else:
             hp_treatments = []
             st.caption("Treatment Research sidecarがないため、HP治療カテゴリfilterは利用できません。既存filterは通常どおり利用できます。")
-        if clinic_research_status_available():
+        if getattr(store, "is_supabase_runtime", False) or clinic_research_status_available():
             research_status = st.multiselect("Research Status",RESEARCH_STATUS_UI_OPTIONS,
                 default=[x for x in defaults.research_status if x in RESEARCH_STATUS_UI_OPTIONS],key=key("research_status"),
                 help="医院単位の調査状態（DONE/FETCH_FAILED/NOT_RESEARCHED）で絞り込みます。NOT_RESEARCHEDは該当医院の調査行が1件もない状態です。HP治療カテゴリfilterとは独立した軸です。")
@@ -222,6 +248,11 @@ def filters_ui(store,prefix="sales",defaults=None):
 
 def show_mhlw_join_status(store):
     """正式採用したfinal sidecarの連携状況を簡潔に表示する。"""
+    if getattr(store, "is_supabase_runtime", False):
+        status = store.mhlw_join_status()
+        if status is None:
+            st.info("ナビイ正式診療科データは移行対象外です。既存の厚生局診療科filterは利用できます。")
+            return
     with store.connect() as c:
         attached = {r[1] for r in c.execute("PRAGMA database_list")}
         if "mhlwdb" not in attached:
@@ -337,11 +368,11 @@ def manual_form(store,r):
         if not note.strip():
             st.warning("確認した根拠URLや理由をメモに入力してください。")
         else:
-            store.override(cid,field,value,note)
+            write_repositories_for(store).research.override(cid,field,value,note=note)
             st.success("手動値を保存しました。再調査しても保持されます。")
             st.rerun()
     if field in r.get("manual_fields",[]) and cols[1].button("この項目を自動値に戻す",key=f"manual_reset_{cid}"):
-        store.override(cid,field,None,note)
+        write_repositories_for(store).research.override(cid,field,None,note=note)
         st.rerun()
 
 
@@ -394,19 +425,19 @@ def import_ui(store,demo):
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS),hide_index=True,width="stretch")
         if st.button("既存案件を登録",type="primary"):
             with st.spinner("既存案件を登録しています…"):
-                result = store.import_comdesk(table,mapping)
+                result = write_repositories_for(store).clinics.import_comdesk(table,mapping)
             report_import(result)
     st.subheader("2. 厚生局データを統合する")
     if st.button("同梱の東京都マスターを取り込む",disabled=demo):
         with st.spinner("東京都の全施設を統合しています…"):
             frame = pd.read_csv(ROOT/"data/master/tokyo_current.csv",dtype=str,keep_default_na=False)
-            result = store.import_master(frame)
+            result = write_repositories_for(store).clinics.import_master(frame)
         report_import(result)
     st.caption("同梱データは2026-09-01基準の東京都医科一覧です。病院・休止施設も保持し、営業対象フィルターで現存クリニックを選びます。歯科一覧は別途取り込んでください。")
     st.write("取り込み済みのデータを再統合する")
     st.caption("先頭0・ハイフンの違いを統合判定用のキーで吸収します。元のTel1・UUIDは保持します。全レコードを保存し、曖昧な重複は確認待ちとして残します。")
     result_key = "reintegration_result_" + str(store.path)
-    if st.button("保存済みデータを再統合",disabled=demo):
+    if not getattr(store, "is_supabase_runtime", False) and st.button("保存済みデータを再統合",disabled=demo):
         with st.spinner("バックアップを作成し、保存済みの厚生局データを再照合しています…"):
             st.session_state[result_key] = store.reintegrate_existing()
     if result_key in st.session_state:
@@ -424,7 +455,7 @@ def import_ui(store,demo):
         if st.button("厚生局データを統合"):
             with st.spinner("読込・統合中…"):
                 frame = load_master(upload.getvalue(),upload.name,"kanto_excel" if "帳票" in mode else "standard",pref,selected)
-                result = store.import_master(frame)
+                result = write_repositories_for(store).clinics.import_master(frame)
             report_import(result)
     st.subheader("3. Google Maps収集アプリへ渡す")
     st.caption("厚生局を母集団にした調査キューです。病院・センターは収集アプリ側で検索前に除外されます。")
@@ -439,7 +470,7 @@ def import_ui(store,demo):
         st.dataframe(maps_frame.head(10),hide_index=True,width="stretch")
         if st.button("Google Maps取得結果を取り込む",type="primary",key="maps_import_button"):
             with st.spinner("Google Maps結果をマスターへ紐付けています…"):
-                result = store.import_google_maps(maps_frame)
+                result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             if result.get("already_imported"):
                 st.info("このGoogle Maps結果は取込済みです。重複登録していません。")
             st.success(f"取込 {result.get('TOTAL',0):,}件／自動紐付け {result.get('MATCHED',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／HPなし {result.get('NO_WEBSITE',0):,}件／Maps未発見 {result.get('NOT_FOUND',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／除外 {result.get('EXCLUDED',0):,}件／エラー {result.get('ERROR',0):,}件")
@@ -457,7 +488,7 @@ def import_ui(store,demo):
                     result = cache.lookup(record.get("manager_name",""),record.get("clinic_id",""),record.get("phone",""))
                     if result.year:
                         age = estimate_profile_age({**record,"license_registration_year":result.year,"license_source":result.source})
-                        store.save_research(record["id"],{**age,"license_source":result.source})
+                        write_repositories_for(store).research.save_research(record["id"],{**age,"license_source":result.source})
                         updated += 1
                 st.success(f"{updated:,}医院の年齢推定を更新しました。")
         st.caption("同姓同名は自動で一人に決めません。公式HPの卒業年も自動調査で補完できます。")
@@ -478,72 +509,71 @@ def report_import(result):
 
 def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=None):
     """Google MapsでHP URL取得済み医院だけを対象にHP調査ジョブを作る。"""
-    import uuid as _uuid
-    from src.master.store import now as _now, dumps as _dumps
-
-    conditions = [
-        "merged_into IS NULL",
-        "merge_hold=0",
-        "active=1",
-        "maps_presence_status='MAPS_MATCHED_WEBSITE'",
-        "maps_website_url<>''",
-    ]
-    args = []
-    if prefecture:
-        conditions.append("prefecture=?")
-        args.append(prefecture)
-    if medical_types:
-        placeholders = ",".join("?" for _ in medical_types)
-        conditions.append(f"medical_type IN ({placeholders})")
-        args.extend(medical_types)
-    if not force:
-        conditions.append("hp_status='UNRESEARCHED'")
-
-    jid = _uuid.uuid4().hex
-    with store.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
-        ids = [r[0] for r in c.execute(
-            "SELECT id FROM clinics WHERE " + " AND ".join(conditions) +
-            " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
-            (*args, min(500, max(1, int(limit))))
-        )]
-        if not ids:
-            raise ValueError("現在の条件でHP調査できる医院がありません。")
-        c.execute(
-            "INSERT INTO research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (jid, "hp", _dumps({"force": bool(force), "max_pages": 20}), 0, _now(), _now())
-        )
-        c.executemany(
-            "INSERT INTO research_job_items(job_id,clinic_id) VALUES(?,?)",
-            [(jid, i) for i in ids]
-        )
-    return jid
+    # Step4 eligibility is owned by the Supabase HP research ledger. A local clinic
+    # projection cannot answer whether a clinic has ever been researched.
+    if not getattr(store, "is_supabase_runtime", False):
+        raise RuntimeError("Step4 HP target selection requires the Supabase research ledger.")
+    # Candidate selection is read-only; persistent job+item WRITE goes through Repository.
+    ids = store.maps_hp_candidate_ids(prefecture, medical_types, force, limit)
+    if not ids:
+        raise ValueError("現在の条件でHP調査できる医院がありません。")
+    return write_repositories_for(store).jobs.create_job(
+        ids, "hp", {"force": bool(force), "max_pages": 20}, 0
+    )
 
 
 def _maps_hp_available_count(store, prefecture="", force=False, medical_types=None):
-    conditions = [
-        "merged_into IS NULL",
-        "merge_hold=0",
-        "active=1",
-        "maps_presence_status='MAPS_MATCHED_WEBSITE'",
-        "maps_website_url<>''",
-    ]
-    args = []
-    if prefecture:
-        conditions.append("prefecture=?")
-        args.append(prefecture)
-    if medical_types:
-        placeholders = ",".join("?" for _ in medical_types)
-        conditions.append(f"medical_type IN ({placeholders})")
-        args.extend(medical_types)
-    if not force:
-        conditions.append("hp_status='UNRESEARCHED'")
-    with store.connect() as c:
-        return c.execute(
-            "SELECT count(*) FROM clinics WHERE " + " AND ".join(conditions),
-            args
-        ).fetchone()[0]
+    # Do not guess research completion from public.clinics.hp_status or local sidecars.
+    if not getattr(store, "is_supabase_runtime", False):
+        return 0
+    return store.maps_hp_available_count(prefecture, medical_types, force)
+
+
+def current_hp_job_export_ui(store, *, key_prefix="step5"):
+    """Step5 is intentionally scoped to the latest completed HP job, never global history."""
+    if not getattr(store, "is_supabase_runtime", False):
+        st.metric("Comdesk出力対象", "0件")
+        st.info("今回のHP調査ジョブはSupabase実行時に表示されます。全期間の出力は詳細設定をご利用ください。")
+        return
+    job = store.latest_completed_hp_job()
+    if not job:
+        st.metric("Comdesk出力対象", "0件")
+        st.info("完了したHP調査ジョブがありません。過去のHP確認済み医院を代わりに出力することはありません。")
+        return
+    summary = store.hp_job_export_summary(job["id"])
+    st.caption(f"今回のHP調査結果（ジョブ {job['id']}）")
+    cols = st.columns(5)
+    cols[0].metric("調査対象", f"{job['target_count']:,}件")
+    cols[1].metric("調査完了", f"{summary['done_count']:,}件")
+    cols[2].metric("HP確認成功", f"{summary['success_count']:,}件")
+    cols[3].metric("既存UUIDあり", f"{summary['uuid_existing_count']:,}件")
+    cols[4].metric("Comdesk出力対象", f"{len(summary['export_ids']):,}件")
+    signature = json.dumps(
+        [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision()],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if st.button(
+        "今回のHP調査結果をComdesk形式で出力",
+        type="primary",
+        key=key_prefix + "_current_hp_export",
+        disabled=not summary["export_ids"],
+        use_container_width=True,
+    ):
+        st.session_state[key_prefix + "_current_hp_export_files"] = {
+            "signature": signature,
+            "files": store.export_hp_job(job["id"]),
+        }
+    output = st.session_state.get(key_prefix + "_current_hp_export_files")
+    if output and output["signature"] == signature:
+        for name, content in output["files"].items():
+            st.download_button(
+                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
+                content,
+                name,
+                key=key_prefix + "_download_" + name,
+                use_container_width=True,
+            )
 
 
 def simple_workflow_ui(store, demo):
@@ -563,7 +593,7 @@ def simple_workflow_ui(store, demo):
         if st.button("東京都マスターを取り込む", type="primary", disabled=demo, key="simple_import_tokyo", use_container_width=True):
             with st.spinner("東京都マスターを取り込んでいます…"):
                 frame = pd.read_csv(ROOT/"data/master/tokyo_current.csv", dtype=str, keep_default_na=False)
-                result = store.import_master(frame)
+                result = write_repositories_for(store).clinics.import_master(frame)
             report_import(result)
             st.rerun()
 
@@ -586,7 +616,7 @@ def simple_workflow_ui(store, demo):
 
         if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", use_container_width=True):
             with st.spinner("Google Maps結果を取り込んでいます…"):
-                result = store.import_google_maps(maps_frame)
+                result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             st.success(
                 f"取込 {result.get('TOTAL',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／"
                 f"HPなし {result.get('NO_WEBSITE',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／"
@@ -595,10 +625,13 @@ def simple_workflow_ui(store, demo):
             st.rerun()
 
     st.subheader("4. HP内容を自動調査")
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute(
-            "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
-        )]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs = store.prefectures()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute(
+                "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
+            )]
     pref_options = ["すべて"] + prefs
     default_pref = pref_options.index("東京都") if "東京都" in pref_options else 0
     pref_label = st.selectbox("都道府県", pref_options, index=default_pref, key="simple_research_pref")
@@ -609,7 +642,7 @@ def simple_workflow_ui(store, demo):
     force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
     available = _maps_hp_available_count(store, pref, force, research_medical_types)
 
-    st.info(f"現在の条件でHP調査できる医院：{available:,}件")
+    st.info(f"ウェブサイト調査対象：{available:,}件")
 
     default_count = min(50, available) if available > 0 else 50
     count = st.number_input(
@@ -621,7 +654,7 @@ def simple_workflow_ui(store, demo):
     )
     actual = min(int(count), available)
     st.caption(
-        f"今回実際に調査する件数：{actual:,}件。"
+        f"今回のウェブサイト調査件数：{actual:,}件。"
         "設定が50件でも対象が34件なら34件だけ調査します。"
     )
 
@@ -649,13 +682,13 @@ def simple_workflow_ui(store, demo):
 
         can_pause = runner.running() or current["status"] == "RUNNING"
         if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
-            pause_job(store, current["id"])
+            write_repositories_for(store).jobs.pause_job(current["id"])
             st.rerun()
 
         can_reset = not runner.running() and current["status"] != "RUNNING"
         if controls[1].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
             try:
-                reset_job(store, current["id"])
+                write_repositories_for(store).jobs.reset_job(current["id"])
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -668,33 +701,7 @@ def simple_workflow_ui(store, demo):
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
 
     st.subheader("5. Comdesk形式で出力")
-    st.caption("HP確認済みで、まだUUIDが付いていない医院を、営業条件で絞らずComdesk形式で出力します。")
-
-    step5_filters = Filters(active_only=False, hp_only=True, uuid_mode="なし")
-    step5_count = store.count(step5_filters)
-    st.write(f"対象：{step5_count:,}件")
-
-    step5_signature = json.dumps(
-        [str(store.path), asdict(step5_filters), COMDESK_HEADERS, store.revision()],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    if st.button("CSV・Excelを作成", type="primary", key="simple_step5_export", disabled=step5_count == 0, use_container_width=True):
-        st.session_state["simple_step5_export_files"] = {
-            "signature": step5_signature,
-            "files": store.export(step5_filters),
-        }
-
-    step5_output = st.session_state.get("simple_step5_export_files")
-    if step5_output and step5_output["signature"] == step5_signature:
-        for name, content in step5_output["files"].items():
-            st.download_button(
-                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
-                content,
-                name,
-                key="simple_step5_download_" + name,
-                use_container_width=True,
-            )
+    current_hp_job_export_ui(store, key_prefix="simple_step5")
 
     st.subheader("6. 5.で出したデータを手動でComdeskに入れる（＝UUIDを付与）")
 
@@ -720,7 +727,7 @@ def simple_workflow_ui(store, demo):
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
         if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
             with st.spinner("既存案件を登録しています…"):
-                result = store.import_comdesk(table, mapping)
+                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
             report_import(result)
 
 
@@ -734,10 +741,13 @@ def simple_sales_ui(store, demo=False):
     # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
     # 取りこぼさないよう、既定値だけを全国Clinic Masterへ変更（表示順・選択肢はそのまま）。
     scope = st.selectbox("対象データ", scope_options, index=scope_options.index(SCOPE_ALL), format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute(
-            "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
-        )]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs = store.prefectures()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute(
+                "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
+            )]
     pref_default = ["東京都"] if "東京都" in prefs else []
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
     sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
@@ -822,7 +832,9 @@ def simple_sales_ui(store, demo=False):
         st.error(str(exc))
         return
     st.metric("営業対象", f"{count:,}件")
-    summary = sales_classification_summary()
+    # The historical Sales Tier CSV/SQLite artifact is not a production SoT.  It remains
+    # available to explicit offline/admin analysis only and is never opened by Supabase runtime.
+    summary = None if getattr(store, "is_supabase_runtime", False) else sales_classification_summary()
     if summary:
         st.caption(
             f"参考：Sales Tier分類（{summary['source_path'].name}、HP ABC判定とは別軸）："
@@ -834,60 +846,9 @@ def simple_sales_ui(store, demo=False):
     with st.expander("対象医院を確認", expanded=False):
         listing(store, filters, "simple_sales_results")
 
-    st.subheader("Comdesk形式で出力")
-    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。HP ABC判定がA・B以外の医院は出力しません。")
-
-    # 営業対象はHP ABC判定のA+Bのみ。選択内容に関わらずComdesk出力はA/Bに限定する
-    # （C/D/UNKNOWN/NO_HPを選んで一覧確認はできるが、出力対象にはならない）。
-    # UUIDの有無では絞り込まない。UUIDなし（新規案件）もUUIDあり（既存案件）と同様に出力する。
-    export_ranks = [r for r in (hp_ranks or ["A", "B"]) if r in ("A", "B")]
-    # A+B以外だけを選択した場合、export_ranksが空になりranks未指定(無制限)と区別できなくなる。
-    # 空=無制限ではなく「0件」として扱い、意図せずC/D/UNKNOWN/NO_HPを出力しない。
-    non_ab_only_selected = bool(hp_ranks) and not export_ranks
-    if non_ab_only_selected:
-        st.caption(f"選択されたHP ABC判定「{rank_choice}」は営業対象外のため、Comdesk出力はできません。")
-    export_filters = sales_filters
-
-    try:
-        export_count = 0 if non_ab_only_selected else store.count(export_filters)
-        uuid_yes_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="あり"))
-        uuid_no_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="なし"))
-    except SalesClassificationUnavailableError as exc:
-        st.error(str(exc))
-        return
-
-    export_cols = st.columns(3)
-    export_cols[0].metric("Comdesk出力対象", f"{export_count:,}件")
-    export_cols[1].metric("既存案件(UUIDあり)", f"{uuid_yes_count:,}件")
-    export_cols[2].metric("新規案件(UUIDなし)", f"{uuid_no_count:,}件")
-    if not non_ab_only_selected and set(hp_ranks or ["A", "B"]) <= {"A", "B"} and export_count != count:
-        st.caption(
-            f"注意：営業対象（{count:,}件）とComdesk出力対象（{export_count:,}件）が一致していません。"
-            "絞り込み条件がA+B以外を含んでいないか確認してください。"
-        )
-
-    signature = json.dumps(
-        [str(store.path), asdict(export_filters), COMDESK_HEADERS, store.revision()],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    export_disabled = non_ab_only_selected or export_count == 0
-    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True) and not non_ab_only_selected:
-        st.session_state["simple_export_files"] = {
-            "signature": signature,
-            "files": store.export(export_filters),
-        }
-
-    output = st.session_state.get("simple_export_files")
-    if output and output["signature"] == signature:
-        for name, content in output["files"].items():
-            st.download_button(
-                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
-                content,
-                name,
-                key="simple_download_" + name,
-                use_container_width=True,
-            )
+    st.subheader("今回のHP調査結果をComdesk形式で出力")
+    st.caption("上の営業対象件数は全体の参考表示です。出力は最新完了HP調査ジョブ内の成功医院に限定します。")
+    current_hp_job_export_ui(store, key_prefix="simple_sales")
 
 
 def advanced_ui(store, demo):
@@ -932,7 +893,7 @@ def research_ui(store,demo):
     runner = runner_for(str(store.path))
     if st.button("自動調査を開始",type="primary",disabled=demo or runner.running()):
         provider = TavilySearchProvider(api_key)
-        jid = create_job(store,f,kind,count,max_search,force,max_pages)
+        jid = write_repositories_for(store).jobs.create_job_from_filters(f,kind,count,max_search,force,max_pages)
         st.session_state["active_job"] = jid
         runner.start(store,jid,provider)
     jobs = recent_jobs(store)
@@ -945,14 +906,14 @@ def research_ui(store,demo):
         cols = st.columns(3)
         if cols[0].button("続きから再開",disabled=runner.running() or current["status"]=="COMPLETED"):
             provider = TavilySearchProvider(api_key)
-            job_limit(store,selected,increased)
+            write_repositories_for(store).jobs.job_limit(selected,increased)
             runner.start(store,selected,provider)
         if cols[1].button("一時停止",disabled=not runner.running()):
-            pause_job(store,selected)
+            write_repositories_for(store).jobs.pause_job(selected)
         reset_disabled = runner.running() or current["status"] == "RUNNING"
         if cols[2].button("この調査をリセット",disabled=reset_disabled,help="この調査の進捗履歴だけをリセットします。医院の調査結果、Google Maps取込結果、UUID、月間検索使用数は削除しません。"):
             try:
-                reset_job(store,selected)
+                write_repositories_for(store).jobs.reset_job(selected)
                 if st.session_state.get("active_job") == selected:
                     st.session_state.pop("active_job",None)
                 st.session_state["research_reset_message"] = "調査の進捗をリセットしました。保存済みの医院調査結果は削除していません。新しい医院数を設定して『自動調査を開始』してください。"
@@ -975,8 +936,11 @@ def show_job_progress(store,jid):
 def sales_ui(store):
     saved_filters = st.session_state.get("selected_sales_filters")
     if saved_filters is None:
-        with store.connect() as c:
-            has_maps = c.execute("SELECT 1 FROM clinics WHERE maps_presence_status<>'' LIMIT 1").fetchone() is not None
+        if getattr(store, "is_supabase_runtime", False):
+            has_maps = store.has_maps()
+        else:
+            with store.connect() as c:
+                has_maps = c.execute("SELECT 1 FROM clinics WHERE maps_presence_status<>'' LIMIT 1").fetchone() is not None
         defaults = Filters(maps_confirmed_only=has_maps, scope=SCOPE_LEGACY_PRE_NATIONAL)
     else:
         defaults = Filters(**saved_filters)
@@ -987,7 +951,8 @@ def sales_ui(store):
     with st.expander("選択条件での絞り込み件数",expanded=True):
         show_funnel(store,filters)
     listing(store,filters,"sales_results")
-    st.subheader("コムデスク形式で出力する")
+    st.subheader("全期間の営業対象を出力（詳細設定）")
+    st.caption("かんたん操作のStep5とは別の全期間検索です。過去のHP確認済み医院も選択条件に応じて含まれます。")
     st.caption("出力形式：A〜AB列の28項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。入力にない項目は確認できた情報を補い、不明な項目は空欄にします。")
     with st.expander("毎回1行目に出力する28項目",expanded=True):
         st.dataframe(pd.DataFrame({"列":[chr(65+i) if i<26 else "A"+chr(65+i-26) for i in range(28)],"1行目の項目名":COMDESK_HEADERS}),hide_index=True,width="stretch")
@@ -1020,20 +985,22 @@ def settings_ui(store):
             if not note.strip():
                 st.warning("確認した根拠をメモに入力してください。")
             else:
-                store.resolve_review(rid,target,note)
+                write_repositories_for(store).clinics.resolve_review(rid,target,note)
                 st.rerun()
     st.subheader("判定の確認・手動修正")
     keyword = st.text_input("確認する医院名・電話番号・UUID",key="review_search")
     if keyword:
         listing(store,Filters(active_only=False,hp_only=False,keyword=keyword),"review")
-    st.subheader("データのバックアップ")
-    st.caption("マスター・元のコムデスク行・根拠・手動修正・検索回数をまとめて保存します。")
-    if st.button("バックアップを作成"):
-        st.session_state["db_backup"] = store.backup_bytes()
-    if "db_backup" in st.session_state:
-        st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
-    st.write("使用中のデータファイル：",str(store.path))
-    st.caption("復元：アプリを終了 → 現在のDBを退避 → バックアップを clinics.sqlite3 に変更して data フォルダーへ配置 → 起動。詳しくはREADME_V2.md。")
+    st.subheader("データ基盤")
+    if getattr(store, "is_supabase_runtime", False):
+        st.write("使用中のデータ基盤：Supabase PostgreSQL")
+        st.caption("SQLiteバックアップは管理・移行専用です。通常Runtimeからは作成・参照しません。")
+    else:
+        st.caption("管理・テスト用SQLiteモード")
+        if st.button("バックアップを作成"):
+            st.session_state["db_backup"] = store.backup_bytes()
+        if "db_backup" in st.session_state:
+            st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
 
 
 def main():
@@ -1047,15 +1014,18 @@ def main():
             demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
 
+    from src.repository.backend import active_backend, BACKEND_SUPABASE
     if demo:
         path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
-    else:
+    elif active_backend() != BACKEND_SUPABASE:
         path, db_error = resolve_production_db_path()
         if db_error:
             st.error(db_error)
             st.stop()
-    store = store_for(str(path))
-    store.refresh_age_model()
+    else:
+        path = None
+    store = store_for(str(path) if path is not None else None)
+    write_repositories_for(store).clinics.refresh_age_model()
 
     if demo:
         load_demo(store)

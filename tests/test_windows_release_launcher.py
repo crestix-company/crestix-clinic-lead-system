@@ -38,23 +38,32 @@ def test_start_bat_uses_update_launcher_and_launch_v2_is_single_runtime():
     assert "update_and_launch_windows.ps1" in start
     assert "git switch main" in update
     assert "git pull --ff-only origin main" in update
-    assert update.count('Join-Path $RepoRoot "scripts\\launch_v2.py"') == 1
+    assert update.count('Join-Path $RepoRoot "scripts\\launch_v2_windows.ps1"') == 1
 
 
-def test_both_windows_launchers_fail_closed_for_all_three_databases():
+def test_both_windows_launchers_are_supabase_only_and_require_no_sqlite_distribution():
     for relative in ("scripts/update_and_launch_windows.ps1", "scripts/launch_v2_windows.ps1"):
         text = _text(relative)
-        assert "CLINIC_DATA_DIR" in text
-        assert "CLINIC_DB_PATH" in text
-        assert "TREATMENT_RESEARCH_DB_PATH" in text
-        assert "HP_RESEARCH_BATCH_DB_PATH" in text
-        assert "clinics.sqlite3" in text
-        assert "treatment_research_final.sqlite3" in text
-        assert "hp_abc_batch_sidecar.sqlite3" in text
-        assert "mode=ro&immutable=1" in text
-        assert "自動取得・自動生成・copy・migrateしません" in text
-        assert "hp_batch_clinics" in text
-        assert "hp_treatment_detected" in text
+        assert "CLINIC_DB_PATH" not in text
+        assert "TREATMENT_RESEARCH_DB_PATH" not in text
+        assert "HP_RESEARCH_BATCH_DB_PATH" not in text
+        assert "sqlite3" not in text.lower()
+    launch = _text("scripts/launch_v2_windows.ps1")
+    assert ".supabase-runtime.env.local" in launch
+    assert "Supabase-only" in launch
+
+
+def test_stage5_windows_acceptance_uses_real_launcher_without_secrets():
+    acceptance = _text("scripts/supabase_migration/stage5_windows_acceptance.ps1")
+    launcher = _text("scripts/launch_v2_windows.ps1")
+    assert "$PSVersionTable.PSVersion.Major -ne 5" in acceptance
+    assert "launch_v2_windows.ps1" in acceptance
+    assert "-AcceptanceProbe" in acceptance
+    assert "stage5_external_acceptance.py" in launcher
+    assert "AcceptanceToken" in launcher
+    for text in (acceptance, launcher):
+        assert "postgresql://" not in text
+        assert "SUPABASE_RUNTIME_DB_URL=" not in text
 
 
 def test_release_snapshot_contract_contains_hp_batch_counts():

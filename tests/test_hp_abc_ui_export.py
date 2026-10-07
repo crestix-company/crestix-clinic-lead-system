@@ -142,7 +142,7 @@ def test_c_and_unknown_never_exported_even_if_selected(tmp_path, monkeypatch):
         assert not at.exception
         export_count = next(m.value for m in at.metric if m.label == "Comdesk出力対象")
         assert export_count == "0件", f"{rank_label} must never be exported to Comdesk"
-        assert next(b for b in at.button if b.label == "CSV・Excelを作成").disabled
+        assert any("全期間の出力は詳細設定" in x.value for x in at.info)
 
 
 # ---- Treatment調査状態: HP ABC判定・出力対象に影響しないこと ----
@@ -224,6 +224,11 @@ def test_treatment_status_counts_none_when_sidecar_unavailable(tmp_path, monkeyp
 # ---- UI (AppTest): 営業対象件数 = Comdesk出力対象件数 ----
 
 def _app(tmp_path, monkeypatch, db_path):
+    # Stage4-C made Supabase the default READ backend; this fixture builds an isolated SQLite
+    # DB with controlled test data, so it must pin the backend back to sqlite or it silently
+    # reads live Supabase production data instead (see docs/supabase_migration/23_...: the
+    # four tests this masked were all count assertions against this tmp fixture).
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")
     monkeypatch.setenv("CLINIC_DB_PATH", str(db_path))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     at = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()
@@ -244,10 +249,9 @@ def test_ui_sales_target_count_equals_comdesk_export_count(tmp_path, monkeypatch
 
     sales_target = next(m.value for m in at.metric if m.label == "営業対象")
     export_target = next(m.value for m in at.metric if m.label == "Comdesk出力対象")
-    assert sales_target == export_target == "3件"
-    uuid_yes = next(m.value for m in at.metric if m.label == "既存案件(UUIDあり)")
-    uuid_no = next(m.value for m in at.metric if m.label == "新規案件(UUIDなし)")
-    assert uuid_yes == "1件" and uuid_no == "2件"
+    assert sales_target == "3件"
+    assert export_target == "0件"  # no current HP job: never export historical accumulation
+    assert any("全期間の出力は詳細設定" in x.value for x in at.info)
 
 
 def test_ui_web_research_six_metrics_displayed(tmp_path, monkeypatch):
@@ -317,6 +321,6 @@ def test_ui_site_type_filter_list_columns_and_export_alignment(tmp_path, monkeyp
     for label in ("公式HP確認済み", "ポータルサイト", "その他・未確認"):
         site_filter.set_value(label).run()
         assert next(m.value for m in at.metric if m.label == "営業対象") == "1件"
-        assert next(m.value for m in at.metric if m.label == "Comdesk出力対象") == "1件"
+        assert next(m.value for m in at.metric if m.label == "Comdesk出力対象") == "0件"
     frames = [frame.value for frame in at.dataframe if hasattr(frame.value, "columns")]
     assert any({"医院名", "HP ABC", "サイト種別", "ポータル名", "治療カテゴリ", "UUID有無"} <= set(frame.columns) for frame in frames)
