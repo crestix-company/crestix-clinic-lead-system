@@ -369,6 +369,25 @@ def test_supabase_search_cache_upsert_idempotent_sql_shape():
     assert conn.committed == 1
 
 
+def test_supabase_refresh_projection_binds_postgres_booleans_as_bool():
+    """SQLite's projection helper returns 0/1; psycopg must receive real booleans."""
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
+
+    conn = FakeConn(script=[
+        ({"clinic_name": "x", "status": "営業中", "facility_type": "診療所",
+          "owner_name": "山田 太郎", "manager_name": "山田 太郎"}, "", ""),
+        None,
+        [],
+    ])
+    SupabaseClinicWriteRepository(conn).refresh_projection(1_000_000_000)
+    update = next((query, params) for query, params in conn.executed if query.startswith("UPDATE public.clinics SET"))
+    query, params = update
+    columns = [piece.split("=")[0] for piece in query.removeprefix("UPDATE public.clinics SET ").split(" WHERE")[0].split(",")]
+    bound = dict(zip(columns, params[:-1]))
+    assert bound["active"] is True
+    assert bound["owner_equal"] is True
+
+
 def test_supabase_hp_pages_replace_uses_delete_then_on_conflict_insert():
     from src.repository.supabase_write_adapter import SupabaseResearchWriteRepository
     conn = FakeConn(script=[None])  # SELECT existing research_results -> none

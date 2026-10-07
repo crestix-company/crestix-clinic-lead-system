@@ -387,8 +387,15 @@ class SupabaseClinicWriteRepository:
         )
         fields["effective_json"] = dumps(fields["effective_json"])  # TEXT column, not JSONB
         columns = list(fields)
-        values = [Jsonb(fields[c]) if c in ("departments_json", "treatments_json", "signals_json") else fields[c]
-                  for c in columns]
+        bool_columns = {"active", "owner_equal"}
+        values = [
+            Jsonb(fields[c])
+            if c in ("departments_json", "treatments_json", "signals_json")
+            else (None if fields[c] is None else bool(fields[c]))
+            if c in bool_columns
+            else fields[c]
+            for c in columns
+        ]
         if resolved_key != stored_key:
             columns.append("medical_key")
             values.append(resolved_key)
