@@ -1,0 +1,76 @@
+"""Stage4-D Gate2-A: WRITE backend selection, independent of CLINIC_DATA_BACKEND (READ).
+
+Default stays "sqlite" until Stage4-D's live Rollback Canary / Failure Injection / Persistent
+Canary / Reconciliation gates all pass (see docs/supabase_migration/22_stage4d_write_inventory_gate.md
+and 23_stage4d_gate2_offline_preparation.md). Flipping the default to "supabase" is itself a
+live-cutover action (Gate "WRITE Cutover") and is not performed by this module or by importing it.
+
+No silent fallback: unlike the READ comparator in src.repository.cutover, a Supabase WRITE
+failure must never cause an automatic SQLite write of the same operation (dual-write stays
+forbidden). Callers that need rollback simply set CLINIC_WRITE_BACKEND=sqlite explicitly.
+"""
+import os
+
+WRITE_BACKEND_ENV_VAR = "CLINIC_WRITE_BACKEND"
+WRITE_BACKEND_SQLITE = "sqlite"
+WRITE_BACKEND_SUPABASE = "supabase"
+VALID_WRITE_BACKENDS = (WRITE_BACKEND_SQLITE, WRITE_BACKEND_SUPABASE)
+
+
+def active_write_backend():
+    value = (os.environ.get(WRITE_BACKEND_ENV_VAR) or WRITE_BACKEND_SQLITE).strip().lower()
+    if value not in VALID_WRITE_BACKENDS:
+        raise ValueError(
+            f"{WRITE_BACKEND_ENV_VAR}は{VALID_WRITE_BACKENDS}のいずれかにしてください（指定値: {value!r}）。"
+        )
+    return value
+
+
+def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=None):
+    """Factory: returns a WriteRepositories bundle for the requested (or env-selected) backend.
+    Mirrors src.repository.backend.build_repositories()'s shape for the READ side.
+    """
+    from src.repository.write_contracts import WriteRepositories
+
+    backend = backend or active_write_backend()
+    if backend == WRITE_BACKEND_SQLITE:
+        from src.master.store import ClinicStore
+        from src.master.data_paths import production_db_path
+        from src.repository.sqlite_write_adapter import (
+            SqliteClinicWriteRepository, SqliteResearchWriteRepository,
+            SqliteProvenanceWriteRepository, SqliteSettingsWriteRepository,
+            SqliteJobsWriteRepository, SqliteSearchWriteRepository,
+        )
+        store = ClinicStore(sqlite_path or production_db_path())
+        return WriteRepositories(
+            clinics=SqliteClinicWriteRepository(store),
+            research=SqliteResearchWriteRepository(store),
+            provenance=SqliteProvenanceWriteRepository(store),
+            settings=SqliteSettingsWriteRepository(store),
+            jobs=SqliteJobsWriteRepository(store),
+            search=SqliteSearchWriteRepository(store),
+        )
+    if backend == WRITE_BACKEND_SUPABASE:
+        import os as _os
+        from src.repository.supabase_adapter import connect
+        from src.repository.supabase_write_adapter import (
+            SupabaseClinicWriteRepository, SupabaseResearchWriteRepository,
+            SupabaseProvenanceWriteRepository, SupabaseSettingsWriteRepository,
+            SupabaseJobsWriteRepository, SupabaseSearchWriteRepository,
+        )
+        url = supabase_url or _os.environ.get("SUPABASE_DB_URL")
+        if not url:
+            raise RuntimeError("SUPABASE_DB_URL is not set")
+        # WRITE connections stay in default (non-autocommit) mode: every write path manages its
+        # own explicit transaction boundary (see supabase_write_adapter), unlike the READ side's
+        # long-lived autocommit connection in src.repository.backend.
+        conn = connect(url, autocommit=False)
+        return WriteRepositories(
+            clinics=SupabaseClinicWriteRepository(conn),
+            research=SupabaseResearchWriteRepository(conn),
+            provenance=SupabaseProvenanceWriteRepository(conn),
+            settings=SupabaseSettingsWriteRepository(conn),
+            jobs=SupabaseJobsWriteRepository(conn),
+            search=SupabaseSearchWriteRepository(conn),
+        )
+    raise AssertionError(backend)
