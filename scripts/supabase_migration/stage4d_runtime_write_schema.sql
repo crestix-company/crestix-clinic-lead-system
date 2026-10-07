@@ -110,7 +110,7 @@ grant select, insert on provenance.templates to clinic_runtime;
 grant select, insert, update on provenance.source_records to clinic_runtime;
 grant select, insert on provenance.import_batches to clinic_runtime;
 grant select, insert on provenance.change_history to clinic_runtime;              -- append-only audit: no update/delete
-grant select, insert on provenance.comdesk_original_rows to clinic_runtime;
+grant select, insert, update on provenance.comdesk_original_rows to clinic_runtime;
 grant select, insert on provenance.google_maps_results to clinic_runtime;
 grant select, insert, update on provenance.match_reviews to clinic_runtime;
 grant select, insert, update, delete on provenance.manual_overrides to clinic_runtime;  -- override(value=None) deletes

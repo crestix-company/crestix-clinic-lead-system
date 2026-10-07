@@ -20,6 +20,9 @@
     場合は、このスクリプトではなく scripts\launch_v2_windows.ps1 を使うこと（そちらはgitの
     fetch/pullを一切行わない）。
 
+    Supabase WRITE切替設定はgit-ignore済み .supabase-runtime.env.localからPython launcherが
+    読み込む。SUPABASE_RUNTIME_DB_URLの値はコンソールへ表示しない。
+
     Production DBは絶対に自動取得・自動上書きしない。DBの移行は、Mac側でSQLiteの`.backup`を
     取り、ZIPでWindowsのCrestixDataフォルダーへ手動で配置する運用を継続する。このスクリプトは
     その手動運用を前提に、「今のWindows実DBが今のコードが期待するDBバージョンと一致しているか」

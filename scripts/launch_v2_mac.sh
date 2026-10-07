@@ -1,5 +1,7 @@
 #!/bin/bash
 # Mac用の起動スクリプト。CLINIC_DB_PATHをrepo外のProduction DBへ向けてから起動する。
+# Supabase WRITE切替時はgit-ignore済み `.supabase-runtime.env.local` にruntime URLと
+# CLINIC_WRITE_BACKEND=supabaseを保存する。secret値は表示しない。
 #
 # CLINIC_DB_PATHが既に設定されていればそれを優先する。未設定時は既定の配置場所
 # ($HOME/CrestixData/clinic-lead/clinics.sqlite3) を使う。このパスはリポジトリに

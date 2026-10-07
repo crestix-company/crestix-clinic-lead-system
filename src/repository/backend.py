@@ -56,11 +56,11 @@ def build_repositories(backend=None, *, sqlite_path=None, supabase_url=None):
             connect, SupabaseClinicRepository, SupabaseHpResearchRepository, SupabaseTreatmentRepository,
             SupabaseResearchRepository, SupabaseProvenanceRepository, SupabaseSettingsRepository,
         )
-        url = supabase_url or _os.environ.get("SUPABASE_DB_URL")
+        url = supabase_url or _os.environ.get("SUPABASE_RUNTIME_DB_URL")
         if not url:
             # Runtime cutover catches ordinary exceptions and falls back to SQLite.  SystemExit
             # would terminate Streamlit's script thread and bypass that safety mechanism.
-            raise RuntimeError("SUPABASE_DB_URL is not set")
+            raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
         # Stage4-C runtime connections are long-lived.  Autocommit keeps one failed/cancelled
         # SELECT from poisoning every later read with InFailedSqlTransaction.
         conn = connect(url, autocommit=True)

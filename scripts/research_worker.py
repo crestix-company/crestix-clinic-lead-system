@@ -372,9 +372,9 @@ def _build_treatment_repo(final_db_conn):
     import os as _os
     from src.repository.supabase_adapter import connect
     from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
-    url = _os.environ.get("SUPABASE_DB_URL")
+    url = _os.environ.get("SUPABASE_RUNTIME_DB_URL")
     if not url:
-        raise RuntimeError("SUPABASE_DB_URL is not set")
+        raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
     return SupabaseTreatmentWriteRepository(connect(url, autocommit=False))
 
 

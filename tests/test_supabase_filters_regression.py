@@ -15,8 +15,8 @@ from src.master.filters import Filters
 from src.repository.backend import build_repositories
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("SUPABASE_DB_URL"),
-    reason="SUPABASE_DB_URL not set -- Supabase regression tests need a live connection",
+    not os.environ.get("SUPABASE_RUNTIME_DB_URL"),
+    reason="SUPABASE_RUNTIME_DB_URL not set -- Supabase regression tests need a live connection",
 )
 
 

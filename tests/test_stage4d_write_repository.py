@@ -106,6 +106,56 @@ def test_write_backend_accepts_supabase(monkeypatch):
     assert active_write_backend() == "supabase"
 
 
+def test_supabase_write_factory_requires_runtime_url_without_admin_fallback(monkeypatch):
+    from src.repository.write_backend import build_write_repositories
+    monkeypatch.delenv("SUPABASE_RUNTIME_DB_URL", raising=False)
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://admin-credential-must-not-be-used")
+    with pytest.raises(RuntimeError, match="SUPABASE_RUNTIME_DB_URL"):
+        build_write_repositories("supabase")
+
+
+def test_supabase_write_factory_uses_runtime_url(monkeypatch):
+    from src.repository.write_backend import build_write_repositories
+    import src.repository.supabase_adapter as adapter
+    conn = FakeConn()
+    seen = []
+    monkeypatch.setenv("SUPABASE_RUNTIME_DB_URL", "postgresql://runtime-only")
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgresql://admin-must-not-win")
+    monkeypatch.setattr(adapter, "connect", lambda url, autocommit=False: seen.append((url, autocommit)) or conn)
+    repositories = build_write_repositories("supabase")
+    assert repositories.clinics._conn is conn
+    assert seen == [("postgresql://runtime-only", False)]
+
+
+def test_production_launcher_runtime_env_contract(tmp_path, monkeypatch):
+    from scripts.launch_v2 import load_runtime_env
+    path = tmp_path / ".supabase-runtime.env.local"
+    path.write_text(
+        "export SUPABASE_RUNTIME_DB_URL='postgresql://runtime-only'\n"
+        "CLINIC_WRITE_BACKEND=supabase\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    monkeypatch.delenv("SUPABASE_RUNTIME_DB_URL", raising=False)
+    monkeypatch.delenv("CLINIC_WRITE_BACKEND", raising=False)
+    assert load_runtime_env(tmp_path) is True
+    assert os.environ["SUPABASE_RUNTIME_DB_URL"] == "postgresql://runtime-only"
+    assert os.environ["CLINIC_WRITE_BACKEND"] == "supabase"
+    os.environ.pop("SUPABASE_RUNTIME_DB_URL", None)
+    os.environ.pop("CLINIC_WRITE_BACKEND", None)
+
+
+def test_production_launcher_refuses_supabase_without_runtime_url(tmp_path, monkeypatch):
+    from scripts.launch_v2 import load_runtime_env
+    path = tmp_path / ".supabase-runtime.env.local"
+    path.write_text("CLINIC_WRITE_BACKEND=supabase\n", encoding="utf-8")
+    path.chmod(0o600)
+    monkeypatch.delenv("SUPABASE_RUNTIME_DB_URL", raising=False)
+    monkeypatch.delenv("CLINIC_WRITE_BACKEND", raising=False)
+    with pytest.raises(RuntimeError, match="SUPABASE_RUNTIME_DB_URL"):
+        load_runtime_env(tmp_path)
+
+
 # ---------------------------------------------------------------------------------------------
 # refresh_clinic_projection_preserving_identity: parity against ClinicStore._project()
 # ---------------------------------------------------------------------------------------------
@@ -273,6 +323,7 @@ class FakeCursor:
     def __init__(self, conn):
         self._conn = conn
         self._result = None
+        self.rowcount = 1
 
     def __enter__(self):
         return self
@@ -390,12 +441,17 @@ def test_supabase_refresh_projection_binds_postgres_booleans_as_bool():
 
 def test_supabase_hp_pages_replace_uses_delete_then_on_conflict_insert():
     from src.repository.supabase_write_adapter import SupabaseResearchWriteRepository
-    conn = FakeConn(script=[None])  # SELECT existing research_results -> none
+    conn = FakeConn(script=[
+        None, None, None, None, None,
+        ({"clinic_name": "x", "status": "営業中", "facility_type": "診療所"}, "", ""),
+        ('{"hp_status":"VERIFIED"}',), [],
+    ])  # existing result + writes, then the canonical projection-refresh reads
     repo = SupabaseResearchWriteRepository(conn)
     repo.save_research(1_000_000_000, {"hp_status": "VERIFIED"}, pages=[{"url": "https://x", "title": "x"}])
     statements = [s for s, _ in conn.executed]
     assert any("DELETE FROM research.hp_pages" in s for s in statements)
     assert any("ON CONFLICT(clinic_id,url) DO UPDATE" in s for s in statements)
+    assert any(s.startswith("UPDATE public.clinics SET") for s in statements)
     assert conn.committed == 1
 
 
@@ -415,6 +471,79 @@ def test_supabase_claim_returns_none_when_queue_empty():
     repo = SupabaseJobsWriteRepository(conn)
     assert repo.claim_next_pending_item("job1") is None
     assert conn.committed == 1
+
+
+def test_supabase_jobs_runtime_methods_have_postgres_implementations(monkeypatch):
+    from src.master.filters import Filters
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+    import src.repository.supabase_filters as pg_filters
+
+    monkeypatch.setattr(pg_filters, "where", lambda filters: ("merged_into IS NULL", []))
+    conn = FakeConn(script=[[(1_000_000_000,), (1_000_000_001,)]])
+    repo = SupabaseJobsWriteRepository(conn)
+    job_id = repo.create_job_from_filters(Filters(active_only=False, hp_only=False), limit=2)
+    assert isinstance(job_id, str) and len(job_id) == 32
+    statements = [sql for sql, _ in conn.executed]
+    assert any("INSERT INTO research.research_jobs" in sql for sql in statements)
+    assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 2
+
+    for invoke, expected in [
+        (lambda r: r.complete_job_if_no_remaining_items("j"), "status='COMPLETED'"),
+        (lambda r: r.claim_specific_item("j", 1), "state='RUNNING'"),
+        (lambda r: r.requeue_item_for_budget_or_pause("j", 1, "stop", "PAUSED"), "state='PENDING'"),
+        (lambda r: r.finish_item("j", 1, "SUCCESS", ""), "state='DONE'"),
+    ]:
+        branch = FakeConn()
+        invoke(SupabaseJobsWriteRepository(branch))
+        assert any(expected in sql for sql, _ in branch.executed)
+        assert branch.committed == 1 and branch.rolled_back == 0
+
+
+def test_supabase_recover_job_preserves_canonical_transition_order():
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+
+    class NamedCursor(FakeCursor):
+        @property
+        def description(self):
+            return [type("Column", (), {"name": name}) for name in
+                    ("id", "kind", "options_json", "status", "max_searches", "search_count", "created_at", "updated_at")]
+
+    class NamedConn(FakeConn):
+        def cursor(self):
+            return NamedCursor(self)
+
+    conn = NamedConn(script=[("job", "hp", {}, "PAUSED", 10, 0, "t", "t")])
+    job = SupabaseJobsWriteRepository(conn).recover_job_for_run("job")
+    assert job["status"] == "PAUSED"
+    statements = [sql for sql, _ in conn.executed]
+    assert "FOR UPDATE" in statements[0]
+    assert "state='PENDING'" in statements[1]
+    assert "status='PAUSED'" in statements[2]
+    assert "status='RUNNING'" in statements[3]
+
+
+def test_normal_runtime_modules_do_not_construct_sqlite_write_adapters():
+    import inspect
+    import src.master.jobs as jobs
+    import src.enrichment.search_provider as search_provider
+    assert "SqliteJobsWriteRepository(" not in inspect.getsource(jobs)
+    assert "SqliteResearchWriteRepository(" not in inspect.getsource(jobs)
+    assert "SqliteSearchWriteRepository(" not in inspect.getsource(search_provider)
+    assert "write_repositories_for" in inspect.getsource(jobs)
+    assert "write_repositories_for" in inspect.getsource(search_provider)
+
+
+def test_supabase_normal_runtime_methods_are_not_unsupported_stubs():
+    import inspect
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository, SupabaseJobsWriteRepository
+    clinic_methods = ("import_comdesk", "import_master", "resolve_review", "refresh_age_model")
+    job_methods = ("create_job_from_filters", "recover_job_for_run", "complete_job_if_no_remaining_items",
+                   "claim_specific_item", "requeue_item_for_budget_or_pause", "finish_item")
+    for cls, names in ((SupabaseClinicWriteRepository, clinic_methods), (SupabaseJobsWriteRepository, job_methods)):
+        for name in names:
+            source = inspect.getsource(getattr(cls, name))
+            assert "BackendNotSupportedError" not in source
+            assert "NotImplementedError" not in source
 
 
 def test_supabase_write_failure_rolls_back_and_raises_not_falls_back(monkeypatch):

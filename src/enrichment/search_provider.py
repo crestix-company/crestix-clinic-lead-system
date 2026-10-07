@@ -59,8 +59,8 @@ class CachedSearch:
         # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL, same single
         # BEGIN IMMEDIATE transaction for the budget check + reservation -- see
         # src.repository.sqlite_write_adapter.SqliteSearchWriteRepository.check_cache_or_reserve).
-        from src.repository.sqlite_write_adapter import SqliteSearchWriteRepository
-        repo = SqliteSearchWriteRepository(self.store)
+        from src.repository.write_backend import write_repositories_for
+        repo = write_repositories_for(self.store).search
         key = hashlib.sha256(("tavily-basic-v1:"+query).encode()).hexdigest()
         month = today_japan().strftime("%Y-%m")
         outcome,cached_result = repo.check_cache_or_reserve(
@@ -75,5 +75,5 @@ class CachedSearch:
         return result
 
     def monthly_usage(self):
-        from src.repository.sqlite_write_adapter import SqliteSearchWriteRepository
-        return SqliteSearchWriteRepository(self.store).monthly_usage_count(today_japan().strftime("%Y-%m"))
+        from src.repository.write_backend import write_repositories_for
+        return write_repositories_for(self.store).search.monthly_usage_count(today_japan().strftime("%Y-%m"))

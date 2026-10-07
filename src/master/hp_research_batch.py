@@ -271,9 +271,9 @@ def _build_hp_repo(sidecar_conn):
     import os as _os
     from src.repository.supabase_adapter import connect
     from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
-    url = _os.environ.get("SUPABASE_DB_URL")
+    url = _os.environ.get("SUPABASE_RUNTIME_DB_URL")
     if not url:
-        raise RuntimeError("SUPABASE_DB_URL is not set")
+        raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
     return SupabaseHpWriteRepository(connect(url, autocommit=False))
 
 

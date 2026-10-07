@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .env
 .env.*
+.supabase-runtime.env.local
 !.env.example
 *.sqlite3*
 *.db*

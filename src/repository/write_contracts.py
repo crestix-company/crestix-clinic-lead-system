@@ -50,14 +50,8 @@ class ClinicWriteRepository(Protocol):
     def resolve_review_to_existing_clinic(self, clinic_id: int, record: dict, *, source: str) -> None:
         ...
 
-    # -- High-level passthroughs: these call the existing ClinicStore batch/merge orchestration
-    # verbatim on the SQLite side (import_comdesk/import_master/resolve_review/refresh_age_model
-    # already encapsulate their own transactions, digest/dedup, and _upsert/_project calls --
-    # nothing here reimplements that logic, it only moves the call site behind the Repository
-    # boundary so app_v2.py/jobs.py stop referencing ClinicStore directly). The Supabase side
-    # does not yet port these (DataFrame-batch import and merge-on-review-resolve are out of
-    # this pass's scope -- see docs/supabase_migration/23_stage4d_gate2_offline_preparation.md);
-    # it raises BackendNotSupportedError explicitly rather than guessing at a reimplementation.
+    # High-level import/review/startup operations. SQLite delegates to ClinicStore; Supabase
+    # reproduces the same transaction, matching, audit, projection, and identity contracts.
 
     def import_comdesk(self, table, mapping=None) -> dict: ...
 
@@ -74,6 +68,8 @@ class ResearchWriteRepository(Protocol):
     def save_research(self, clinic_id: int, result: dict, pages: list[dict] | None = None) -> None: ...
 
     def override(self, clinic_id: int, field: str, value: Any, *, note: str = "", source: str = "手動確認") -> None: ...
+
+    def get_saved_research(self, clinic_id: int) -> dict: ...
 
 
 class ProvenanceWriteRepository(Protocol):
@@ -108,6 +104,12 @@ class JobsWriteRepository(Protocol):
 
     def job_limit(self, job_id: str, limit: int) -> None: ...
 
+    def job_status(self, job_id: str) -> dict: ...
+
+    def recent_jobs(self) -> list[dict]: ...
+
+    def pending_site_candidates(self, job_id: str) -> list[tuple[int, str, str]]: ...
+
     def claim_next_pending_item(self, job_id: str) -> int | None:
         """Atomic claim: PENDING -> RUNNING for exactly one clinic_id, or None if empty.
         Supabase: single UPDATE ... RETURNING clinic_id (no BEGIN IMMEDIATE needed -- the row
@@ -123,13 +125,13 @@ class JobsWriteRepository(Protocol):
                                  force: bool = False, max_pages: int = 20) -> str:
         """Passthrough to src.master.jobs.create_job()'s filter-based candidate SELECT (the
         per-kind hp/epark/media WHERE clause) -- distinct from create_job() above, which takes
-        an already-resolved clinic_id list. Not yet ported to Supabase."""
+        an already-resolved clinic_id list."""
         ...
 
     # -- The five methods below back src.master.jobs._run_locked/_research_one's worker
     # orchestration exactly (see sqlite_write_adapter.py for why each is its own method rather
     # than reusing mark_item_state/mark_job_status -- NOT NULL columns and bundled-transaction
-    # side effects that don't fit the generic shape). Not yet ported to Supabase.
+    # side effects that don't fit the generic shape).
 
     def recover_job_for_run(self, job_id: str) -> dict | None: ...
 

@@ -28,38 +28,31 @@ ITEM_TRANSITIONS = frozenset({
 def create_job(store,filters,kind="hp",limit=100,max_searches=100,force=False,max_pages=20):
     # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL, same atomicity --
     # see src.repository.sqlite_write_adapter.SqliteJobsWriteRepository.create_job_from_filters).
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
-    return SqliteJobsWriteRepository(store).create_job_from_filters(filters,kind,limit,max_searches,force,max_pages)
+    from src.repository.write_backend import write_repositories_for
+    return write_repositories_for(store).jobs.create_job_from_filters(filters,kind,limit,max_searches,force,max_pages)
 
 
 def job_status(store,jid):
-    with store.connect() as c:
-        r = c.execute("SELECT * FROM research_jobs WHERE id=?",(jid,)).fetchone()
-        if not r:
-            raise ValueError("調査履歴が見つかりません。")
-        result = dict(r)
-        result["counts"] = {r[0]:r[1] for r in c.execute("SELECT state,count(*) FROM research_job_items WHERE job_id=? GROUP BY state",(jid,))}
-        result["results"] = {r[0]:r[1] for r in c.execute("SELECT result,count(*) FROM research_job_items WHERE job_id=? AND state='DONE' GROUP BY result",(jid,))}
-        result["total"] = sum(result["counts"].values())
-        return result
+    from src.repository.write_backend import write_repositories_for
+    return write_repositories_for(store).jobs.job_status(jid)
 
 
 def recent_jobs(store):
-    with store.connect() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM research_jobs WHERE status<>'RESET' ORDER BY created_at DESC,id DESC LIMIT 20")]
+    from src.repository.write_backend import write_repositories_for
+    return write_repositories_for(store).jobs.recent_jobs()
 
 
 def pause_job(store,jid):
     # Stage4-D Gate2: see create_job() above.
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
-    SqliteJobsWriteRepository(store).pause_job(jid)
+    from src.repository.write_backend import write_repositories_for
+    write_repositories_for(store).jobs.pause_job(jid)
 
 
 def reset_job(store,jid):
     """未処理itemを終了し、jobをリセットする。既存の調査結果等は消さない。"""
     # Stage4-D Gate2: see create_job() above.
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
-    SqliteJobsWriteRepository(store).reset_job(jid)
+    from src.repository.write_backend import write_repositories_for
+    write_repositories_for(store).jobs.reset_job(jid)
 
 
 def repair_reset_job_items(store,job_ids,dry_run=True):
@@ -105,8 +98,8 @@ def repair_reset_job_items(store,job_ids,dry_run=True):
 
 def job_limit(store,jid,limit):
     # Stage4-D Gate2: see create_job() above.
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
-    SqliteJobsWriteRepository(store).job_limit(jid,limit)
+    from src.repository.write_backend import write_repositories_for
+    write_repositories_for(store).jobs.job_limit(jid,limit)
 
 
 def run_job(store,jid,provider,fetcher=None):
@@ -120,13 +113,13 @@ def run_job(store,jid,provider,fetcher=None):
 
 def _run_locked(store,jid,provider,fetcher):
     # Stage4-D Gate2: persistent WRITE goes through the Repository.
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
-    repo = SqliteJobsWriteRepository(store)
+    from src.repository.write_backend import write_repositories_for
+    repo = write_repositories_for(store).jobs
     # ロック取得できた時点で旧プロセスの実行はない。未完了行だけを回復。
     job = repo.recover_job_for_run(jid)
     if job is None:
         return
-    options = json.loads(job["options_json"])
+    options = job["options_json"] if isinstance(job["options_json"], dict) else json.loads(job["options_json"])
     def stopped():
         return job_status(store,jid)["status"]!="RUNNING"
     def new_researcher():
@@ -177,10 +170,8 @@ def _site_lanes(store,jid):
     別サイトを取得し得るため、並列の処理がすべて終わった後に単独・clinic_id順で調べる。
     """
     lanes,alone = {},[]
-    with store.connect() as c:
-        rows = c.execute("""SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url
-                            FROM research_job_items i JOIN clinics c ON c.id=i.clinic_id
-                            WHERE i.job_id=? AND i.state='PENDING' ORDER BY i.clinic_id""",(jid,)).fetchall()
+    from src.repository.write_backend import write_repositories_for
+    rows = write_repositories_for(store).jobs.pending_site_candidates(jid)
     for cid,maps_status,maps_url in rows:
         key = _host_key(host(maps_url)) if maps_status=="MAPS_MATCHED_WEBSITE" and maps_url else ""
         if key:
@@ -193,16 +184,16 @@ def _site_lanes(store,jid):
 def _research_one(store,jid,job,options,researcher,cid):
     """1医院の調査と確定。続行してよければTrue、一時停止・上限で止める場合はFalse。"""
     # Stage4-D Gate2: persistent WRITE goes through the Repository.
-    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository, SqliteResearchWriteRepository
-    jobs_repo = SqliteJobsWriteRepository(store)
-    research_repo = SqliteResearchWriteRepository(store)
+    from src.repository.write_backend import write_repositories_for
+    repositories = write_repositories_for(store)
+    jobs_repo = repositories.jobs
+    research_repo = repositories.research
     record = {}
     try:
         record = store.get(cid)
         # 手動値は解析入力としては使うが、自動シグナルの保存に手動値をコピーしない。
-        with store.connect() as c:
-            auto = c.execute("SELECT result_json FROM research_results WHERE clinic_id=?",(cid,)).fetchone()
-            record["marketing_signals"] = json.loads(auto[0]).get("marketing_signals",[]) if auto else []
+        auto = research_repo.get_saved_research(cid)
+        record["marketing_signals"] = auto.get("marketing_signals", [])
         result,pages = researcher.run(job["kind"],record,options.get("force",False))
         with _WRITE_LOCK:
             research_repo.save_research(cid,result,pages)

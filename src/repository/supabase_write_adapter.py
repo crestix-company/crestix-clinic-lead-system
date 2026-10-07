@@ -22,6 +22,7 @@ docs/supabase_migration/23_stage4d_gate2_offline_preparation.md and
 tests/test_stage4d_write_repository.py for the parity tests this relies on.
 """
 import json
+import re
 
 from psycopg.types.json import Jsonb
 
@@ -32,7 +33,35 @@ from src.master.identity_contract import (
     refresh_clinic_projection_preserving_identity,
 )
 from src.repository.high_range_id import assert_high_range
-from src.repository.errors import BackendNotSupportedError
+
+
+class _DictRows:
+    def __init__(self, rows, names):
+        self._rows = [dict(zip(names, row)) for row in rows]
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class _MatchingConnection:
+    """Small read-only compatibility surface so the canonical match_record algorithm is
+    shared by SQLite and PostgreSQL; only placeholders and schema-qualified table names differ.
+    """
+    _TABLES = {
+        "clinics": "public.clinics",
+        "comdesk_original_rows": "provenance.comdesk_original_rows",
+    }
+
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, statement, args=()):
+        sql = statement.replace("?", "%s")
+        for table, qualified in self._TABLES.items():
+            sql = re.sub(rf"(?<![.\w]){table}\b", qualified, sql)
+        self._cur.execute(sql, args)
+        names = [item.name for item in self._cur.description]
+        return _DictRows(self._cur.fetchall(), names)
 
 
 def _rollback_and_raise(conn, exc):
@@ -70,7 +99,7 @@ class SupabaseResearchWriteRepository:
             with self._conn.cursor() as cur:
                 cur.execute("SELECT result_json FROM research.research_results WHERE clinic_id=%s FOR UPDATE", (clinic_id,))
                 row = cur.fetchone()
-                previous = json.loads(row[0]) if row else {}
+                previous = (row[0] if isinstance(row[0], dict) else json.loads(row[0])) if row else {}
                 updated = {**previous, **result}
                 cur.execute(
                     "INSERT INTO research.research_results(clinic_id,result_json,updated_at) VALUES(%s,%s,%s) "
@@ -89,6 +118,9 @@ class SupabaseResearchWriteRepository:
                     "INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) "
                     "VALUES(%s,%s,%s,%s,%s,%s)",
                     (clinic_id, "自動調査", dumps(previous), dumps(updated), "", now()),
+                )
+                SupabaseClinicWriteRepository._refresh_projection_tx(
+                    cur, clinic_id, is_authoritative_official_source=False
                 )
             self._conn.commit()
         except Exception as exc:
@@ -122,9 +154,20 @@ class SupabaseResearchWriteRepository:
                     "VALUES(%s,%s,%s,%s,%s,%s)",
                     (clinic_id, "手動修正:" + field, dumps(before[0] if before else None), dumps(value), note, now()),
                 )
+                SupabaseClinicWriteRepository._refresh_projection_tx(
+                    cur, clinic_id, is_authoritative_official_source=False
+                )
             self._conn.commit()
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
+
+    def get_saved_research(self, clinic_id):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT result_json FROM research.research_results WHERE clinic_id=%s", (clinic_id,))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        return row[0] if isinstance(row[0], dict) else json.loads(row[0])
 
 
 class SupabaseProvenanceWriteRepository:
@@ -374,7 +417,8 @@ class SupabaseClinicWriteRepository:
         base, uuid_val, stored_key = cur.fetchone()
         cur.execute("SELECT result_json FROM research.research_results WHERE clinic_id=%s", (clinic_id,))
         research_row = cur.fetchone()
-        research = json.loads(research_row[0]) if research_row else {}
+        research = ((research_row[0] if isinstance(research_row[0], dict) else json.loads(research_row[0]))
+                    if research_row else {})
         cur.execute("SELECT field,value_json FROM provenance.manual_overrides WHERE clinic_id=%s", (clinic_id,))
         manual = dict(cur.fetchall())
         data = {**base, **research, **manual}
@@ -435,29 +479,395 @@ class SupabaseClinicWriteRepository:
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
 
+    @staticmethod
+    def _upsert_tx(cur, record, match, source, source_hash, row_number, *,
+                   original=None, template_id=None, new_flag=False, existing_source_id=None):
+        from src.normalizer.clinic_name import normalize_person
+        timestamp = now()
+        if match.status == "MATCHED":
+            cid = match.candidates[0]
+            cur.execute(
+                "SELECT base_json,uuid,source_as_of_date FROM public.clinics WHERE id=%s FOR UPDATE", (cid,)
+            )
+            base, uuid_value, source_as_of_date = cur.fetchone()
+            before = dict(base)
+            if source == "厚生局" and record.get("as_of", "") >= source_as_of_date:
+                base.update(record)
+                if record.get("manager_name") and normalize_person(before.get("manager_name")) != normalize_person(record["manager_name"]):
+                    cur.execute("SELECT result_json FROM research.research_results WHERE clinic_id=%s FOR UPDATE", (cid,))
+                    old_research = cur.fetchone()
+                    if old_research:
+                        research = json.loads(old_research[0])
+                        for key in list(research):
+                            if key.startswith(("age_", "license_", "graduation_")) or key == "doctor_name":
+                                research.pop(key, None)
+                        research.update(
+                            age_probability_under_59=None,
+                            age_estimation_confidence="REVIEW",
+                            age_estimation_reason="管理者が変更されています。現在の院長の経歴を再確認してください。",
+                        )
+                        cur.execute(
+                            "UPDATE research.research_results SET result_json=%s,updated_at=%s WHERE clinic_id=%s",
+                            (dumps(research), timestamp, cid),
+                        )
+            else:
+                base.update({key: value for key, value in record.items() if value and not base.get(key)})
+            cur.execute(
+                "UPDATE public.clinics SET base_json=%s,uuid=%s,last_seen_at=%s,"
+                "source_as_of_date=CASE WHEN %s<source_as_of_date THEN source_as_of_date ELSE %s END WHERE id=%s",
+                (Jsonb(base), uuid_value or record.get("uuid", ""), timestamp,
+                 record.get("as_of", ""), record.get("as_of", ""), cid),
+            )
+            if before != base:
+                cur.execute(
+                    "INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s)",
+                    (cid, "マスター更新", dumps(before), dumps(base), match.reason, timestamp),
+                )
+        elif match.status == "NEW":
+            cur.execute(
+                "INSERT INTO public.clinics(uuid,base_json,first_seen_at,last_seen_at,source_as_of_date,is_new) "
+                "VALUES(%s,%s,%s,%s,%s,%s) RETURNING id",
+                (record.get("uuid", ""), Jsonb(record), timestamp, timestamp,
+                 record.get("as_of", ""), bool(new_flag)),
+            )
+            cid = cur.fetchone()[0]
+            assert_high_range(cid, table="public.clinics")
+            cur.execute(
+                "INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s)",
+                (cid, "医院追加", dumps({}), dumps(record), match.reason, timestamp),
+            )
+        else:
+            cid = None
+        if existing_source_id is None:
+            cur.execute(
+                "INSERT INTO provenance.source_records(clinic_id,source,record_json,source_hash,row_number,"
+                "match_status,match_reason,match_score,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (cid, source, Jsonb(record), source_hash, row_number, match.status,
+                 match.reason, match.score, timestamp),
+            )
+            source_id = cur.fetchone()[0]
+            assert_high_range(source_id, table="provenance.source_records")
+        else:
+            source_id = existing_source_id
+            cur.execute(
+                "UPDATE provenance.source_records SET clinic_id=%s,match_status=%s,match_reason=%s,match_score=%s WHERE id=%s",
+                (cid, match.status, match.reason, match.score, source_id),
+            )
+        if original is not None:
+            cur.execute(
+                "INSERT INTO provenance.comdesk_original_rows(clinic_id,template_id,row_json,uuid,source_hash,row_number,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s)",
+                (cid, template_id, Jsonb(original), record.get("uuid", ""), source_hash, row_number, timestamp),
+            )
+        if cid is None:
+            cur.execute(
+                "SELECT id FROM provenance.match_reviews WHERE source_record_id=%s AND status='PENDING' FOR UPDATE",
+                (source_id,),
+            )
+            pending = cur.fetchone()
+            if pending:
+                cur.execute(
+                    "UPDATE provenance.match_reviews SET candidates_json=%s,updated_at=%s WHERE id=%s",
+                    (Jsonb(match.candidates), timestamp, pending[0]),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO provenance.match_reviews(source_record_id,candidates_json,updated_at) VALUES(%s,%s,%s)",
+                    (source_id, Jsonb(match.candidates), timestamp),
+                )
+        else:
+            if existing_source_id is not None:
+                cur.execute(
+                    "UPDATE provenance.match_reviews SET status='RESOLVED',resolved_clinic_id=%s,note=%s,updated_at=%s "
+                    "WHERE source_record_id=%s AND status='PENDING'",
+                    (cid, "新しい電話番号キーで再照合", timestamp, source_id),
+                )
+            SupabaseClinicWriteRepository._refresh_projection_tx(
+                cur, cid, is_authoritative_official_source=(source == "厚生局")
+            )
+        return cid
+
     def import_comdesk(self, table, mapping=None):
-        raise BackendNotSupportedError(
-            "Supabase adapterはimport_comdesk()に未対応です(DataFrame一括import/digest重複判定/"
-            "match_record照合のPostgres移植とparity testがGate2本実装側の残課題です)。"
-            "SQLite backendを使用してください。"
-        )
+        from src.master.comdesk import infer_comdesk_columns, record_from_row
+        from src.master.matching import match_record
+        from src.master.store import digest
+        mapping = dict(mapping or infer_comdesk_columns(table))
+        if "uuid" not in mapping:
+            hits = [i for i, header in enumerate(table.headers)
+                    if header.strip().casefold() in {"uuid", "案件id", "管理id", "リードid", "lead_id", "id"}]
+            mapping["uuid"] = hits[0] if len(hits) == 1 else None
+        if mapping.get("clinic_name") is None:
+            raise ValueError("医院名の列を指定してください。")
+        if not all(value is None or isinstance(value, int) and 0 <= value < len(table.headers)
+                   for value in mapping.values()):
+            raise ValueError("対応する列番号を確認してください。")
+        rows = table.data.values.tolist()
+        batch = digest(["comdesk", table.headers, mapping, rows])
+        template = digest([table.headers, mapping])
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s", (batch,))
+                old = cur.fetchone()
+                if old:
+                    self._conn.commit()
+                    return {**old[0], "already_imported": True}
+                cur.execute(
+                    "INSERT INTO provenance.templates(id,headers_json,mapping_json,created_at) VALUES(%s,%s,%s,%s) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (template, Jsonb(table.headers), Jsonb(mapping), now()),
+                )
+                counts = {"MATCHED": 0, "NEW": 0, "AMBIGUOUS": 0, "template_id": template}
+                matcher = _MatchingConnection(cur)
+                for index, raw in enumerate(rows):
+                    record = record_from_row(raw, mapping)
+                    if not record.get("clinic_name", "").strip():
+                        raise ValueError(f"{index + 2}行目の医院名が空白です。取込は取り消しました。")
+                    match = match_record(matcher, record)
+                    self._upsert_tx(cur, record, match, "コムデスク", batch, index,
+                                    original=raw, template_id=template)
+                    counts[match.status] += 1
+                cur.execute(
+                    "INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
+                    (batch, "コムデスク", Jsonb(counts), now()),
+                )
+            self._conn.commit()
+            return counts
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def import_master(self, frame):
-        raise BackendNotSupportedError(
-            "Supabase adapterはimport_master()に未対応です(import_comdeskと同じ理由)。"
-            "SQLite backendを使用してください。"
-        )
+        import pandas as pd
+        from src.master.matching import match_record
+        from src.master.store import digest
+        from src.utils.date_utils import parse_date
+        records = frame.fillna("").astype(str).to_dict("records") if isinstance(frame, pd.DataFrame) else frame
+        if not records:
+            raise ValueError("取り込む厚生局データがありません。")
+        for index, record in enumerate(records):
+            if (not record.get("clinic_name") or not record.get("prefecture")
+                    or record.get("medical_type") not in {"医科", "歯科"} or not parse_date(record.get("as_of"))):
+                raise ValueError(f"厚生局データ{index + 2}行目：医院名・都道府県・医科/歯科・基準日を確認してください。")
+        batch = digest(["master", records])
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s", (batch,))
+                old = cur.fetchone()
+                if old:
+                    self._conn.commit()
+                    return {**old[0], "already_imported": True}
+                for prefecture, medical_type, as_of in {(r["prefecture"], r["medical_type"], r["as_of"]) for r in records}:
+                    cur.execute("SELECT max(source_as_of_date) FROM public.clinics WHERE prefecture=%s AND medical_type=%s", (prefecture, medical_type))
+                    latest = cur.fetchone()[0]
+                    if latest and as_of < latest:
+                        raise ValueError("DBより古い厚生局データです。更新日を確認してください。取込は取り消しました。")
+                    if not latest or as_of > latest:
+                        cur.execute("UPDATE public.clinics SET is_new=false WHERE prefecture=%s AND medical_type=%s", (prefecture, medical_type))
+                counts = {"MATCHED": 0, "NEW": 0, "AMBIGUOUS": 0}
+                matcher = _MatchingConnection(cur)
+                for index, record in enumerate(records):
+                    match = match_record(matcher, record)
+                    self._upsert_tx(cur, record, match, "厚生局", batch, index, new_flag=True)
+                    counts[match.status] += 1
+                cur.execute(
+                    "INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
+                    (batch, "厚生局", Jsonb(counts), now()),
+                )
+            self._conn.commit()
+            return counts
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def resolve_review(self, review_id, target_id=None, note=""):
-        raise BackendNotSupportedError(
-            "Supabase adapterはmerge_clinicsを伴うresolve_review()の統合経路に未対応です"
-            "(reintegration.pyのmerge semantics移植が必要)。SQLite backendを使用してください。"
-        )
+        from src.normalizer.clinic_name import normalize_person
+
+        def fetch_dict(cur):
+            row = cur.fetchone()
+            return dict(zip([item.name for item in cur.description], row)) if row else None
+
+        def root_id(cur, clinic_id):
+            seen = set()
+            while True:
+                if clinic_id in seen:
+                    raise ValueError("医院の統合先が循環しています。")
+                seen.add(clinic_id)
+                cur.execute("SELECT merged_into FROM public.clinics WHERE id=%s", (clinic_id,))
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError("医院が見つかりません。")
+                if row[0] is None:
+                    return clinic_id
+                clinic_id = row[0]
+
+        def merge(cur, source_id, destination_id, reason):
+            source_id, destination_id = root_id(cur, source_id), root_id(cur, destination_id)
+            if source_id == destination_id:
+                return destination_id
+            cur.execute("SELECT * FROM public.clinics WHERE id=%s FOR UPDATE", (source_id,))
+            source = fetch_dict(cur)
+            cur.execute("SELECT * FROM public.clinics WHERE id=%s FOR UPDATE", (destination_id,))
+            target = fetch_dict(cur)
+            if source["uuid"] and target["uuid"] and source["uuid"] != target["uuid"]:
+                raise ValueError("異なる既存UUID同士は統合できません。")
+            cur.execute("SELECT field,value_json FROM provenance.manual_overrides WHERE clinic_id=%s", (source_id,))
+            source_manual = dict(cur.fetchall())
+            cur.execute("SELECT field,value_json FROM provenance.manual_overrides WHERE clinic_id=%s", (destination_id,))
+            for field, value in cur.fetchall():
+                if field in source_manual and source_manual[field] != value:
+                    raise ValueError("手動修正の値が異なります。両医院の修正内容を確認してください。")
+            if source["uuid"] and not target["uuid"]:
+                source_id, destination_id = destination_id, source_id
+                source, target = target, source
+            source_base, target_base = dict(source["base_json"]), dict(target["base_json"])
+            base = ({**target_base, **source_base} if source["source_as_of_date"] > target["source_as_of_date"]
+                    else {**source_base, **target_base})
+            history_before = {"source": source, "target": target, "job_items": []}
+            cur.execute(
+                "SELECT clinic_id,result_json,updated_at FROM research.research_results "
+                "WHERE clinic_id IN (%s,%s) ORDER BY updated_at,clinic_id", (source_id, destination_id)
+            )
+            research_rows = [dict(zip([item.name for item in cur.description], row)) for row in cur.fetchall()]
+            history_before["research_results"] = research_rows
+            if research_rows:
+                research = {}
+                for row in research_rows:
+                    research.update(json.loads(row["result_json"]))
+                previous_doctor = research.get("doctor_name")
+                if previous_doctor and base.get("manager_name") and normalize_person(previous_doctor) != normalize_person(base["manager_name"]):
+                    for field in list(research):
+                        if field.startswith(("age_", "license_", "graduation_")) or field == "doctor_name":
+                            research.pop(field)
+                    research.update(age_probability_under_59=None, age_estimation_confidence="REVIEW",
+                                    age_estimation_reason="再統合後の院長の経歴を確認してください。")
+                cur.execute(
+                    "INSERT INTO research.research_results(clinic_id,result_json,updated_at) VALUES(%s,%s,%s) "
+                    "ON CONFLICT(clinic_id) DO UPDATE SET result_json=EXCLUDED.result_json,updated_at=EXCLUDED.updated_at",
+                    (destination_id, dumps(research), max(row["updated_at"] for row in research_rows)),
+                )
+            cur.execute(
+                "INSERT INTO provenance.manual_overrides(clinic_id,field,value_json,source,note,updated_at) "
+                "SELECT %s,field,value_json,source,note,updated_at FROM provenance.manual_overrides WHERE clinic_id=%s "
+                "ON CONFLICT(clinic_id,field) DO NOTHING", (destination_id, source_id)
+            )
+            cur.execute(
+                "INSERT INTO research.hp_pages(clinic_id,url,page_json,checked_at) "
+                "SELECT %s,url,page_json,checked_at FROM research.hp_pages WHERE clinic_id=%s "
+                "ON CONFLICT(clinic_id,url) DO NOTHING", (destination_id, source_id)
+            )
+            cur.execute("SELECT job_id,clinic_id,state,result,note,lease_until FROM research.research_job_items WHERE clinic_id=%s", (source_id,))
+            items = cur.fetchall()
+            for item in items:
+                history_before["job_items"].append(dict(zip([d.name for d in cur.description], item)))
+                cur.execute("SELECT state,result,note,lease_until FROM research.research_job_items WHERE job_id=%s AND clinic_id=%s", (item[0], destination_id))
+                existing = cur.fetchone()
+                if existing:
+                    if item[2] == "DONE" and existing[0] != "DONE":
+                        cur.execute("UPDATE research.research_job_items SET state='DONE',result=%s,note=%s,lease_until='' WHERE job_id=%s AND clinic_id=%s", (item[3], item[4], item[0], destination_id))
+                    cur.execute("DELETE FROM research.research_job_items WHERE job_id=%s AND clinic_id=%s", (item[0], source_id))
+                else:
+                    cur.execute("UPDATE research.research_job_items SET clinic_id=%s WHERE job_id=%s AND clinic_id=%s", (destination_id, item[0], source_id))
+            cur.execute("UPDATE public.clinics SET merged_into=%s,merge_hold=false WHERE id=%s", (destination_id, source_id))
+            cur.execute(
+                "UPDATE public.clinics SET uuid=%s,base_json=%s,first_seen_at=%s,last_seen_at=%s,source_as_of_date=%s,merge_hold=false WHERE id=%s",
+                (target["uuid"] or source["uuid"], Jsonb(base), min(target["first_seen_at"], source["first_seen_at"]),
+                 max(target["last_seen_at"], source["last_seen_at"]),
+                 max(target["source_as_of_date"], source["source_as_of_date"]), destination_id),
+            )
+            cur.execute("UPDATE provenance.source_records SET clinic_id=%s,match_status='MATCHED',match_reason=%s WHERE clinic_id=%s", (destination_id, reason, source_id))
+            cur.execute("UPDATE provenance.comdesk_original_rows SET clinic_id=%s WHERE clinic_id=%s", (destination_id, source_id))
+            cur.execute("UPDATE provenance.match_reviews SET resolved_clinic_id=%s WHERE resolved_clinic_id=%s", (destination_id, source_id))
+            cur.execute("SELECT id,candidates_json FROM provenance.match_reviews WHERE status='PENDING'")
+            for pending_id, candidates in cur.fetchall():
+                mapped = sorted({destination_id if cid == source_id else cid for cid in candidates})
+                if mapped != candidates:
+                    cur.execute("UPDATE provenance.match_reviews SET candidates_json=%s WHERE id=%s", (Jsonb(mapped), pending_id))
+            self._refresh_projection_tx(cur, destination_id, is_authoritative_official_source=True)
+            cur.execute(
+                "INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(%s,%s,%s,%s,%s,%s)",
+                (destination_id, "電話番号キーで再統合", dumps(history_before),
+                 dumps({"source_id": source_id, "target_id": destination_id}), reason, now()),
+            )
+            return destination_id
+
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT m.*,s.record_json,s.source,s.source_hash,s.row_number,s.clinic_id AS existing_clinic_id "
+                    "FROM provenance.match_reviews m JOIN provenance.source_records s ON m.source_record_id=s.id "
+                    "WHERE m.id=%s AND m.status='PENDING' FOR UPDATE", (review_id,)
+                )
+                review = fetch_dict(cur)
+                if not review:
+                    raise ValueError("この確認事項は処理済みです。")
+                record = dict(review["record_json"])
+                if review["existing_clinic_id"] is not None:
+                    clinic_id = root_id(cur, review["existing_clinic_id"])
+                    target_id = clinic_id if target_id is None else merge(cur, clinic_id, target_id, "手動確認: " + note)
+                    cur.execute("UPDATE public.clinics SET merge_hold=false WHERE id=%s", (target_id,))
+                elif target_id is None:
+                    uid = record.get("uuid", "")
+                    if uid:
+                        cur.execute("SELECT 1 FROM public.clinics WHERE uuid=%s AND merged_into IS NULL", (uid,))
+                        if cur.fetchone():
+                            raise ValueError("同じUUIDが既にあります。別医院として追加できません。")
+                    cur.execute(
+                        "INSERT INTO public.clinics(uuid,base_json,first_seen_at,last_seen_at,source_as_of_date,is_new) "
+                        "VALUES(%s,%s,%s,%s,%s,true) RETURNING id",
+                        (uid, Jsonb(record), now(), now(), record.get("as_of", "")),
+                    )
+                    target_id = cur.fetchone()[0]
+                    assert_high_range(target_id, table="public.clinics")
+                else:
+                    target_id = root_id(cur, target_id)
+                    cur.execute("SELECT uuid,base_json FROM public.clinics WHERE id=%s FOR UPDATE", (target_id,))
+                    uuid_value, base = cur.fetchone()
+                    if uuid_value and record.get("uuid") and uuid_value != record["uuid"]:
+                        raise ValueError("異なる既存UUID同士は統合できません。元のコムデスクで確認してください。")
+                    base = dict(base)
+                    base.update(record if review["source"] == "厚生局" else
+                                {key: value for key, value in record.items() if value and not base.get(key)})
+                    cur.execute("UPDATE public.clinics SET uuid=%s,base_json=%s,last_seen_at=%s WHERE id=%s", (uuid_value or record.get("uuid", ""), Jsonb(base), now(), target_id))
+                cur.execute("UPDATE provenance.source_records SET clinic_id=%s,match_status='MATCHED',match_reason=%s WHERE id=%s", (target_id, "手動確認: " + note, review["source_record_id"]))
+                cur.execute("UPDATE provenance.comdesk_original_rows SET clinic_id=%s WHERE source_hash=%s AND row_number=%s", (target_id, review["source_hash"], review["row_number"]))
+                cur.execute("UPDATE provenance.match_reviews SET status='RESOLVED',resolved_clinic_id=%s,note=%s,updated_at=%s WHERE id=%s", (target_id, note, now(), review_id))
+                cur.execute("INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(%s,%s,%s,%s,%s,%s)", (target_id, "重複確認", dumps({"review_id": review_id}), dumps({"target_id": target_id}), note, now()))
+                self._refresh_projection_tx(cur, target_id, is_authoritative_official_source=(review["source"] == "厚生局"))
+            self._conn.commit()
+            return target_id
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def refresh_age_model(self):
-        raise BackendNotSupportedError(
-            "Supabase adapterはrefresh_age_model()に未対応です。SQLite backendを使用してください。"
-        )
+        from src.enrichment.profiles import estimate_profile_age
+        from src.master.store import digest
+        from src.utils.config import ROOT
+        from src.utils.date_utils import today_japan
+        signature = digest([today_japan().year, (ROOT / "config/age_model.yml").read_text(encoding="utf-8")])
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT value FROM app_config.settings WHERE key='age_basis'")
+                row = cur.fetchone()
+                if row and json.loads(row[0]) == signature:
+                    self._conn.commit()
+                    return
+                cur.execute(
+                    "SELECT clinic_id FROM research.research_results WHERE "
+                    "result_json::jsonb->>'license_registration_year' IS NOT NULL OR "
+                    "result_json::jsonb->>'graduation_year' IS NOT NULL"
+                )
+                ids = [item[0] for item in cur.fetchall()]
+            self._conn.commit()
+            research_repo = SupabaseResearchWriteRepository(self._conn)
+            for clinic_id in ids:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT effective_json FROM public.clinics WHERE id=%s", (clinic_id,))
+                    effective = json.loads(cur.fetchone()[0])
+                self._conn.commit()
+                research_repo.save_research(clinic_id, estimate_profile_age({**effective, "id": clinic_id}))
+            SupabaseSettingsWriteRepository(self._conn).set("age_basis", signature)
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
 
 class SupabaseJobsWriteRepository:
@@ -523,41 +933,137 @@ class SupabaseJobsWriteRepository:
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
 
+    @staticmethod
+    def _row_dict(cur, row):
+        return dict(zip([item.name for item in cur.description], row))
+
+    def job_status(self, job_id):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM research.research_jobs WHERE id=%s", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            result = self._row_dict(cur, row)
+            cur.execute("SELECT state,count(*) FROM research.research_job_items WHERE job_id=%s GROUP BY state", (job_id,))
+            result["counts"] = dict(cur.fetchall())
+            cur.execute("SELECT result,count(*) FROM research.research_job_items WHERE job_id=%s AND state='DONE' GROUP BY result", (job_id,))
+            result["results"] = dict(cur.fetchall())
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    def recent_jobs(self):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM research.research_jobs WHERE status<>'RESET' ORDER BY created_at DESC,id DESC LIMIT 20")
+            rows = cur.fetchall()
+            names = [item.name for item in cur.description]
+        return [dict(zip(names, row)) for row in rows]
+
+    def pending_site_candidates(self, job_id):
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url "
+                "FROM research.research_job_items i JOIN public.clinics c ON c.id=i.clinic_id "
+                "WHERE i.job_id=%s AND i.state='PENDING' ORDER BY i.clinic_id", (job_id,)
+            )
+            return cur.fetchall()
+
     def create_job_from_filters(self, filters, kind="hp", limit=100, max_searches=100, force=False, max_pages=20):
-        raise BackendNotSupportedError(
-            "Supabase adapterはcreate_job_from_filters()に未対応です"
-            "(src.master.filters.whereのPostgres翻訳はREAD側のsupabase_filters.pyにあるが、"
-            "kind別のhp/epark/media WHERE節のGate2移植とparity testが先に必要です)。"
-            "SQLite backendを使用してください。"
-        )
+        import uuid
+        from src.repository.supabase_filters import where
+        if kind not in {"hp", "epark", "media"}:
+            raise ValueError("調査種類を確認してください。")
+        limit = min(500, max(1, int(limit)))
+        max_searches = min(1000, max(0, int(max_searches)))
+        sql, args = where(filters)
+        if not force:
+            sql += {
+                "hp": " AND hp_status='UNRESEARCHED'",
+                "epark": " AND (effective_json::jsonb)->>'epark_checked_at' IS NULL",
+                "media": " AND (effective_json::jsonb)->>'media_checked_at' IS NULL",
+            }[kind]
+        jid = uuid.uuid4().hex
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM public.clinics WHERE " + sql
+                    + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s",
+                    (*args, limit),
+                )
+                ids = [row[0] for row in cur.fetchall()]
+                if not ids:
+                    raise ValueError("指定した条件の未調査医院がありません。条件を見直すか、強制再調査を選択してください。")
+                ts = now()
+                cur.execute(
+                    "INSERT INTO research.research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s)",
+                    (jid, kind, Jsonb({"force": bool(force), "max_pages": max_pages}), max_searches, ts, ts),
+                )
+                cur.executemany(
+                    "INSERT INTO research.research_job_items(job_id,clinic_id) VALUES(%s,%s)",
+                    [(jid, clinic_id) for clinic_id in ids],
+                )
+            self._conn.commit()
+            return jid
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def recover_job_for_run(self, job_id):
-        raise BackendNotSupportedError(
-            "Supabase adapterはrecover_job_for_run()に未対応です(src.master.jobsのthread/worker"
-            "orchestration移植がGate2本実装側の残課題です)。SQLite backendを使用してください。"
-        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT * FROM research.research_jobs WHERE id=%s FOR UPDATE", (job_id,))
+                row = cur.fetchone()
+                if not row:
+                    raise ValueError("調査履歴が見つかりません。")
+                columns = [item.name for item in cur.description]
+                job = dict(zip(columns, row))
+                if job["status"] in {"COMPLETED", "RESET"}:
+                    self._conn.commit()
+                    return None
+                cur.execute("UPDATE research.research_job_items SET state='PENDING' WHERE job_id=%s AND state='RUNNING'", (job_id,))
+                cur.execute("UPDATE research.research_jobs SET status='PAUSED' WHERE id=%s AND status='RUNNING'", (job_id,))
+                cur.execute("UPDATE research.research_jobs SET status='RUNNING',updated_at=%s WHERE id=%s", (now(), job_id))
+            self._conn.commit()
+            return job
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def complete_job_if_no_remaining_items(self, job_id):
-        raise BackendNotSupportedError(
-            "Supabase adapterはcomplete_job_if_no_remaining_items()に未対応です。"
-            "SQLite backendを使用してください。"
-        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT 1 FROM research.research_job_items WHERE job_id=%s AND state IN ('PENDING','RUNNING') LIMIT 1", (job_id,))
+                if cur.fetchone() is None:
+                    cur.execute("UPDATE research.research_jobs SET status='COMPLETED',updated_at=%s WHERE id=%s AND status='RUNNING'", (now(), job_id))
+            self._conn.commit()
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def claim_specific_item(self, job_id, clinic_id):
-        raise BackendNotSupportedError(
-            "Supabase adapterはclaim_specific_item()に未対応です。SQLite backendを使用してください。"
-        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE research.research_job_items SET state='RUNNING' WHERE job_id=%s AND clinic_id=%s AND state='PENDING'", (job_id, clinic_id))
+                claimed = cur.rowcount > 0
+            self._conn.commit()
+            return claimed
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def requeue_item_for_budget_or_pause(self, job_id, clinic_id, note, job_status):
-        raise BackendNotSupportedError(
-            "Supabase adapterはrequeue_item_for_budget_or_pause()に未対応です。"
-            "SQLite backendを使用してください。"
-        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE research.research_job_items SET state='PENDING',note=%s WHERE job_id=%s AND clinic_id=%s", (note, job_id, clinic_id))
+                cur.execute("UPDATE research.research_jobs SET status=%s,updated_at=%s WHERE id=%s", (job_status, now(), job_id))
+            self._conn.commit()
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def finish_item(self, job_id, clinic_id, status, note):
-        raise BackendNotSupportedError(
-            "Supabase adapterはfinish_item()に未対応です。SQLite backendを使用してください。"
-        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("UPDATE research.research_job_items SET state='DONE',result=%s,note=%s WHERE job_id=%s AND clinic_id=%s", (status, note, job_id, clinic_id))
+                cur.execute("UPDATE research.research_jobs SET updated_at=%s WHERE id=%s", (now(), job_id))
+            self._conn.commit()
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
 
     def claim_next_pending_item(self, job_id):
         """Atomic claim without an explicit BEGIN IMMEDIATE-style whole-table lock: the

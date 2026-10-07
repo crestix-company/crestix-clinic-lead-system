@@ -139,6 +139,11 @@ class SqliteResearchWriteRepository:
     def override(self, clinic_id, field, value, *, note="", source="手動確認"):
         self._store.override(clinic_id, field, value, note=note, source=source)
 
+    def get_saved_research(self, clinic_id):
+        with self._store.connect() as c:
+            row = c.execute("SELECT result_json FROM research_results WHERE clinic_id=?", (clinic_id,)).fetchone()
+        return json.loads(row[0]) if row else {}
+
 
 class SqliteProvenanceWriteRepository:
     def __init__(self, store):
@@ -210,6 +215,31 @@ class SqliteJobsWriteRepository:
         with self._store.connect() as c:
             c.execute("UPDATE research_jobs SET max_searches=?,updated_at=? WHERE id=?",
                       (max(0, int(limit)), now(), job_id))
+
+    def job_status(self, job_id):
+        with self._store.connect() as c:
+            row = c.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            result = dict(row)
+            result["counts"] = {item[0]: item[1] for item in c.execute(
+                "SELECT state,count(*) FROM research_job_items WHERE job_id=? GROUP BY state", (job_id,))}
+            result["results"] = {item[0]: item[1] for item in c.execute(
+                "SELECT result,count(*) FROM research_job_items WHERE job_id=? AND state='DONE' GROUP BY result", (job_id,))}
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    def recent_jobs(self):
+        with self._store.connect() as c:
+            return [dict(row) for row in c.execute(
+                "SELECT * FROM research_jobs WHERE status<>'RESET' ORDER BY created_at DESC,id DESC LIMIT 20")]
+
+    def pending_site_candidates(self, job_id):
+        with self._store.connect() as c:
+            return [tuple(row) for row in c.execute(
+                "SELECT i.clinic_id,c.maps_presence_status,c.maps_website_url "
+                "FROM research_job_items i JOIN clinics c ON c.id=i.clinic_id "
+                "WHERE i.job_id=? AND i.state='PENDING' ORDER BY i.clinic_id", (job_id,))]
 
     def create_job_from_filters(self, filters, kind="hp", limit=100, max_searches=100, force=False, max_pages=20):
         # Moved verbatim from src.master.jobs.create_job (the candidate SELECT and the job+item

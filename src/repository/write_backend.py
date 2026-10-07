@@ -15,6 +15,7 @@ WRITE_BACKEND_ENV_VAR = "CLINIC_WRITE_BACKEND"
 WRITE_BACKEND_SQLITE = "sqlite"
 WRITE_BACKEND_SUPABASE = "supabase"
 VALID_WRITE_BACKENDS = (WRITE_BACKEND_SQLITE, WRITE_BACKEND_SUPABASE)
+RUNTIME_DB_URL_ENV_VAR = "SUPABASE_RUNTIME_DB_URL"
 
 
 def active_write_backend():
@@ -58,9 +59,9 @@ def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=Non
             SupabaseProvenanceWriteRepository, SupabaseSettingsWriteRepository,
             SupabaseJobsWriteRepository, SupabaseSearchWriteRepository,
         )
-        url = supabase_url or _os.environ.get("SUPABASE_DB_URL")
+        url = supabase_url or _os.environ.get(RUNTIME_DB_URL_ENV_VAR)
         if not url:
-            raise RuntimeError("SUPABASE_DB_URL is not set")
+            raise RuntimeError(f"{RUNTIME_DB_URL_ENV_VAR} is not set")
         # WRITE connections stay in default (non-autocommit) mode: every write path manages its
         # own explicit transaction boundary (see supabase_write_adapter), unlike the READ side's
         # long-lived autocommit connection in src.repository.backend.
