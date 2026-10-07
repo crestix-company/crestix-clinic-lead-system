@@ -530,7 +530,7 @@ def _maps_hp_available_count(store, prefecture="", force=False, medical_types=No
 
 
 def current_hp_job_export_ui(store, *, key_prefix="step5"):
-    """Step5 is intentionally scoped to the latest completed HP job, never global history."""
+    """Show current-job metrics while keeping UUID-empty successful HP results cumulative."""
     if not getattr(store, "is_supabase_runtime", False):
         st.metric("Comdesk出力対象", "0件")
         st.info("今回のHP調査ジョブはSupabase実行時に表示されます。全期間の出力は詳細設定をご利用ください。")
@@ -547,9 +547,18 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
     cols[1].metric("調査完了", f"{summary['done_count']:,}件")
     cols[2].metric("HP確認成功", f"{summary['success_count']:,}件")
     cols[3].metric("既存UUIDあり", f"{summary['uuid_existing_count']:,}件")
-    cols[4].metric("Comdesk出力対象", f"{len(summary['export_ids']):,}件")
+    cols[4].metric(
+        "Comdesk出力対象",
+        f"{len(summary['export_ids']):,}件",
+        help=(
+            "HP調査成功済み・UUID未付与の累積件数です。"
+            f"今回ジョブ以外から {summary['carryover_count']:,}件を引き継いでいます。"
+            "CSVをダウンロードしても消えず、UUIDが付与されると自動で対象外になります。"
+        ),
+    )
     signature = json.dumps(
-        [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision()],
+        [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision(),
+         len(summary["export_ids"]), summary["carryover_count"]],
         ensure_ascii=False,
         sort_keys=True,
     )
