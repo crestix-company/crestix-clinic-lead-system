@@ -221,14 +221,19 @@ class SupabaseRuntimeStore:
             )
             target, done, success, uuid_existing, current_ids = cur.fetchone()
 
-            # Comdesk waiting is cumulative across HP research runs. A clinic stays here until
-            # a UUID is actually written back to public.clinics; downloading a CSV does not
-            # remove it. The canonical HP ledger + clinic_id provide durable de-duplication.
+            # Comdesk waiting is cumulative across HP jobs created by this application,
+            # not across the entire historical HP ledger. This prevents migrated/reconciled
+            # ledger rows that were never part of an operator HP job from inflating Step5.
+            # A successful clinic stays in the waiting list until a UUID is actually written
+            # back to public.clinics. DISTINCT clinic_id prevents duplicates across re-runs.
             cur.execute(
-                "SELECT COALESCE(array_agg(c.id ORDER BY c.id),'{}') "
+                "SELECT COALESCE(array_agg(DISTINCT c.id ORDER BY c.id),'{}') "
                 "FROM public.clinics c "
+                "JOIN research.research_job_items i ON i.clinic_id=c.id "
+                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' "
                 "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id "
-                "WHERE h.fetch_status='OK' "
+                "WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "AND h.fetch_status='OK' "
                 "AND COALESCE(BTRIM(h.final_url),'')<>'' "
                 "AND COALESCE(BTRIM(c.uuid),'')='' "
                 "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion,
