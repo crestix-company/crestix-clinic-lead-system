@@ -224,13 +224,76 @@ Still a draft file, still unapplied.
 | Live DDL = 0 | ✅ |
 | WRITE Primary = SQLite | ✅ |
 
-**Verdict: LIVE CUTOVER READY = NO — one item away.** Every blocker from the previous pass is
-closed. The sole remaining item is the single comparator mismatch in §6: a real, root-caused,
-narrow, business-impact-free (997 unaffected) ordering discrepancy in `supabase_filters.py`'s
-funnel step ordering, deliberately left unfixed because it sits in a live READ-path file this
-WRITE-focused pass was not mandated to touch. This is not a STOP-condition trigger (no identity
-mutation, no partial write, no security regression, no count mismatch) — it is reported as the
-one open item for an explicit decision: fix `supabase_filters.py`'s field order to match
-`filters.py`, or accept the cosmetic funnel-order divergence and call the comparator condition
-satisfied on the grounds that the actual filtering/counting logic (`count()`, all 38 cases)
-already agrees. That decision is left to the owner, not made unilaterally here.
+**Verdict at the end of the previous pass: LIVE CUTOVER READY = NO — one item away** (the
+funnel ordering mismatch above). See §11 below for the Owner Decision closing it.
+
+## 11. Owner Decision — funnel ordering fixed, comparator mismatch closed to 0
+
+The owner reviewed §6/§10 and decided: SQLite's existing funnel step order is canonical
+behavior; Supabase must be changed to match it (not the reverse), minimal-scope only.
+
+**Root cause reconfirmed before touching any code** (per the owner's own instruction to verify,
+not just trust the prior write-up): `src/master/filters.py:clauses()` has ONE shared loop over
+`[ranks, effective_ranks, prefectures, medical_types, hot]` because every one of those fields
+reduces to a simple `col IN (...)` SQL fragment in SQLite. `src/repository/supabase_filters.py:clauses()`
+could not put `effective_ranks` in its equivalent loop because the Postgres translation of
+`effective_hp_rank()` requires a JOIN-based SQL expression (correlated `EXISTS` against
+`hp_research.clinic_hp_research`) that doesn't fit a `col IN (...)` template — so it was
+previously handled in a separate `if` block placed AFTER the loop (which covered `ranks`,
+`prefectures`, `medical_types`, `hot`), producing step order `[ranks, prefectures,
+medical_types, hot, effective_ranks, ...]` instead of SQLite's `[ranks, effective_ranks,
+prefectures, medical_types, hot, ...]` whenever `effective_ranks` was combined with
+`prefectures` and/or `medical_types`.
+
+**Fix applied, minimal scope only** (`src/repository/supabase_filters.py`, `clauses()`):
+split the single loop into three parts in canonical order — (1) `ranks` alone, (2)
+`effective_ranks` (the existing JOIN-based block, body byte-for-byte unchanged, only its
+position in the function moved earlier), (3) a loop over the remaining `[prefectures,
+medical_types, hot]`. **Not changed**: any WHERE-condition SQL text, any predicate semantics,
+the hospital/center exclusion clause, site_types/departments/treatments/signals handling,
+`count()`/`query()`/`get()` logic, the SQLite implementation, `medical_key`, any Write
+Repository/adapter file, the migration SQL, the runtime role SQL, or any ID-generation logic —
+confirmed by `git diff` touching only this one function's statement order in one file.
+
+**Regression tests added** (`tests/test_supabase_filters_regression.py`, real production data,
+auto-skipped without `SUPABASE_DB_URL`): `test_funnel_step_order_matches_sqlite` and
+`test_funnel_final_count_matches_sqlite`, parametrized over exactly the three combinations the
+owner specified (`effective_ranks+prefectures`, `effective_ranks+medical_types`,
+`effective_ranks+prefectures+medical_types`) — asserting both the full `(label, count)` step
+list and the final count are identical to SQLite. All 6 new parametrized cases PASS.
+
+**Full re-verification after the fix** (all against real production/Supabase data):
+
+- `scripts/supabase_migration/stage4d_read_comparator.py`: **cases = 38, matched = 38,
+  mismatch = 0** (was 37/38 before the fix).
+- `scripts/supabase_migration/parity_harness.py`: 46/46 PASS, re-run.
+- `scripts/supabase_migration/stage4d_ui_baseline.py`: all 6 values still exact matches
+  (営業対象=997, Comdesk=997, UUIDあり=515, UUIDなし=482, 眼科=68, keyword=747); Treatment/
+  pagination/HP sanity checks PASS.
+- Full `pytest`: **1087 passed, 25 skipped, 0 failed** (up from 1081 — the 6 new funnel-order
+  tests). Critical runtime skip count still 0.
+- `tests/test_supabase_filters_regression.py` in full: 25/25 PASS (19 pre-existing + 6 new).
+- Production SQLite SHA-256: unchanged, all 3 files, re-verified after the fix.
+- Supabase `public.clinics` = 162,258, 19-table total = 632,903 — re-verified, unchanged.
+- Supabase row writes this pass: 0. Live DDL: 0. `CLINIC_WRITE_BACKEND`: still `sqlite` default.
+
+## 12. LIVE CUTOVER READY — final verdict
+
+Every item in the Owner's Definition (their "Final Offline Fix" message, §14) is now satisfied:
+Gate1.5 PASS; Repository coverage complete (app_v2.py/jobs.py/search_provider.py/
+google_maps.py/Treatment worker/HP worker); import_maps_results complete; jobs/Treatment/HP
+idempotency complete; Global A+B direct SQLite runtime WRITE = 0; medical_key PASS; high-range
+ID PASS; migration SQL READY (unapplied); runtime role SQL READY (unapplied); pytest failure =
+0; critical runtime skips = 0; 46/46 parity; **reproducible comparator mismatch = 0**; UI
+baseline exact (all 6); Treatment/HP/pagination PASS; Production SHA unchanged; Supabase counts
+unchanged; Supabase row writes = 0; Live DDL = 0; WRITE Primary = SQLite.
+
+# LIVE CUTOVER READY = YES
+
+This is a design/implementation-readiness judgment, not a record of anything having been
+applied to the live Supabase project — no DDL, role, grant, policy, sequence, or data write was
+executed in this pass or any prior Gate2 pass. It means: the WRITE Repository/Adapter layer,
+the identity contracts, the ID-collision guard, the migration SQL, and the offline-reproducible
+verification suite are all complete, tested, and internally consistent, and are ready for the
+owner to walk through the live gates (DDL apply → Security Advisor → Rollback Canary → Failure
+Injection → Persistent Canary → Reconciliation → WRITE Cutover) in person.

@@ -153,10 +153,17 @@ def clauses(filters, as_of=None, excluded_ids=None):
         if not 0 <= filters.age_min <= 1:
             raise ValueError("年齢確率は0〜100%で指定してください。")
         add(f"59歳以下確率{filters.age_min:.0%}以上", "age_probability>=%s", filters.age_min)
-    for values, col, label in [(filters.ranks, "hp_rank", "旧HPランク"), (filters.prefectures, "prefecture", "都道府県"),
-                                (filters.medical_types, "medical_type", "医科・歯科"), (filters.hot, "hot_status", "アツさ")]:
-        if values:
-            add(label, f"{col} IN ({','.join('%s' for _ in values)})", *values)
+    # Step order below (ranks -> effective_ranks -> prefectures -> medical_types -> hot) is
+    # deliberately split into three parts (not one shared loop) to match
+    # src.master.filters.clauses()'s canonical step order exactly -- that function's single
+    # loop can list effective_ranks inline because its SQL is a simple "col IN (...)", but
+    # effective_ranks here needs the JOIN-based block below, which cannot fit the same loop
+    # body. Splitting the loop (rather than reordering the list, which wouldn't help since
+    # effective_ranks isn't a loop member here) is how the two backends' funnel() step
+    # sequence is kept identical for any combination of these fields. See
+    # tests/test_stage4d_write_repository.py's funnel-ordering regression tests.
+    if filters.ranks:
+        add("旧HPランク", f"hp_rank IN ({','.join('%s' for _ in filters.ranks)})", *filters.ranks)
     if filters.effective_ranks:
         # Exact SQL translation of effective_hp_rank(), including adapter availability rules:
         # only non-blank machine output with fetch_status='OK' is canonical input; otherwise
@@ -196,6 +203,10 @@ def clauses(filters, as_of=None, excluded_ids=None):
             )
             add("HP ABC判定", f"({effective}) IN ({','.join('%s' for _ in filters.effective_ranks)})",
                 *filters.effective_ranks)
+    for values, col, label in [(filters.prefectures, "prefecture", "都道府県"),
+                                (filters.medical_types, "medical_type", "医科・歯科"), (filters.hot, "hot_status", "アツさ")]:
+        if values:
+            add(label, f"{col} IN ({','.join('%s' for _ in values)})", *values)
     # P0-4 (Stage4-B.6): `col @> '["x"]'::jsonb` (array containment) is semantically identical to
     # `EXISTS(SELECT 1 FROM jsonb_array_elements_text(col) v WHERE v=x)` for a flat string array
     # (both ask "is x present as an element") -- but containment can use the existing GIN

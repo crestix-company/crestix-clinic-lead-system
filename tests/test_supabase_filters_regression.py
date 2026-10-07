@@ -160,3 +160,54 @@ def test_effective_rank_sql_pushdown_preserves_page_order(repos):
     sqlite_ids = [r["id"] for r in repos["sqlite"].clinics.query(f, limit=100, offset=0)]
     supabase_ids = [r["id"] for r in repos["supabase"].clinics.query(f, limit=100, offset=0)]
     assert sqlite_ids == supabase_ids
+
+
+# ---------------------------------------------------------------------------------------------
+# Stage4-D Gate2: funnel() step ordering regression.
+#
+# src.master.filters.clauses() (SQLite) iterates [ranks, effective_ranks, prefectures,
+# medical_types, hot] in one shared loop. supabase_filters.clauses() cannot put effective_ranks
+# in that same loop (it needs a JOIN-based SQL block the simple "col IN (...)" loop body can't
+# express), so it used to handle effective_ranks in a separate `if` block placed AFTER
+# prefectures/medical_types/hot -- producing a different funnel() step order whenever
+# effective_ranks was combined with either of those fields. The final count was never wrong
+# (count()/query() don't care about step order), but funnel()'s intermediate step labels/counts
+# -- which are user-visible if ever rendered -- diverged. Fixed by splitting the loop into three
+# parts (ranks alone, then effective_ranks, then prefectures/medical_types/hot) so the step
+# *sequence* matches SQLite's for any combination, not just the predicate set.
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("filters_kwargs", [
+    {"effective_ranks": ["A", "B"], "prefectures": ["東京都"]},
+    {"effective_ranks": ["A", "B"], "medical_types": ["医科"]},
+    {"effective_ranks": ["A", "B"], "prefectures": ["東京都"], "medical_types": ["医科"]},
+], ids=["effective_ranks+prefectures", "effective_ranks+medical_types",
+        "effective_ranks+prefectures+medical_types"])
+def test_funnel_step_order_matches_sqlite(repos, filters_kwargs):
+    f = Filters(active_only=True, hp_only=False, **filters_kwargs)
+    sqlite_steps = repos["sqlite"].clinics.funnel(f)
+    supabase_steps = repos["supabase"].clinics.funnel(f)
+    sqlite_labels = [label for label, _ in sqlite_steps]
+    supabase_labels = [label for label, _ in supabase_steps]
+    assert supabase_labels == sqlite_labels, (
+        f"funnel step order diverged: sqlite={sqlite_labels} supabase={supabase_labels}"
+    )
+    assert supabase_steps == sqlite_steps, (
+        f"funnel steps (label, count) diverged: sqlite={sqlite_steps} supabase={supabase_steps}"
+    )
+
+
+@pytest.mark.parametrize("filters_kwargs", [
+    {"effective_ranks": ["A", "B"], "prefectures": ["東京都"]},
+    {"effective_ranks": ["A", "B"], "medical_types": ["医科"]},
+    {"effective_ranks": ["A", "B"], "prefectures": ["東京都"], "medical_types": ["医科"]},
+], ids=["effective_ranks+prefectures", "effective_ranks+medical_types",
+        "effective_ranks+prefectures+medical_types"])
+def test_funnel_final_count_matches_sqlite(repos, filters_kwargs):
+    """The regression above is about step order; this independently re-confirms the thing that
+    actually matters for business decisions (the final count) was never broken either."""
+    f = Filters(active_only=True, hp_only=False, **filters_kwargs)
+    sqlite_final = repos["sqlite"].clinics.funnel(f)[-1][1]
+    supabase_final = repos["supabase"].clinics.funnel(f)[-1][1]
+    assert supabase_final == sqlite_final
+    assert sqlite_final == repos["sqlite"].clinics.count(f) == repos["supabase"].clinics.count(f)
