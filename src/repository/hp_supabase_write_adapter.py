@@ -28,6 +28,15 @@ class SupabaseHpWriteRepository:
     def __init__(self, conn):
         self._conn = conn
 
+    def prior_attempts(self, clinic_id):
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT attempts FROM hp_research.clinic_hp_research WHERE clinic_id=%s",
+                (clinic_id,),
+            )
+            row = cur.fetchone()
+        return row[0] if row else None
+
     def upsert_result(self, result):
         from src.master.hp_site_type import portal_name_for_url
         portal_name = portal_name_for_url(result.get("final_url") or result.get("hp_url") or "")

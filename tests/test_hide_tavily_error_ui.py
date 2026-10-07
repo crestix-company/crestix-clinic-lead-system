@@ -9,6 +9,7 @@ def _screen_text(at):
 
 
 def _valid_clinic_db_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")  # explicit legacy/admin test mode
     # CLINIC_DB_PATH必須化のバリデーションはClinicStoreを経由しないため、
     # ClinicStore.__init__をmonkeypatchする前に素のsqlite3でclinicsテーブルだけ用意する。
     db_path = tmp_path / "prod.sqlite3"

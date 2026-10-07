@@ -449,7 +449,7 @@ class SupabaseResearchRepository:
         with self._conn.cursor() as cur:
             cur.execute("SELECT result_json FROM research.research_results WHERE clinic_id=%s", (clinic_id,))
             row = cur.fetchone()
-        return json.loads(row[0]) if row else {}
+        return (json.loads(row[0]) if isinstance(row[0], str) else row[0]) if row else {}
 
     def hp_pages(self, clinic_id):
         with self._conn.cursor() as cur:
@@ -458,7 +458,8 @@ class SupabaseResearchRepository:
                 (clinic_id,),
             )
             rows = cur.fetchall()
-        return [{**json.loads(r[1]), "url": r[0], "checked_at": r[2]} for r in rows]
+        return [{**(json.loads(r[1]) if isinstance(r[1], str) else r[1]),
+                 "url": r[0], "checked_at": r[2]} for r in rows]
 
 
 class SupabaseProvenanceRepository:
@@ -479,7 +480,9 @@ class SupabaseProvenanceRepository:
         with self._conn.cursor() as cur:
             cur.execute("SELECT id, headers_json, mapping_json FROM provenance.templates ORDER BY created_at, id")
             rows = cur.fetchall()
-        return [{"id": r[0], "headers": json.loads(r[1]), "mapping": json.loads(r[2])} for r in rows]
+        return [{"id": r[0],
+                 "headers": json.loads(r[1]) if isinstance(r[1], str) else r[1],
+                 "mapping": json.loads(r[2]) if isinstance(r[2], str) else r[2]} for r in rows]
 
     def reviews(self, limit=100):
         with self._conn.cursor() as cur:
@@ -491,7 +494,13 @@ class SupabaseProvenanceRepository:
                 (limit,),
             )
             cols = [d.name for d in cur.description]
-            return [dict(zip(cols, row)) for row in cur.fetchall()]
+            output = [dict(zip(cols, row)) for row in cur.fetchall()]
+        # app_v2's established UI contract consumes these two values as JSON text.
+        for item in output:
+            for key in ("candidates_json", "record_json"):
+                if not isinstance(item[key], str):
+                    item[key] = json.dumps(item[key], ensure_ascii=False)
+        return output
 
 
 class SupabaseSettingsRepository:

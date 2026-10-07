@@ -67,6 +67,7 @@ def test_resolve_production_db_path_accepts_valid_store(tmp_path, monkeypatch):
 
 
 def test_app_fails_loudly_when_clinic_db_path_unset(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")  # explicit admin/legacy mode
     monkeypatch.delenv("CLINIC_DB_PATH", raising=False)
     monkeypatch.setenv("CLINIC_DATA_DIR", str(tmp_path / "external-data"))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
@@ -83,6 +84,7 @@ def test_app_fails_loudly_when_clinic_db_path_unset(tmp_path, monkeypatch):
 
 
 def test_app_fails_loudly_for_nonexistent_clinic_db_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")  # explicit admin/legacy mode
     missing = tmp_path / "no_such_prod.sqlite3"
     monkeypatch.setenv("CLINIC_DB_PATH", str(missing))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
@@ -95,6 +97,7 @@ def test_app_fails_loudly_for_nonexistent_clinic_db_path(tmp_path, monkeypatch):
 
 
 def test_app_opens_correct_db_when_clinic_db_path_valid(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")  # explicit admin/legacy mode
     db_path = tmp_path / "prod.sqlite3"
     store = ClinicStore(db_path)
     from src.master.samples import sample_records

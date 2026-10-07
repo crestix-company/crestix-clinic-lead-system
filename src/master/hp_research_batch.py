@@ -4,8 +4,9 @@
 1回のfetch結果からTreatment ResearchとHP ABC v2 candidate特徴量の両方を導出する
 （同一医院を二重fetchしない）。
 
-Production DB: READ ONLYのみ（本番clinics.sqlite3へは一切書き込まない。hp_rankも更新しない）。
-既存Treatment sidecar（treatment_research_final.sqlite3）: READ ONLYのみ（候補選定の参考情報
+Production Runtime: Supabase READ/WRITE only via clinic_runtime.
+Historical Production DB/Treatment sidecar paths are used only in explicit SQLite
+admin/migration/test mode (and remain read-only inputs there).
 としてだけ使う。書き込まない）。
 
 保存先: 本モジュール専用の新規sidecar（Production/既存Treatment sidecarとは別ファイル。
@@ -128,6 +129,28 @@ def select_candidates(production_db_path, sidecar_conn, limit, treatment_sidecar
 
     pool.sort(key=lambda r: (r[0], r[1], r[2], r[3]))
     return [{"clinic_id": r[3], "url": r[4], "hp_url_confirmed": r[5]} for r in pool[:limit]]
+
+
+def select_candidates_supabase(conn, limit):
+    """Production candidate selection against the shared Supabase SoT only."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c.id, c.hp_url, c.maps_website_url,
+                   (t.clinic_id IS NOT NULL) AS treatment_researched
+            FROM public.clinics c
+            LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id
+            LEFT JOIN treatment.clinic_research_status t ON t.clinic_id=c.id
+            WHERE (c.hp_url<>'' OR c.maps_website_url<>'')
+              AND (h.clinic_id IS NULL OR (h.fetch_status<>'OK' AND h.attempts<%s))
+            ORDER BY (c.hp_url=''), (t.clinic_id IS NOT NULL), c.id
+            LIMIT %s
+            """,
+            (MAX_ATTEMPTS, int(limit)),
+        )
+        rows = cur.fetchall()
+    return [{"clinic_id": cid, "url": hp_url or maps_url, "hp_url_confirmed": bool(hp_url)}
+            for cid, hp_url, maps_url, _ in rows]
 
 
 def fetch_clinic(url, fetcher=None):
@@ -283,9 +306,16 @@ def run_batch(production_db_path, limit, batch_size=20, sidecar_path=None, treat
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    with connect_sidecar(sidecar_path) as sidecar_conn:
+    from contextlib import nullcontext
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
+    sqlite_mode = active_write_backend() == WRITE_BACKEND_SQLITE
+    context = connect_sidecar(sidecar_path) if sqlite_mode else nullcontext(None)
+    with context as sidecar_conn:
         hp_repo = _build_hp_repo(sidecar_conn)
-        candidates = select_candidates(production_db_path, sidecar_conn, limit, treatment_sidecar_path)
+        candidates = (
+            select_candidates(production_db_path, sidecar_conn, limit, treatment_sidecar_path)
+            if sqlite_mode else select_candidates_supabase(hp_repo._conn, limit)
+        )
         attempted = succeeded = failed = retried = 0
         elapsed_list = []
         done = 0
@@ -313,10 +343,14 @@ def run_batch(production_db_path, limit, batch_size=20, sidecar_path=None, treat
                             "error_detail": f"未捕捉解析エラー: {type(exc).__name__}: {exc}",
                             "elapsed_seconds": 0.0,
                         }
-                    prior = sidecar_conn.execute(
-                        "SELECT attempts FROM hp_research_batch_results WHERE clinic_id=?", (result["clinic_id"],)
-                    ).fetchone()
-                    if prior and prior["attempts"] > 0:
+                    if sqlite_mode:
+                        prior = sidecar_conn.execute(
+                            "SELECT attempts FROM hp_research_batch_results WHERE clinic_id=?", (result["clinic_id"],)
+                        ).fetchone()
+                        prior_attempts = prior["attempts"] if prior else None
+                    else:
+                        prior_attempts = hp_repo.prior_attempts(result["clinic_id"])
+                    if prior_attempts and prior_attempts > 0:
                         retried += 1
                     # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL,
                     # same idempotent ON CONFLICT upsert -- see upsert_result() above, now

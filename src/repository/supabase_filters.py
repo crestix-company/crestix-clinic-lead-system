@@ -51,7 +51,6 @@ def _ascii_fold(text):
 
 UNSUPPORTED_FIELDS = (
     "mhlw_official_departments", "crestix_sales_departments", "mhlw_departments",
-    "hp_treatment_categories", "research_status", "sales_pairs",
     "sales_tiers", "sales_confidence", "exclude_human_review",
 )
 
@@ -220,6 +219,61 @@ def clauses(filters, as_of=None, excluded_ids=None):
         if values:
             add(label, "(" + " OR ".join(f"{col} @> %s::jsonb" for _ in values) + ")",
                 *[json.dumps([v], ensure_ascii=False) for v in values])
+    if filters.hp_treatment_categories:
+        add(
+            "HP治療カテゴリ（CONFIRMED）",
+            "EXISTS(SELECT 1 FROM treatment.clinic_treatment_research tr "
+            "WHERE tr.clinic_id=clinics.id AND tr.treatment_category_name=ANY(%s) "
+            "AND tr.research_status='CONFIRMED')",
+            list(filters.hp_treatment_categories),
+        )
+    if filters.research_status:
+        statuses = [s for s in filters.research_status if s != "NOT_RESEARCHED"]
+        parts, params = [], []
+        if statuses:
+            parts.append(
+                "EXISTS(SELECT 1 FROM treatment.clinic_research_status rs "
+                "WHERE rs.clinic_id=clinics.id AND rs.research_status=ANY(%s))"
+            )
+            params.append(statuses)
+        if "NOT_RESEARCHED" in filters.research_status:
+            parts.append(
+                "NOT EXISTS(SELECT 1 FROM treatment.clinic_research_status rs "
+                "WHERE rs.clinic_id=clinics.id)"
+            )
+        add("Research Status", "(" + " OR ".join(parts) + ")", *params)
+    if filters.sales_pairs:
+        from src.master.sales_treatments import (
+            VALID_EVIDENCE_SOURCES, sidecar_treatment_category, treatment_definition,
+        )
+        pair_sql, pair_args = [], []
+        sources = sorted(VALID_EVIDENCE_SOURCES)
+        for department, treatment in filters.sales_pairs:
+            definition = treatment_definition(department, treatment)
+            if definition is None or definition.support_status == "MISSING":
+                continue
+            evidence = (
+                "EXISTS(SELECT 1 FROM research.research_results rr, "
+                "jsonb_array_elements(COALESCE((rr.result_json::jsonb)->'treatment_evidence','[]'::jsonb)) e "
+                "WHERE rr.clinic_id=clinics.id AND e->>'category'=ANY(%s) "
+                "AND treatments_json ? (e->>'category') AND e->>'source'=ANY(%s)"
+            )
+            params = [department, list(definition.current_categories), sources]
+            if definition.match_mode == "KEYWORD":
+                evidence += " AND e->>'keyword'=ANY(%s)"
+                params.append(list(definition.evidence_keywords))
+            evidence += ")"
+            sidecar = sidecar_treatment_category(department, treatment)
+            if sidecar:
+                evidence = (
+                    "(" + evidence + " OR EXISTS(SELECT 1 FROM treatment.clinic_treatment_research tr "
+                    "WHERE tr.clinic_id=clinics.id AND tr.research_status='CONFIRMED' "
+                    "AND tr.treatment_category_name=%s))"
+                )
+                params.append(sidecar)
+            pair_sql.append("(departments_json ? %s AND " + evidence + ")")
+            pair_args.extend(params)
+        add("標榜診療科×治療", "(" + " OR ".join(pair_sql) + ")" if pair_sql else "false", *pair_args)
     if filters.signals:
         add("広告・集客施策", "(" + " OR ".join("signals_json @> %s::jsonb" for _ in filters.signals) + ")",
             *[json.dumps([v], ensure_ascii=False) for v in filters.signals])

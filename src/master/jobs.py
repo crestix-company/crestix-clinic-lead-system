@@ -103,6 +103,11 @@ def job_limit(store,jid,limit):
 
 
 def run_job(store,jid,provider,fetcher=None):
+    if getattr(store, "is_supabase_runtime", False):
+        # Cross-PC exclusion is the PostgreSQL row-claim/lease contract (FOR UPDATE SKIP
+        # LOCKED), not a machine-local lock file.
+        _run_locked(store,jid,provider,fetcher)
+        return True
     try:
         with FileLock(str(store.path)+".research.lock",timeout=0):
             _run_locked(store,jid,provider,fetcher)

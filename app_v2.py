@@ -72,12 +72,12 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
     "NOT_RESEARCHED": "Webサイト未調査",
 }
 @st.cache_resource
-def store_for(path):
-    store = ClinicStore(path)
+def store_for(path=None):
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     if active_backend() == BACKEND_SUPABASE:
-        from src.repository.cutover import Stage4CClinicStore
-        return Stage4CClinicStore(store)
+        from src.repository.runtime_store import SupabaseRuntimeStore
+        return SupabaseRuntimeStore()
+    store = ClinicStore(path)
     # Stage4-B Shadow Read: default is off (CLINIC_SHADOW_READ_ENABLED unset/0), in which case
     # this returns the exact same ClinicStore as before -- no wrapper, no behavior change.
     from src.repository.shadow import shadow_read_enabled
@@ -145,8 +145,11 @@ def runner_for(path):
 
 def ad_count_options(store):
     # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
-    with store.connect() as c:
-        top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
+    if getattr(store, "is_supabase_runtime", False):
+        top = store.ad_count_max()
+    else:
+        with store.connect() as c:
+            top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
     return [0]+list(range(2,top+1))
 
 
@@ -156,9 +159,12 @@ def ad_count_label(n):
 
 def filters_ui(store,prefix="sales",defaults=None):
     defaults = defaults or Filters()
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
-        municipality_options = [r[0] for r in c.execute("SELECT DISTINCT municipality_of(address) FROM clinics WHERE municipality_of(address)<>'' ORDER BY 1")]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs, municipality_options = store.prefectures(), store.municipalities()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
+            municipality_options = [r[0] for r in c.execute("SELECT DISTINCT municipality_of(address) FROM clinics WHERE municipality_of(address)<>'' ORDER BY 1")]
     treatment_names = treatment_category_names()
     def key(name):
         return prefix+"_"+name
@@ -180,7 +186,7 @@ def filters_ui(store,prefix="sales",defaults=None):
         pref = st.multiselect("都道府県",prefs,default=[x for x in defaults.prefectures if x in prefs],key=key("pref"))
         muni = st.multiselect("市区町村",municipality_options,default=[x for x in defaults.municipalities if x in municipality_options],key=key("municipalities"))
         deps = st.multiselect("診療科",DEPARTMENTS,default=defaults.departments,key=key("departments"))
-        if mhlw_sidecar_available():
+        if not getattr(store, "is_supabase_runtime", False) and mhlw_sidecar_available():
             try:
                 official_options = mhlw_official_department_options()
             except MhlwSidecarUnavailableError as exc:
@@ -201,7 +207,12 @@ def filters_ui(store,prefix="sales",defaults=None):
         equal = st.selectbox("開設者＝管理者",["指定なし","一致のみ","不一致のみ"],index=["指定なし","一致のみ","不一致のみ"].index(defaults.owner_equal),key=key("owner"))
     with cols[2]:
         treatments = st.multiselect("治療カテゴリ",treatment_names,default=defaults.treatments,key=key("treatments"))
-        if research_sidecar_available():
+        if getattr(store, "is_supabase_runtime", False):
+            hp_treatment_options = store.treatment_category_options()
+            hp_treatments = st.multiselect("HP治療カテゴリ（Treatment Research・CONFIRMEDのみ）",hp_treatment_options,
+                default=[x for x in defaults.hp_treatment_categories if x in hp_treatment_options],key=key("hp_treatment_categories"),
+                help="公式HP上でCONFIRMED（提供確認済み）の治療カテゴリのみ営業対象にします。")
+        elif research_sidecar_available():
             try:
                 hp_treatment_options = treatment_research_category_options()
             except ResearchSidecarUnavailableError as exc:
@@ -213,7 +224,7 @@ def filters_ui(store,prefix="sales",defaults=None):
         else:
             hp_treatments = []
             st.caption("Treatment Research sidecarがないため、HP治療カテゴリfilterは利用できません。既存filterは通常どおり利用できます。")
-        if clinic_research_status_available():
+        if getattr(store, "is_supabase_runtime", False) or clinic_research_status_available():
             research_status = st.multiselect("Research Status",RESEARCH_STATUS_UI_OPTIONS,
                 default=[x for x in defaults.research_status if x in RESEARCH_STATUS_UI_OPTIONS],key=key("research_status"),
                 help="医院単位の調査状態（DONE/FETCH_FAILED/NOT_RESEARCHED）で絞り込みます。NOT_RESEARCHEDは該当医院の調査行が1件もない状態です。HP治療カテゴリfilterとは独立した軸です。")
@@ -237,6 +248,11 @@ def filters_ui(store,prefix="sales",defaults=None):
 
 def show_mhlw_join_status(store):
     """正式採用したfinal sidecarの連携状況を簡潔に表示する。"""
+    if getattr(store, "is_supabase_runtime", False):
+        status = store.mhlw_join_status()
+        if status is None:
+            st.info("ナビイ正式診療科データは移行対象外です。既存の厚生局診療科filterは利用できます。")
+            return
     with store.connect() as c:
         attached = {r[1] for r in c.execute("PRAGMA database_list")}
         if "mhlwdb" not in attached:
@@ -421,7 +437,7 @@ def import_ui(store,demo):
     st.write("取り込み済みのデータを再統合する")
     st.caption("先頭0・ハイフンの違いを統合判定用のキーで吸収します。元のTel1・UUIDは保持します。全レコードを保存し、曖昧な重複は確認待ちとして残します。")
     result_key = "reintegration_result_" + str(store.path)
-    if st.button("保存済みデータを再統合",disabled=demo):
+    if not getattr(store, "is_supabase_runtime", False) and st.button("保存済みデータを再統合",disabled=demo):
         with st.spinner("バックアップを作成し、保存済みの厚生局データを再照合しています…"):
             st.session_state[result_key] = store.reintegrate_existing()
     if result_key in st.session_state:
@@ -513,12 +529,15 @@ def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=Non
 
     # Candidate selection is read-only; the persistent job+item WRITE goes through the
     # Repository (Stage4-D Gate2) instead of this file issuing INSERT SQL directly.
-    with store.connect() as c:
-        ids = [r[0] for r in c.execute(
-            "SELECT id FROM clinics WHERE " + " AND ".join(conditions) +
-            " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
-            (*args, min(500, max(1, int(limit))))
-        )]
+    if getattr(store, "is_supabase_runtime", False):
+        ids = store.maps_hp_candidate_ids(prefecture, medical_types, force, limit)
+    else:
+        with store.connect() as c:
+            ids = [r[0] for r in c.execute(
+                "SELECT id FROM clinics WHERE " + " AND ".join(conditions) +
+                " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
+                (*args, min(500, max(1, int(limit))))
+            )]
     if not ids:
         raise ValueError("現在の条件でHP調査できる医院がありません。")
     return write_repositories_for(store).jobs.create_job(
@@ -544,11 +563,10 @@ def _maps_hp_available_count(store, prefecture="", force=False, medical_types=No
         args.extend(medical_types)
     if not force:
         conditions.append("hp_status='UNRESEARCHED'")
+    if getattr(store, "is_supabase_runtime", False):
+        return store.maps_hp_available_count(prefecture, medical_types, force)
     with store.connect() as c:
-        return c.execute(
-            "SELECT count(*) FROM clinics WHERE " + " AND ".join(conditions),
-            args
-        ).fetchone()[0]
+        return c.execute("SELECT count(*) FROM clinics WHERE " + " AND ".join(conditions), args).fetchone()[0]
 
 
 def simple_workflow_ui(store, demo):
@@ -600,10 +618,13 @@ def simple_workflow_ui(store, demo):
             st.rerun()
 
     st.subheader("4. HP内容を自動調査")
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute(
-            "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
-        )]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs = store.prefectures()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute(
+                "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
+            )]
     pref_options = ["すべて"] + prefs
     default_pref = pref_options.index("東京都") if "東京都" in pref_options else 0
     pref_label = st.selectbox("都道府県", pref_options, index=default_pref, key="simple_research_pref")
@@ -739,10 +760,13 @@ def simple_sales_ui(store, demo=False):
     # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
     # 取りこぼさないよう、既定値だけを全国Clinic Masterへ変更（表示順・選択肢はそのまま）。
     scope = st.selectbox("対象データ", scope_options, index=scope_options.index(SCOPE_ALL), format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
-    with store.connect() as c:
-        prefs = [r[0] for r in c.execute(
-            "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
-        )]
+    if getattr(store, "is_supabase_runtime", False):
+        prefs = store.prefectures()
+    else:
+        with store.connect() as c:
+            prefs = [r[0] for r in c.execute(
+                "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
+            )]
     pref_default = ["東京都"] if "東京都" in prefs else []
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
     sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
@@ -827,7 +851,9 @@ def simple_sales_ui(store, demo=False):
         st.error(str(exc))
         return
     st.metric("営業対象", f"{count:,}件")
-    summary = sales_classification_summary()
+    # The historical Sales Tier CSV/SQLite artifact is not a production SoT.  It remains
+    # available to explicit offline/admin analysis only and is never opened by Supabase runtime.
+    summary = None if getattr(store, "is_supabase_runtime", False) else sales_classification_summary()
     if summary:
         st.caption(
             f"参考：Sales Tier分類（{summary['source_path'].name}、HP ABC判定とは別軸）："
@@ -980,8 +1006,11 @@ def show_job_progress(store,jid):
 def sales_ui(store):
     saved_filters = st.session_state.get("selected_sales_filters")
     if saved_filters is None:
-        with store.connect() as c:
-            has_maps = c.execute("SELECT 1 FROM clinics WHERE maps_presence_status<>'' LIMIT 1").fetchone() is not None
+        if getattr(store, "is_supabase_runtime", False):
+            has_maps = store.has_maps()
+        else:
+            with store.connect() as c:
+                has_maps = c.execute("SELECT 1 FROM clinics WHERE maps_presence_status<>'' LIMIT 1").fetchone() is not None
         defaults = Filters(maps_confirmed_only=has_maps, scope=SCOPE_LEGACY_PRE_NATIONAL)
     else:
         defaults = Filters(**saved_filters)
@@ -1031,14 +1060,16 @@ def settings_ui(store):
     keyword = st.text_input("確認する医院名・電話番号・UUID",key="review_search")
     if keyword:
         listing(store,Filters(active_only=False,hp_only=False,keyword=keyword),"review")
-    st.subheader("データのバックアップ")
-    st.caption("マスター・元のコムデスク行・根拠・手動修正・検索回数をまとめて保存します。")
-    if st.button("バックアップを作成"):
-        st.session_state["db_backup"] = store.backup_bytes()
-    if "db_backup" in st.session_state:
-        st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
-    st.write("使用中のデータファイル：",str(store.path))
-    st.caption("復元：アプリを終了 → 現在のDBを退避 → バックアップを clinics.sqlite3 に変更して data フォルダーへ配置 → 起動。詳しくはREADME_V2.md。")
+    st.subheader("データ基盤")
+    if getattr(store, "is_supabase_runtime", False):
+        st.write("使用中のデータ基盤：Supabase PostgreSQL")
+        st.caption("SQLiteバックアップは管理・移行専用です。通常Runtimeからは作成・参照しません。")
+    else:
+        st.caption("管理・テスト用SQLiteモード")
+        if st.button("バックアップを作成"):
+            st.session_state["db_backup"] = store.backup_bytes()
+        if "db_backup" in st.session_state:
+            st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
 
 
 def main():
@@ -1052,14 +1083,17 @@ def main():
             demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
 
+    from src.repository.backend import active_backend, BACKEND_SUPABASE
     if demo:
         path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
-    else:
+    elif active_backend() != BACKEND_SUPABASE:
         path, db_error = resolve_production_db_path()
         if db_error:
             st.error(db_error)
             st.stop()
-    store = store_for(str(path))
+    else:
+        path = None
+    store = store_for(str(path) if path is not None else None)
     write_repositories_for(store).clinics.refresh_age_model()
 
     if demo:

@@ -1,9 +1,7 @@
 """Stage4-D Gate2-A: WRITE backend selection, independent of CLINIC_DATA_BACKEND (READ).
 
-Default stays "sqlite" until Stage4-D's live Rollback Canary / Failure Injection / Persistent
-Canary / Reconciliation gates all pass (see docs/supabase_migration/22_stage4d_write_inventory_gate.md
-and 23_stage4d_gate2_offline_preparation.md). Flipping the default to "supabase" is itself a
-live-cutover action (Gate "WRITE Cutover") and is not performed by this module or by importing it.
+Stage4-D cut production writes over to Supabase through the tracked production configuration.
+SQLite remains reachable only through an explicit admin/migration/test configuration.
 
 No silent fallback: unlike the READ comparator in src.repository.cutover, a Supabase WRITE
 failure must never cause an automatic SQLite write of the same operation (dual-write stays

@@ -21,8 +21,9 @@ Three SQLite stores, kept deliberately separate:
     HTTP the classification step already has good data for.
   - LOCAL progress DB (data/research_worker/<manifest_id>/progress.sqlite3, gitignored):
     one row per clinic_id, drives checkpoint/resume and failure isolation.
-  - SHARED final results DB (default ~/CrestixData/clinic-lead/treatment_research_final.sqlite3,
-    override with TREATMENT_RESEARCH_DB_PATH): clinic_treatment_research_final,
+  - Production final results: Supabase treatment.* via clinic_runtime.
+    The historical final SQLite is used only in explicit CLINIC_WRITE_BACKEND=sqlite
+    admin/migration/test mode.
     the only thing the parallel Filter/UI session reads. WAL + busy_timeout +
     one-clinic-per-transaction so it is always safely readable mid-run.
 """
@@ -577,7 +578,11 @@ def run_worker(manifest_path: Path, retry_failed: bool, concurrency: int, batch_
     records = _load_records_for_manifest(manifest_rows)
     progress_db = open_progress_db(paths["progress_db"])
     cache_db = open_cache_db(paths["cache_db"])
-    final_db = open_final_db(FINAL_DB)
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
+    # Local cache/progress DBs are non-authoritative resumability aids.  The persistent
+    # Treatment SoT is opened only in explicit SQLite mode; production writes directly to
+    # treatment.* through clinic_runtime.
+    final_db = open_final_db(FINAL_DB) if active_write_backend() == WRITE_BACKEND_SQLITE else None
     treatment_repo = _build_treatment_repo(final_db)
     seed_progress(progress_db, list(records))
     # The lockfile above guarantees no other live worker holds this manifest, so any
