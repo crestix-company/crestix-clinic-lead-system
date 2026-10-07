@@ -243,7 +243,7 @@ class SupabaseRuntimeStore:
                 "carryover_count": carryover_count}
 
     def export_hp_job(self, job_id):
-        """Render only successful, UUID-empty clinics from the explicitly selected HP job."""
+        """Render the cumulative successful UUID-empty Comdesk waiting list."""
         summary = self.hp_job_export_summary(job_id)
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
