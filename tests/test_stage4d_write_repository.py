@@ -967,6 +967,85 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
     assert any("UPDATE public.clinics AS c SET" in q and "effective_json" in q for q, _ in conn.executed)
 
 
+def test_maps_batch_projection_values_have_explicit_postgres_types_and_null_semantics():
+    from psycopg.types.json import Jsonb
+    from src.repository.supabase_write_adapter import (
+        POSTGRES_PROJECTION_TYPES, SupabaseProvenanceWriteRepository,
+    )
+
+    columns = [column for column in POSTGRES_PROJECTION_TYPES if column != "clinic_id"]
+    base = {column: "sample" for column in columns}
+    base.update({
+        "effective_json": r'{"legacy":"literal \\u0000 text"}',
+        "active": True,
+        "owner_equal": None,
+        "age_probability": None,
+        "signal_count": 0,
+        "departments_json": Jsonb([]),
+        "treatments_json": Jsonb([]),
+        "signals_json": Jsonb([]),
+        "medical_key": "stable-key",
+    })
+    variations = [
+        {"age_probability": None, "owner_equal": None, "active": True, "signal_count": 0,
+         "departments_json": Jsonb([]), "treatments_json": Jsonb([]), "signals_json": Jsonb([])},
+        {"age_probability": 0.0, "owner_equal": True, "active": False, "signal_count": 3,
+         "departments_json": Jsonb(["内科"]), "treatments_json": Jsonb(["検査"]),
+         "signals_json": Jsonb(["信号"])},
+        {"age_probability": 0.42, "owner_equal": False, "active": True, "signal_count": 7,
+         "departments_json": Jsonb([]), "treatments_json": Jsonb(["処置"]), "signals_json": Jsonb([])},
+        {"age_probability": 1.0, "owner_equal": None, "active": False, "signal_count": 1,
+         "departments_json": Jsonb(["眼科"]), "treatments_json": Jsonb([]),
+         "signals_json": Jsonb(["確認済み"])},
+    ]
+    rows = []
+    clinic_ids = [1_000_000_101, 1_000_000_102, 1_000_000_103, 1_000_000_104]
+    for cid, variation in zip(clinic_ids, variations):
+        fields = {**base, **variation}
+        fields["age_probability"] = (
+            None if fields["age_probability"] is None else float(fields["age_probability"])
+        )
+        fields["signal_count"] = int(fields["signal_count"])
+        rows.append((cid, *(fields[column] for column in columns)))
+
+    class CaptureCursor:
+        def __init__(self):
+            self.query = None
+            self.params = None
+
+        def execute(self, query, params=None):
+            self.query = " ".join(str(query).split())
+            self.params = params
+
+    cur = CaptureCursor()
+    assert SupabaseProvenanceWriteRepository._bulk_update_projection(cur, columns, rows) == 1
+    assert "%s::double precision" in cur.query
+    assert "%s::boolean" in cur.query
+    assert "%s::integer" in cur.query
+    assert "%s::jsonb" in cur.query
+    assert "effective_json=v.effective_json" in cur.query
+    assert "effective_json=text" not in cur.query
+    assert cur.query.count("%s::text") >= len(columns) - 7
+
+    field_offset = {column: index + 1 for index, column in enumerate(columns)}
+    first_row_width = len(columns) + 1
+    assert cur.params[field_offset["age_probability"]] is None
+    assert cur.params[first_row_width + field_offset["age_probability"]] == 0.0
+    assert isinstance(cur.params[first_row_width + field_offset["age_probability"]], float)
+    assert cur.params[2 * first_row_width + field_offset["age_probability"]] == 0.42
+    assert cur.params[3 * first_row_width + field_offset["age_probability"]] == 1.0
+    assert cur.params[field_offset["owner_equal"]] is None
+    assert cur.params[first_row_width + field_offset["owner_equal"]] is True
+    assert cur.params[2 * first_row_width + field_offset["owner_equal"]] is False
+    assert cur.params[field_offset["signal_count"]] == 0
+    assert isinstance(cur.params[field_offset["signal_count"]], int)
+    assert cur.params[first_row_width + field_offset["signal_count"]] == 3
+    assert cur.params[field_offset["departments_json"]].obj == []
+    assert cur.params[first_row_width + field_offset["departments_json"]].obj == ["内科"]
+    effective = cur.params[field_offset["effective_json"]]
+    assert isinstance(effective, str) and r"\u0000" in effective
+
+
 def test_supabase_maps_batch_preserves_sequential_semantics_for_repeated_clinic():
     import pandas as pd
     from src.master.google_maps import build_maps_update

@@ -36,6 +36,46 @@ from src.master.identity_contract import (
 from src.repository.high_range_id import assert_high_range
 
 
+# Fixed PostgreSQL types for the projection UPDATE's VALUES source. Keep this in sync with
+# refresh_clinic_projection_preserving_identity() and the public.clinics schema. These static
+# names are the only interpolated SQL tokens; every value remains a bound parameter.
+POSTGRES_PROJECTION_TYPES = {
+    "clinic_id": "bigint",
+    "clinic_name": "text",
+    "phone": "text",
+    "address": "text",
+    "phone_norm": "text",
+    "tel_match_key": "text",
+    "name_norm": "text",
+    "name_prefix": "text",
+    "address_norm": "text",
+    "prefecture": "text",
+    "medical_type": "text",
+    "effective_json": "text",
+    "active": "boolean",
+    "designation_date": "text",
+    "recent_until": "text",
+    "registration_reason": "text",
+    "owner_equal": "boolean",
+    "age_probability": "double precision",
+    "hp_status": "text",
+    "hp_url": "text",
+    "hp_rank": "text",
+    "signal_count": "integer",
+    "hot_status": "text",
+    "departments_json": "jsonb",
+    "treatments_json": "jsonb",
+    "signals_json": "jsonb",
+    "maps_presence_status": "text",
+    "maps_profile_url": "text",
+    "maps_website_url": "text",
+    "maps_match_method": "text",
+    "maps_checked_at": "text",
+    "exclude_reason": "text",
+    "medical_key": "text",
+}
+
+
 class _DictRows:
     def __init__(self, rows, names):
         self._rows = [dict(zip(names, row)) for row in rows]
@@ -459,6 +499,10 @@ class SupabaseProvenanceWriteRepository:
             # Keep effective_json as TEXT; the legacy escaped-NUL compatibility contract
             # explicitly forbids converting it to JSONB.
             fields["effective_json"] = dumps(fields["effective_json"])
+            if fields.get("age_probability") is not None:
+                fields["age_probability"] = float(fields["age_probability"])
+            if fields.get("signal_count") is not None:
+                fields["signal_count"] = int(fields["signal_count"])
             columns = list(fields)
             bool_columns = {"active", "owner_equal"}
             values = [
@@ -481,15 +525,28 @@ class SupabaseProvenanceWriteRepository:
         if not rows:
             return 0
         aliases = ["clinic_id", *columns]
+        unknown = set(aliases) - POSTGRES_PROJECTION_TYPES.keys()
+        if unknown:
+            raise ValueError(f"Unexpected projection columns: {sorted(unknown)}")
         assignments = ",".join(f"{column}=v.{column}" for column in columns)
         prefix = (
             "UPDATE public.clinics AS c SET " + assignments +
             " FROM (VALUES "
         )
         suffix = ") AS v(" + ",".join(aliases) + ") WHERE c.id=v.clinic_id"
-        return SupabaseProvenanceWriteRepository._execute_values(
-            cur, prefix, rows, suffix, chunk_size=300
-        )
+        executions = 0
+        for offset in range(0, len(rows), 300):
+            chunk = rows[offset:offset + 300]
+            typed_rows = []
+            for row in chunk:
+                typed_rows.append("(" + ",".join(
+                    "%s::" + POSTGRES_PROJECTION_TYPES[column] for column in aliases
+                ) + ")")
+            values_sql = ",".join(typed_rows)
+            params = tuple(value for row in chunk for value in row)
+            cur.execute(prefix + values_sql + suffix, params)
+            executions += 1
+        return executions
 
     def import_maps_results(self, frame):
         """Postgres port of src.master.google_maps.import_maps_results(). The counts
