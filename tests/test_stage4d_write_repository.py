@@ -796,12 +796,12 @@ def test_supabase_maps_target_uses_base_json_when_legacy_effective_json_has_esca
         def execute(self, query, params=None):
             normalized = " ".join(str(query).split())
             self.executed.append((normalized, params))
-            if "effective_json::jsonb" in normalized:
-                raise AssertionError("legacy effective_json must not be parsed as jsonb")
-            if "base_json->>'medical_institution_number'" in normalized:
+            if "effective_json" in normalized:
+                raise AssertionError("identity prefetch must not read legacy effective_json")
+            if "id=ANY(%s::bigint[])" in normalized:
+                self._result = [(294, None, "official-294", None, None, None)]
+            elif "base_json->>'medical_institution_number'=ANY" in normalized:
                 self._result = []
-            elif "base_json->>'clinic_id'" in normalized:
-                self._result = [(294,)]
             else:
                 raise AssertionError(f"unexpected query: {normalized}")
 
@@ -809,42 +809,127 @@ def test_supabase_maps_target_uses_base_json_when_legacy_effective_json_has_esca
             return self._result
 
     cur = LegacyNulCursor()
-    result = SupabaseProvenanceWriteRepository._find_target(
-        cur, {"medical_institution_number": "official-294"}
-    )
+    row = {"medical_institution_number": "official-294"}
+    indexes = SupabaseProvenanceWriteRepository._prefetch_maps_targets(cur, [row])
+    result = SupabaseProvenanceWriteRepository._find_target_prefetched(row, indexes)
 
     assert result == (294, "medical_institution_number", 100)
     sql = "\n".join(query for query, _ in cur.executed)
-    assert "base_json->>'medical_institution_number'" in sql
-    assert "base_json->>'clinic_id'" in sql
     assert "effective_json::jsonb" not in sql
-    source = inspect.getsource(SupabaseProvenanceWriteRepository._find_target)
+    assert "effective_json" not in sql
+    source = inspect.getsource(SupabaseProvenanceWriteRepository._find_target_prefetched)
     assert "effective_json::jsonb" not in source
 
 
 def test_supabase_maps_target_keeps_internal_id_priority_over_base_json_identity():
     from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
-
-    class PriorityCursor:
-        def __init__(self):
-            self.executed = []
-
-        def execute(self, query, params=None):
-            normalized = " ".join(str(query).split())
-            self.executed.append((normalized, params))
-            assert "WHERE id=%s AND merged_into IS NULL" in normalized
-
-        def fetchone(self):
-            return (401,)
-
-    cur = PriorityCursor()
-    result = SupabaseProvenanceWriteRepository._find_target(
-        cur,
+    result = SupabaseProvenanceWriteRepository._find_target_prefetched(
         {"internal_clinic_id": "401", "medical_institution_number": "must-not-be-queried"},
+        _maps_prefetched_indexes(active_ids={401}, by_clinic_id={"must-not-be-queried": [402]}),
     )
 
     assert result == (401, "internal_clinic_id", 100)
-    assert len(cur.executed) == 1
+
+
+def _maps_prefetched_indexes(**overrides):
+    indexes = {
+        "active_ids": set(), "by_official_number": {}, "by_clinic_id": {},
+        "by_phone": {}, "by_name_address": {}, "effective_by_id": {},
+    }
+    indexes.update(overrides)
+    return indexes
+
+
+def test_prefetched_maps_target_matches_official_identity():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    indexes = _maps_prefetched_indexes(by_clinic_id={"official-1": [701]})
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(
+        {"medical_institution_number": "official-1"}, indexes
+    ) == (701, "medical_institution_number", 100)
+
+
+def test_prefetched_maps_target_matches_phone_fallback():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    from src.normalizer.phone import tel_match_key
+    key = tel_match_key("03-1234-5678")
+    indexes = _maps_prefetched_indexes(by_phone={key: [702]})
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(
+        {"source_phone": "03-1234-5678"}, indexes
+    ) == (702, "tel_match_key", 100)
+
+
+def test_prefetched_maps_target_preserves_duplicate_phone_score_gap_rule():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    from src.normalizer.phone import tel_match_key
+    key = tel_match_key("03-1234-5678")
+    indexes = _maps_prefetched_indexes(
+        by_phone={key: [703, 704]},
+        effective_by_id={
+            703: {"clinic_name": "完全一致クリニック", "address": "東京都千代田区"},
+            704: {"clinic_name": "別施設", "address": "大阪府大阪市"},
+        },
+    )
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(
+        {"source_phone": "03-1234-5678", "source_clinic_name": "完全一致クリニック", "source_address": "東京都千代田区"},
+        indexes,
+    )[0:2] == (703, "tel_match_key")
+
+
+def test_prefetched_maps_target_marks_duplicate_phone_tie_ambiguous():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    from src.normalizer.phone import tel_match_key
+    key = tel_match_key("03-1234-5678")
+    same = {"clinic_name": "同一クリニック", "address": "東京都千代田区"}
+    indexes = _maps_prefetched_indexes(
+        by_phone={key: [705, 706]}, effective_by_id={705: same, 706: same}
+    )
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(
+        {"source_phone": "03-1234-5678", "source_clinic_name": "同一クリニック", "source_address": "東京都千代田区"},
+        indexes,
+    ) == (None, "AMBIGUOUS", 0)
+
+
+def test_prefetched_maps_target_matches_name_address_and_not_found():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    from src.normalizer.address import normalize_address
+    from src.normalizer.clinic_name import normalize_clinic_name
+    row = {"source_clinic_name": "品川駅前クリニック", "source_address": "東京都港区港南"}
+    key = (normalize_clinic_name(row["source_clinic_name"]), normalize_address(row["source_address"]))
+    indexes = _maps_prefetched_indexes(by_name_address={key: [707]})
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(row, indexes) == (
+        707, "name_address", 100
+    )
+    assert SupabaseProvenanceWriteRepository._find_target_prefetched(
+        {"source_clinic_name": "", "source_address": ""}, indexes
+    ) == (None, "NOT_FOUND", 0)
+
+
+def test_maps_prefetch_uses_bounded_bulk_queries_not_per_row_identity_queries():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    class CountingCursor:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, query, params=None):
+            self.queries.append(" ".join(str(query).split()))
+
+        def fetchall(self):
+            return []
+
+    rows = [
+        {"internal_clinic_id": str(i + 1), "medical_institution_number": f"official-{i}"}
+        for i in range(1000)
+    ]
+    cur = CountingCursor()
+    indexes = SupabaseProvenanceWriteRepository._prefetch_maps_targets(cur, rows)
+
+    assert indexes["active_ids"] == set()
+    # One bulk canonical/internal query and one compatibility preload query, rather than
+    # 1,000 repeated medical-number and clinic-id scans.
+    assert len(cur.queries) == 2
+    assert sum("base_json->>'medical_institution_number'=ANY" in q for q in cur.queries) == 1
+    assert all("WHERE id=%s" not in q for q in cur.queries)
 
 
 def test_supabase_import_maps_results_preserves_confirmed_website():
@@ -854,7 +939,7 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
     research_result_holder = {}
 
     def route_find_target(q, params):
-        return "id=%s AND merged_into" in q
+        return "SELECT id,base_json->>'medical_institution_number'" in q
 
     def route_base_select(q, params):
         return "SELECT base_json FROM public.clinics WHERE id=%s FOR UPDATE" in q
@@ -864,7 +949,7 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
 
     routes = [
         (lambda q, p: "import_batches" in q and "SELECT" in q, lambda p: None),
-        (route_find_target, lambda p: [(1_000_000_001,)]),
+        (route_find_target, lambda p: [(1_000_000_001, None, None, None, None, None)]),
         (route_base_select, lambda p: [(dict(base),)]),
         (lambda q, p: "research.research_results" in q, lambda p: None),
         (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda p: []),

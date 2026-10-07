@@ -205,73 +205,183 @@ class SupabaseProvenanceWriteRepository:
             _rollback_and_raise(self._conn, exc)
 
     @staticmethod
-    def _find_target(cur, row):
-        """Postgres port of src.master.google_maps.find_target(), same branch order and same
-        tie-break rule (>=30 point gap, else AMBIGUOUS). Identity matching uses canonical
-        base_json JSONB so losslessly preserved legacy effective_json TEXT (including escaped
-        NUL values that PostgreSQL JSONB cannot represent) is never parsed by this path.
+    def _prefetch_maps_targets(cur, records):
+        """Fetch all active clinic candidates for a Maps batch in a few round trips.
+
+        Clinic identity resolution remains row-by-row in Python, but database access is batched:
+        IDs, both official identity fields, phone keys, and normalized names/addresses are loaded
+        with bulk predicates. Duplicate-phone rows fetch their effective JSON together so the
+        legacy scoring rule remains unchanged.
         """
+        from src.master.google_maps import _s
+        from src.normalizer.phone import tel_match_key
+        from src.normalizer.address import normalize_address
+        from src.normalizer.clinic_name import normalize_clinic_name
+
+        internal_ids = set()
+        med_values = set()
+        phone_keys = set()
+        name_address_keys = set()
+        for row in records:
+            internal = _s(row.get("internal_clinic_id"))
+            if internal.isdigit():
+                internal_ids.add(int(internal))
+            med = _s(row.get("medical_institution_number"))
+            if med:
+                med_values.add(med)
+            phone = tel_match_key(_s(row.get("source_phone"))) or tel_match_key(_s(row.get("maps_phone")))
+            if phone:
+                phone_keys.add(phone)
+            name = normalize_clinic_name(_s(row.get("source_clinic_name")))
+            address = normalize_address(_s(row.get("source_address")))
+            if name and address:
+                name_address_keys.add((name, address))
+
+        candidates = {}
+
+        def collect_candidate_rows(rows):
+            for clinic_id, official_number, clinic_key, phone_key, name_norm, address_norm in rows:
+                candidates[int(clinic_id)] = {
+                    "medical_institution_number": official_number,
+                    "clinic_id": clinic_key,
+                    "tel_match_key": phone_key,
+                    "name_norm": name_norm,
+                    "address_norm": address_norm,
+                }
+
+        if internal_ids or med_values:
+            cur.execute(
+                "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
+                "tel_match_key,name_norm,address_norm FROM public.clinics "
+                "WHERE merged_into IS NULL AND (id=ANY(%s::bigint[]) "
+                "OR (COALESCE(base_json->>'clinic_id','')<>'' "
+                "AND base_json->>'clinic_id'=ANY(%s::text[])))",
+                (sorted(internal_ids), sorted(med_values)),
+            )
+            collect_candidate_rows(cur.fetchall())
+
+        # Legacy official-number identity remains supported through one batch lookup. This may
+        # scan once if no index exists, never once per CSV row. In the current production data
+        # the field is empty; Collector's official identifier maps to base_json.clinic_id.
+        if med_values:
+            cur.execute(
+                "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
+                "tel_match_key,name_norm,address_norm FROM public.clinics "
+                "WHERE merged_into IS NULL AND base_json->>'medical_institution_number'=ANY(%s::text[])",
+                (sorted(med_values),),
+            )
+            collect_candidate_rows(cur.fetchall())
+
+        if phone_keys:
+            cur.execute(
+                "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
+                "tel_match_key,name_norm,address_norm FROM public.clinics "
+                "WHERE merged_into IS NULL AND tel_match_key=ANY(%s::text[])",
+                (sorted(phone_keys),),
+            )
+            collect_candidate_rows(cur.fetchall())
+
+        def grouped(key):
+            result = {}
+            for clinic_id, candidate in candidates.items():
+                value = candidate.get(key)
+                if value:
+                    result.setdefault(value, []).append(clinic_id)
+            return result
+
+        by_official_number = grouped("medical_institution_number")
+        by_clinic_id = grouped("clinic_id")
+        by_phone = grouped("tel_match_key")
+        by_name_address = {}
+        for clinic_id, candidate in candidates.items():
+            key = (candidate.get("name_norm"), candidate.get("address_norm"))
+            if key[0] and key[1]:
+                by_name_address.setdefault(key, []).append(clinic_id)
+
+        if name_address_keys:
+            pair_names = [pair[0] for pair in sorted(name_address_keys)]
+            pair_addresses = [pair[1] for pair in sorted(name_address_keys)]
+            cur.execute(
+                "WITH input_pairs AS (SELECT * FROM unnest(%s::text[],%s::text[]) "
+                "AS p(name_norm,address_norm)) "
+                "SELECT c.id,c.name_norm,c.address_norm FROM public.clinics c "
+                "JOIN input_pairs p USING(name_norm,address_norm) WHERE c.merged_into IS NULL",
+                (pair_names, pair_addresses),
+            )
+            for clinic_id, name_norm, address_norm in cur.fetchall():
+                by_name_address.setdefault((name_norm, address_norm), []).append(int(clinic_id))
+
+        by_name_address = {
+            key: sorted(set(clinic_ids)) for key, clinic_ids in by_name_address.items()
+        }
+
+        duplicate_phone_ids = sorted({
+            clinic_id
+            for phone_key in phone_keys
+            for clinic_id in by_phone.get(phone_key, ())
+            if len(by_phone.get(phone_key, ())) > 1
+        })
+        effective_by_id = {}
+        if duplicate_phone_ids:
+            cur.execute(
+                "SELECT id,effective_json FROM public.clinics WHERE id=ANY(%s::bigint[])",
+                (duplicate_phone_ids,),
+            )
+            for clinic_id, raw in cur.fetchall():
+                effective_by_id[int(clinic_id)] = raw if isinstance(raw, dict) else json.loads(raw)
+
+        return {
+            "active_ids": set(candidates),
+            "by_official_number": by_official_number,
+            "by_clinic_id": by_clinic_id,
+            "by_phone": by_phone,
+            "by_name_address": by_name_address,
+            "effective_by_id": effective_by_id,
+        }
+
+    @staticmethod
+    def _find_target_prefetched(row, indexes):
+        """Resolve one Maps row against `_prefetch_maps_targets` with canonical branch priority."""
         from src.master.google_maps import _s, _name_score, _addr_score
         from src.normalizer.phone import tel_match_key
         from src.normalizer.address import normalize_address
         from src.normalizer.clinic_name import normalize_clinic_name
 
         internal = _s(row.get("internal_clinic_id"))
-        if internal.isdigit():
-            cur.execute("SELECT id FROM public.clinics WHERE id=%s AND merged_into IS NULL", (int(internal),))
-            hit = cur.fetchone()
-            if hit:
-                return int(hit[0]), "internal_clinic_id", 100
+        if internal.isdigit() and int(internal) in indexes["active_ids"]:
+            return int(internal), "internal_clinic_id", 100
         med = _s(row.get("medical_institution_number"))
         if med:
-            cur.execute(
-                "SELECT id FROM public.clinics WHERE merged_into IS NULL AND "
-                "base_json->>'medical_institution_number'=%s", (med,)
-            )
-            hits = cur.fetchall()
+            hits = indexes["by_official_number"].get(med, ())
             if len(hits) == 1:
-                return int(hits[0][0]), "medical_institution_number", 100
-            cur.execute(
-                "SELECT id FROM public.clinics WHERE merged_into IS NULL AND "
-                "base_json->>'clinic_id'=%s", (med,)
-            )
-            hits = cur.fetchall()
+                return int(hits[0]), "medical_institution_number", 100
+            hits = indexes["by_clinic_id"].get(med, ())
             if len(hits) == 1:
-                return int(hits[0][0]), "medical_institution_number", 100
-        tk = tel_match_key(_s(row.get("source_phone"))) or tel_match_key(_s(row.get("maps_phone")))
-        if tk:
-            cur.execute(
-                "SELECT id,name_norm,address_norm FROM public.clinics WHERE merged_into IS NULL AND tel_match_key=%s",
-                (tk,),
-            )
-            hits = cur.fetchall()
+                return int(hits[0]), "medical_institution_number", 100
+        phone = tel_match_key(_s(row.get("source_phone"))) or tel_match_key(_s(row.get("maps_phone")))
+        if phone:
+            hits = indexes["by_phone"].get(phone, ())
             if len(hits) == 1:
-                return int(hits[0][0]), "tel_match_key", 100
+                return int(hits[0]), "tel_match_key", 100
             if len(hits) > 1:
                 scored = []
-                for h in hits:
-                    cur.execute("SELECT effective_json FROM public.clinics WHERE id=%s", (h[0],))
-                    raw = cur.fetchone()[0]
-                    d = raw if isinstance(raw, dict) else json.loads(raw)
+                for clinic_id in hits:
+                    data = indexes["effective_by_id"][int(clinic_id)]
                     scored.append((
-                        _name_score(row.get("source_clinic_name"), d.get("clinic_name"))
-                        + _addr_score(row.get("source_address"), d.get("address")),
-                        int(h[0]),
+                        _name_score(row.get("source_clinic_name"), data.get("clinic_name"))
+                        + _addr_score(row.get("source_address"), data.get("address")),
+                        int(clinic_id),
                     ))
                 scored.sort(reverse=True)
-                if scored and (len(scored) == 1 or scored[0][0] - scored[1][0] >= 30):
+                if scored and scored[0][0] - scored[1][0] >= 30:
                     return scored[0][1], "tel_match_key", scored[0][0] / 2
                 return None, "AMBIGUOUS", 0
         name = normalize_clinic_name(_s(row.get("source_clinic_name")))
-        addr = normalize_address(_s(row.get("source_address")))
-        if name and addr:
-            cur.execute(
-                "SELECT id FROM public.clinics WHERE merged_into IS NULL AND name_norm=%s AND address_norm=%s",
-                (name, addr),
-            )
-            hits = cur.fetchall()
+        address = normalize_address(_s(row.get("source_address")))
+        if name and address:
+            hits = indexes["by_name_address"].get((name, address), ())
             if len(hits) == 1:
-                return int(hits[0][0]), "name_address", 100
+                return int(hits[0]), "name_address", 100
         return None, "NOT_FOUND", 0
 
     def import_maps_results(self, frame):
@@ -299,8 +409,9 @@ class SupabaseProvenanceWriteRepository:
                     self._conn.commit()
                     already = old[0] if isinstance(old[0], dict) else json.loads(old[0])
                     return {**already, "already_imported": True}
+                target_indexes = self._prefetch_maps_targets(cur, records)
                 for i, row in enumerate(records, start=2):
-                    cid, method, score = self._find_target(cur, row)
+                    cid, method, score = self._find_target_prefetched(row, target_indexes)
                     maps_status = _s(row.get("maps_match_status"))
                     bucket = classify_match_status(maps_status)
                     if bucket in ("WEBSITE", "NO_WEBSITE"):
