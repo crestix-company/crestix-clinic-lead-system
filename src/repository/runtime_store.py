@@ -198,7 +198,7 @@ class SupabaseRuntimeStore:
         """Counts and export IDs for one completed HP job, all from the canonical HP ledger."""
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
             "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
-            "OR c.clinic_name LIKE '%病院%' OR c.clinic_name LIKE '%センター%')"
+            "OR c.clinic_name LIKE '%%病院%%' OR c.clinic_name LIKE '%%センター%%')"
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT count(*), "

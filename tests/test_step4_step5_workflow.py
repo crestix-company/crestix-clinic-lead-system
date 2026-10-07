@@ -15,12 +15,25 @@ def test_hp_ledger_payload_marks_only_confirmed_success_as_ok():
     assert success["final_url"] == "https://clinic.example/"
     assert json.loads(success["treatment_categories"]) == ["内科"]
     assert success["hp_abc_candidate"] == ""  # does not rewrite HP rank
+    assert success["attempts"] == 1
+    assert success["elapsed_seconds"] == 0  # same runtime worker contract
+    assert success["portal_name"] == ""
 
 
 @pytest.mark.parametrize("status", ["REVIEW", "ERROR", "NOT_FOUND"])
 def test_hp_ledger_payload_retains_terminal_non_success_attempt(status):
     record = _hp_ledger_payload(11, {"research_status": status, "hp_status": status}, status, "attempted")
     assert record["fetch_status"] == status
+    assert record["treatment_status"] == "FETCH_FAILED"
+
+
+def test_review_access_limited_result_keeps_review_status_not_error():
+    record = _hp_ledger_payload(12, {
+        "research_status": "REVIEW", "hp_status": "VERIFIED", "hp_verified": True,
+        "hp_url": "https://clinic.example/", "hp_content_status": "ACCESS_RESTRICTED",
+    }, "REVIEW")
+    assert record["fetch_status"] == "REVIEW"
+    assert record["final_url"] == "https://clinic.example/"
     assert record["treatment_status"] == "FETCH_FAILED"
 
 
@@ -124,7 +137,44 @@ def test_step5_sql_scopes_export_to_job_success_ledger_uuid_and_existing_exclusi
         "i.job_id=%s", "i.state='DONE'", "i.result='SUCCESS'", "h.fetch_status='OK'",
         "COALESCE(BTRIM(h.final_url),'')<>''", "COALESCE(BTRIM(c.uuid),'')=''",
         "c.merged_into IS NULL", "c.merge_hold=false", "exclude_reason IN ('hospital','center')",
-        "c.clinic_name LIKE '%病院%'", "c.clinic_name LIKE '%センター%'",
+        "c.clinic_name LIKE '%%病院%%'", "c.clinic_name LIKE '%%センター%%'",
     ):
         assert required in sql
     assert "uuid" in sql  # UUID is an export-only condition, never a Step4 target condition.
+
+
+def test_missing_only_ledger_repository_never_overwrites_existing_rows():
+    from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
+
+    class InsertCursor(_Cursor):
+        def execute(self, sql, params=()):
+            self.conn.calls.append((" ".join(sql.split()), params))
+            self.row = None if self.conn.conflict else (params[0],)
+
+        def fetchone(self):
+            return self.row
+
+    class InsertConn(_Conn):
+        def __init__(self, rows, conflict=False):
+            super().__init__(rows)
+            self.conflict = conflict
+
+        def cursor(self):
+            return InsertCursor(self)
+
+    conn = InsertConn([])
+    payload = _hp_ledger_payload(303, {
+        "research_status": "REVIEW", "hp_status": "REVIEW", "hp_url": "",
+        "treatment_categories": [],
+    }, "REVIEW")
+    inserted = SupabaseHpWriteRepository(conn).insert_missing_results([payload])
+    sql, params = conn.calls[0]
+    assert inserted == [303]
+    assert "ON CONFLICT(clinic_id) DO NOTHING" in sql
+    assert "DO UPDATE" not in sql
+    assert params[0] == 303
+    assert params[2] == "REVIEW"
+    assert params[15] == 1
+    conflict_conn = InsertConn([], conflict=True)
+    assert SupabaseHpWriteRepository(conflict_conn).insert_missing_results([payload]) == []
+    assert "DO NOTHING" in conflict_conn.calls[0][0]

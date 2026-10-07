@@ -239,8 +239,10 @@ def _hp_ledger_payload(clinic_id, result, status, note=""):
     This deliberately leaves HP rank and Treatment projection fields untouched.
     """
     from datetime import datetime, timezone
+    from src.master.hp_site_type import portal_name_for_url
 
     hp_url = str(result.get("hp_url") or "").strip()
+    final_url = str(result.get("final_url") or hp_url).strip()
     usable = (
         status == "SUCCESS"
         and result.get("hp_status") == "VERIFIED"
@@ -260,7 +262,7 @@ def _hp_ledger_payload(clinic_id, result, status, note=""):
         "clinic_id": clinic_id,
         "hp_url": hp_url,
         "fetch_status": fetch_status,
-        "final_url": str(result.get("final_url") or hp_url).strip(),
+        "final_url": final_url,
         "treatment_status": "DONE" if usable else "FETCH_FAILED",
         "treatment_categories": json.dumps(categories, ensure_ascii=False),
         "hp_abc_candidate": "",
@@ -273,6 +275,8 @@ def _hp_ledger_payload(clinic_id, result, status, note=""):
         "engine_version": "research_jobs_hp_v1",
         "error_detail": str(note or result.get("research_error") or ""),
         "elapsed_seconds": 0,
+        "attempts": 1,
+        "portal_name": portal_name_for_url(final_url or hp_url),
     }
 
 

@@ -77,3 +77,40 @@ class SupabaseHpWriteRepository:
             self._conn.commit()
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
+
+    def insert_missing_results(self, results):
+        """Insert reconstructed ledger entries without ever overwriting an existing clinic row.
+
+        The caller owns the surrounding transaction so a narrowly scoped reconciliation can
+        validate preconditions and insert all missing entries atomically.
+        """
+        from src.master.hp_site_type import portal_name_for_url
+
+        sql = (
+            "INSERT INTO hp_research.clinic_hp_research "
+            "(clinic_id,hp_url,fetch_status,final_url,treatment_status,treatment_categories,"
+            "machine_hp_rank,hp_abc_score,candidate_rank_1,candidate_rank_2,ambiguity_reason,"
+            "feature_json,researched_at,engine_version,error_detail,attempts,elapsed_seconds,portal_name) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+            "ON CONFLICT(clinic_id) DO NOTHING RETURNING clinic_id"
+        )
+        inserted = []
+        with self._conn.cursor() as cur:
+            for result in results:
+                final_url = result.get("final_url") or result.get("hp_url") or ""
+                portal_name = result.get("portal_name", portal_name_for_url(final_url))
+                cur.execute(sql, (
+                    result["clinic_id"], result.get("hp_url") or "", result["fetch_status"],
+                    result.get("final_url") or "", result.get("treatment_status") or "",
+                    Jsonb(json.loads(result.get("treatment_categories") or "[]")),
+                    result.get("hp_abc_candidate") or "", result.get("hp_abc_score") or "",
+                    result.get("candidate_rank_1") or "", result.get("candidate_rank_2") or "",
+                    result.get("ambiguity_reason") or "",
+                    Jsonb(json.loads(result.get("feature_json") or "[]")),
+                    result["researched_at"], result["engine_version"], result.get("error_detail") or "",
+                    int(result.get("attempts", 1)), float(result.get("elapsed_seconds", 0)), portal_name,
+                ))
+                row = cur.fetchone()
+                if row:
+                    inserted.append(row[0])
+        return inserted
