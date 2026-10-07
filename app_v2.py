@@ -509,35 +509,12 @@ def report_import(result):
 
 def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=None):
     """Google MapsでHP URL取得済み医院だけを対象にHP調査ジョブを作る。"""
-    conditions = [
-        "merged_into IS NULL",
-        "merge_hold=0",
-        "active=1",
-        "maps_presence_status='MAPS_MATCHED_WEBSITE'",
-        "maps_website_url<>''",
-    ]
-    args = []
-    if prefecture:
-        conditions.append("prefecture=?")
-        args.append(prefecture)
-    if medical_types:
-        placeholders = ",".join("?" for _ in medical_types)
-        conditions.append(f"medical_type IN ({placeholders})")
-        args.extend(medical_types)
-    if not force:
-        conditions.append("hp_status='UNRESEARCHED'")
-
-    # Candidate selection is read-only; the persistent job+item WRITE goes through the
-    # Repository (Stage4-D Gate2) instead of this file issuing INSERT SQL directly.
-    if getattr(store, "is_supabase_runtime", False):
-        ids = store.maps_hp_candidate_ids(prefecture, medical_types, force, limit)
-    else:
-        with store.connect() as c:
-            ids = [r[0] for r in c.execute(
-                "SELECT id FROM clinics WHERE " + " AND ".join(conditions) +
-                " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
-                (*args, min(500, max(1, int(limit))))
-            )]
+    # Step4 eligibility is owned by the Supabase HP research ledger. A local clinic
+    # projection cannot answer whether a clinic has ever been researched.
+    if not getattr(store, "is_supabase_runtime", False):
+        raise RuntimeError("Step4 HP target selection requires the Supabase research ledger.")
+    # Candidate selection is read-only; persistent job+item WRITE goes through Repository.
+    ids = store.maps_hp_candidate_ids(prefecture, medical_types, force, limit)
     if not ids:
         raise ValueError("現在の条件でHP調査できる医院がありません。")
     return write_repositories_for(store).jobs.create_job(
@@ -546,27 +523,10 @@ def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=Non
 
 
 def _maps_hp_available_count(store, prefecture="", force=False, medical_types=None):
-    conditions = [
-        "merged_into IS NULL",
-        "merge_hold=0",
-        "active=1",
-        "maps_presence_status='MAPS_MATCHED_WEBSITE'",
-        "maps_website_url<>''",
-    ]
-    args = []
-    if prefecture:
-        conditions.append("prefecture=?")
-        args.append(prefecture)
-    if medical_types:
-        placeholders = ",".join("?" for _ in medical_types)
-        conditions.append(f"medical_type IN ({placeholders})")
-        args.extend(medical_types)
-    if not force:
-        conditions.append("hp_status='UNRESEARCHED'")
-    if getattr(store, "is_supabase_runtime", False):
-        return store.maps_hp_available_count(prefecture, medical_types, force)
-    with store.connect() as c:
-        return c.execute("SELECT count(*) FROM clinics WHERE " + " AND ".join(conditions), args).fetchone()[0]
+    # Do not guess research completion from public.clinics.hp_status or local sidecars.
+    if not getattr(store, "is_supabase_runtime", False):
+        return 0
+    return store.maps_hp_available_count(prefecture, medical_types, force)
 
 
 def simple_workflow_ui(store, demo):

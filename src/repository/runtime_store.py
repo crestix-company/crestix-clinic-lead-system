@@ -14,6 +14,30 @@ from src.master.fixed_export import fixed_row
 from src.master.filters import Filters
 
 
+def _maps_hp_target_predicate(prefecture="", medical_types=None, force=False):
+    """Canonical Step4 target predicate shared by displayed count and job candidates."""
+    conditions = [
+        "c.merged_into IS NULL",
+        "c.merge_hold=false",
+        "c.active=true",
+        "c.maps_presence_status='MAPS_MATCHED_WEBSITE'",
+        "COALESCE(BTRIM(c.maps_website_url),'')<>''",
+    ]
+    args = []
+    if prefecture:
+        conditions.append("c.prefecture=%s")
+        args.append(prefecture)
+    if medical_types:
+        conditions.append("c.medical_type=ANY(%s::text[])")
+        args.append(list(medical_types))
+    if not force:
+        conditions.append(
+            "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h "
+            "WHERE h.clinic_id=c.id)"
+        )
+    return " AND ".join(conditions), args
+
+
 class SupabaseRuntimeStore:
     is_supabase_runtime = True
     runtime_identity = "supabase"
@@ -82,39 +106,19 @@ class SupabaseRuntimeStore:
             return bool(cur.fetchone()[0])
 
     def maps_hp_candidate_ids(self, prefecture="", medical_types=None, force=False, limit=500):
-        conditions = [
-            "merged_into IS NULL", "merge_hold=false", "active=true",
-            "maps_presence_status='MAPS_MATCHED_WEBSITE'", "maps_website_url<>''",
-        ]
-        args = []
-        if prefecture:
-            conditions.append("prefecture=%s"); args.append(prefecture)
-        if medical_types:
-            conditions.append("medical_type=ANY(%s)"); args.append(list(medical_types))
-        if not force:
-            conditions.append("hp_status='UNRESEARCHED'")
+        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
         args.append(min(500, max(1, int(limit))))
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id FROM public.clinics WHERE " + " AND ".join(conditions) +
-                " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s", args,
+                "SELECT c.id FROM public.clinics c WHERE " + predicate +
+                " ORDER BY (c.uuid<>'') DESC,c.is_new DESC,c.id LIMIT %s", args,
             )
             return [r[0] for r in cur.fetchall()]
 
     def maps_hp_available_count(self, prefecture="", medical_types=None, force=False):
-        conditions = [
-            "merged_into IS NULL", "merge_hold=false", "active=true",
-            "maps_presence_status='MAPS_MATCHED_WEBSITE'", "maps_website_url<>''",
-        ]
-        args = []
-        if prefecture:
-            conditions.append("prefecture=%s"); args.append(prefecture)
-        if medical_types:
-            conditions.append("medical_type=ANY(%s)"); args.append(list(medical_types))
-        if not force:
-            conditions.append("hp_status='UNRESEARCHED'")
+        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
         with self._conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.clinics WHERE " + " AND ".join(conditions), args)
+            cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
             return cur.fetchone()[0]
 
     def mhlw_join_status(self):
