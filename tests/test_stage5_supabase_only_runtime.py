@@ -52,3 +52,14 @@ def test_production_launchers_contain_no_sqlite_path_contract():
     for path in paths:
         text = path.read_text(encoding="utf-8-sig")
         assert all(name not in text for name in forbidden)
+
+
+def test_external_acceptance_markers_are_stable_distinct_integers():
+    from scripts.supabase_migration.stage5_external_acceptance import _marker, _validate_token
+    token = "__stage5_multipc_acceptance_unit-12345678"
+    _validate_token(token, "multipc")
+    first = _marker(token, "a_to_b")
+    reverse = _marker(token, "b_to_a")
+    assert isinstance(first, int) and 1_500_000_000 <= first < 2_000_000_000
+    assert first == _marker(token, "a_to_b")
+    assert first != reverse

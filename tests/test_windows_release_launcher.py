@@ -53,6 +53,19 @@ def test_both_windows_launchers_are_supabase_only_and_require_no_sqlite_distribu
     assert "Supabase-only" in launch
 
 
+def test_stage5_windows_acceptance_uses_real_launcher_without_secrets():
+    acceptance = _text("scripts/supabase_migration/stage5_windows_acceptance.ps1")
+    launcher = _text("scripts/launch_v2_windows.ps1")
+    assert "$PSVersionTable.PSVersion.Major -ne 5" in acceptance
+    assert "launch_v2_windows.ps1" in acceptance
+    assert "-AcceptanceProbe" in acceptance
+    assert "stage5_external_acceptance.py" in launcher
+    assert "AcceptanceToken" in launcher
+    for text in (acceptance, launcher):
+        assert "postgresql://" not in text
+        assert "SUPABASE_RUNTIME_DB_URL=" not in text
+
+
 def test_release_snapshot_contract_contains_hp_batch_counts():
     expected = json.loads(_text("config/production_data_version.json"))
     assert expected["clinics_count"] == 162_258

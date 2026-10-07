@@ -13,6 +13,10 @@ Code/runtime closure is complete. Final Stage5 acceptance is **not yet complete*
 Mac cannot provide the required Windows PowerShell 5.1 real-device test or a genuine second-PC
 round trip. Those two external acceptance checks are not replaced by same-Mac simulation.
 
+Implementation checkpoint: `93e54aa` (`refactor: complete Supabase-only runtime implementation`).
+The exact external procedure and evidence ledger are in
+`32_stage5_external_acceptance.md`.
+
 ## Removed runtime dependencies
 
 - `app_v2.store_for()` now constructs `SupabaseRuntimeStore` before any `ClinicStore` exists.
@@ -80,9 +84,14 @@ claim, pause/resume, retry, recovery and idempotent finish without duplicate eff
 A genuine PC-A → Supabase → PC-B acceptance cannot be performed from this single Mac and remains
 pending. Same-host processes were deliberately not reported as two PCs.
 
+The helper protocol was nevertheless exercised end-to-end on this Mac using separate processes:
+forward write/read, reverse write/read, and exact cleanup all passed through `clinic_runtime`.
+This validates the commands and cleanup guardrails, but is not external two-PC evidence.
+
 ## Regression and integrity
 
-- Full pytest: **1101 passed, 0 failed, 25 skipped**; critical runtime skips = 0.
+- Full pytest after adding the external-acceptance helpers: **1103 passed, 0 failed,
+  25 skipped**; critical runtime skips = 0.
 - Parity: **46/46 PASS**.
 - Comparator: **38/38**, mismatch 0.
 - UI baseline: 997 / 997 / 515 / 482 / 68 / 747; Treatment, HP and pagination PASS.
