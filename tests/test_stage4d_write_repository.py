@@ -655,3 +655,249 @@ def test_supabase_import_maps_results_already_imported_is_idempotent_noop():
     assert result["NOT_FOUND"] == 1
     # Idempotent retry must not issue any INSERT/UPDATE -- it's a pure read-and-return.
     assert not any(q.startswith("INSERT") or q.startswith("UPDATE") for q, _ in conn.executed)
+
+
+# ---------------------------------------------------------------------------------------------
+# Treatment worker Repositoryization (scripts/research_worker.py)
+# ---------------------------------------------------------------------------------------------
+
+def _treatment_status_row(research_status="DONE", candidate_count=1, **overrides):
+    row = {
+        "research_status": research_status, "candidate_count": candidate_count,
+        "source_url": "https://a.example/", "final_url": "https://a.example/",
+        "identity_verified": research_status == "DONE", "attempts": 1, "last_error": "",
+        "taxonomy_version": "7A-v2", "evidence_engine_version": "phase7b-context-v3",
+        "manifest_id": "phase7-fullrun-test0000", "git_commit_sha": "deadbeef",
+        "researched_at": "2026-09-30T00:00:00+00:00",
+    }
+    row.update(overrides)
+    return row
+
+
+def _treatment_row(category="胃カメラ検査", status="CONFIRMED"):
+    return {
+        "treatment_category_name": category, "research_status": status,
+        "matched_alias": "胃カメラ", "source_url": "https://a.example/",
+        "page_title": "診療案内", "provider_context": "SELF_OFFER", "exclusion_context": "NONE",
+        "evidence_engine_version": "phase7b-context-v3", "taxonomy_version": "7A-v2",
+        "researched_at": "2026-09-30T00:00:00+00:00", "git_commit_sha": "deadbeef",
+        "manifest_id": "phase7-fullrun-test0000",
+    }
+
+
+def test_sqlite_treatment_repo_delegates_to_write_clinic_atomic(tmp_path):
+    from scripts import research_worker as worker
+    from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
+    db = worker.open_final_db(tmp_path / "final.sqlite3")
+    repo = SqliteTreatmentWriteRepository(db)
+    repo.write_clinic_result(42, [_treatment_row()], _treatment_status_row())
+    got = db.execute(
+        "SELECT research_status FROM clinic_treatment_research_final WHERE clinic_id=?", (42,)
+    ).fetchone()
+    assert got == ("CONFIRMED",)
+
+
+def test_sqlite_treatment_repo_idempotent_same_clinic_twice(tmp_path):
+    """same job item x2: identical input re-applied must not duplicate rows."""
+    from scripts import research_worker as worker
+    from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
+    db = worker.open_final_db(tmp_path / "final.sqlite3")
+    repo = SqliteTreatmentWriteRepository(db)
+    row = _treatment_row()
+    repo.write_clinic_result(1, [row], _treatment_status_row())
+    repo.write_clinic_result(1, [row], _treatment_status_row())  # retry with identical input
+    count = db.execute("SELECT count(*) FROM clinic_treatment_research_final WHERE clinic_id=?", (1,)).fetchone()[0]
+    assert count == 1  # not 2
+
+
+def test_sqlite_treatment_repo_retry_after_external_success_no_duplicate():
+    """retry after external API success / unknown commit outcome: re-submitting the SAME
+    result (as a client would on an ambiguous commit outcome) must not create a second
+    business result -- DELETE+INSERT replace semantics make this true by construction."""
+    import tempfile, os as _os
+    from scripts import research_worker as worker
+    from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
+    fd, path = tempfile.mkstemp(suffix=".sqlite3"); _os.close(fd); _os.remove(path)
+    db = worker.open_final_db(__import__("pathlib").Path(path))
+    repo = SqliteTreatmentWriteRepository(db)
+    rows = [_treatment_row("胃カメラ検査"), _treatment_row("大腸カメラ検査")]
+    repo.write_clinic_result(7, rows, _treatment_status_row(candidate_count=2))
+    # Simulate "client never received the commit ack" -> client retries the identical call.
+    repo.write_clinic_result(7, rows, _treatment_status_row(candidate_count=2))
+    count = db.execute("SELECT count(*) FROM clinic_treatment_research_final WHERE clinic_id=?", (7,)).fetchone()[0]
+    assert count == 2  # exactly the 2 categories, not 4
+    _os.remove(path)
+
+
+def test_sqlite_treatment_repo_worker_restart_resumable_state_unaffected():
+    """worker restart: a FETCH_FAILED write after a prior DONE must not clobber the prior
+    successful Treatment rows (matches write_clinic_atomic's own documented invariant)."""
+    import tempfile, os as _os
+    from scripts import research_worker as worker
+    from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
+    fd, path = tempfile.mkstemp(suffix=".sqlite3"); _os.close(fd); _os.remove(path)
+    db = worker.open_final_db(__import__("pathlib").Path(path))
+    repo = SqliteTreatmentWriteRepository(db)
+    repo.write_clinic_result(9, [_treatment_row()], _treatment_status_row(research_status="DONE"))
+    # Process "restarts" and reprocesses clinic 9, this time hitting a transient fetch failure.
+    repo.write_clinic_result(9, [], _treatment_status_row(research_status="FETCH_FAILED", candidate_count=0))
+    still_there = db.execute(
+        "SELECT research_status FROM clinic_treatment_research_final WHERE clinic_id=?", (9,)
+    ).fetchone()
+    assert still_there == ("CONFIRMED",)  # prior successful result preserved
+    status = db.execute("SELECT research_status FROM clinic_research_status WHERE clinic_id=?", (9,)).fetchone()
+    assert status == ("FETCH_FAILED",)  # but the attempt-level status reflects the latest attempt
+    _os.remove(path)
+
+
+class FakeTreatmentCursor:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, query, params=None):
+        self._conn.executed.append((" ".join(str(query).split()), params))
+
+    def executemany(self, query, seq):
+        for params in seq:
+            self.execute(query, params)
+
+    def fetchone(self):
+        return None  # no prior row by default (e.g. HP repo's attempts lookup)
+
+
+class FakeTreatmentConn:
+    def __init__(self):
+        self.executed = []
+        self.committed = 0
+        self.rolled_back = 0
+
+    def cursor(self):
+        return FakeTreatmentCursor(self)
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def test_supabase_treatment_repo_done_deletes_then_inserts_and_upserts_status():
+    from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
+    conn = FakeTreatmentConn()
+    repo = SupabaseTreatmentWriteRepository(conn)
+    repo.write_clinic_result(42, [_treatment_row()], _treatment_status_row())
+    statements = [q for q, _ in conn.executed]
+    assert any(s.startswith("DELETE FROM treatment.clinic_treatment_research") for s in statements)
+    assert any(s.startswith("INSERT INTO treatment.clinic_treatment_research") for s in statements)
+    assert any("ON CONFLICT(clinic_id) DO UPDATE" in s for s in statements)
+    assert conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_supabase_treatment_repo_fetch_failed_skips_delete_and_insert():
+    from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
+    conn = FakeTreatmentConn()
+    repo = SupabaseTreatmentWriteRepository(conn)
+    repo.write_clinic_result(9, [], _treatment_status_row(research_status="FETCH_FAILED", candidate_count=0))
+    statements = [q for q, _ in conn.executed]
+    assert not any("clinic_treatment_research" in s and "DELETE" in s for s in statements)
+    assert any("clinic_research_status" in s for s in statements)
+    assert conn.committed == 1
+
+
+def test_supabase_treatment_repo_failure_rolls_back_not_falls_back():
+    from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
+
+    class ExplodingConn(FakeTreatmentConn):
+        def cursor(self):
+            class Boom:
+                def __enter__(self2): return self2
+                def __exit__(self2, *a): return False
+                def execute(self2, *a, **k): raise RuntimeError("simulated failure")
+            return Boom()
+
+    conn = ExplodingConn()
+    repo = SupabaseTreatmentWriteRepository(conn)
+    with pytest.raises(RuntimeError):
+        repo.write_clinic_result(1, [], _treatment_status_row())
+    assert conn.rolled_back == 1 and conn.committed == 0
+
+
+# ---------------------------------------------------------------------------------------------
+# HP research batch worker Repositoryization (src/master/hp_research_batch.py)
+# ---------------------------------------------------------------------------------------------
+
+def _hp_result(clinic_id=1, fetch_status="OK", **overrides):
+    row = {
+        "clinic_id": clinic_id, "hp_url": "https://example.jp/", "fetch_status": fetch_status,
+        "final_url": "https://example.jp/", "treatment_status": "DONE" if fetch_status == "OK" else "FETCH_FAILED",
+        "treatment_categories": "[]", "hp_abc_candidate": "C", "hp_abc_score": "pos=2,neg=0",
+        "candidate_rank_1": "", "candidate_rank_2": "", "ambiguity_reason": "", "feature_json": "[]",
+        "researched_at": "2026-10-05T00:00:00+00:00", "engine_version": "test", "error_detail": "",
+        "elapsed_seconds": 1.0,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_sqlite_hp_repo_delegates_to_upsert_result(tmp_path):
+    from src.master.hp_research_batch import connect_sidecar
+    from src.repository.hp_sqlite_write_adapter import SqliteHpWriteRepository
+    with connect_sidecar(tmp_path / "sidecar.sqlite3") as conn:
+        repo = SqliteHpWriteRepository(conn)
+        repo.upsert_result(_hp_result())
+        row = conn.execute("SELECT attempts, fetch_status FROM hp_research_batch_results WHERE clinic_id=1").fetchone()
+        assert row["attempts"] == 1 and row["fetch_status"] == "OK"
+
+
+def test_sqlite_hp_repo_idempotent_same_item_twice_tracks_attempts(tmp_path):
+    """same batch item x2 / retry after external success: attempts increments, no duplicate row."""
+    from src.master.hp_research_batch import connect_sidecar
+    from src.repository.hp_sqlite_write_adapter import SqliteHpWriteRepository
+    with connect_sidecar(tmp_path / "sidecar.sqlite3") as conn:
+        repo = SqliteHpWriteRepository(conn)
+        result = _hp_result()
+        repo.upsert_result(result)
+        repo.upsert_result(result)  # worker restart / retry with identical input
+        rows = conn.execute("SELECT * FROM hp_research_batch_results").fetchall()
+        assert len(rows) == 1
+        assert rows[0]["attempts"] == 2
+
+
+def test_supabase_hp_repo_upsert_sql_shape_and_rename_and_jsonb():
+    from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
+    conn = FakeTreatmentConn()  # reused generic fake: records SQL text + params, tracks commit/rollback
+    repo = SupabaseHpWriteRepository(conn)
+    repo.upsert_result(_hp_result(treatment_categories='["内科"]', feature_json='["x"]'))
+    statements = [q for q, _ in conn.executed]
+    insert_stmt = next(s for s in statements if s.startswith("INSERT INTO hp_research.clinic_hp_research"))
+    assert "machine_hp_rank" in insert_stmt and "hp_abc_candidate" not in insert_stmt
+    assert "ON CONFLICT(clinic_id) DO UPDATE" in insert_stmt
+    insert_params = next(p for q, p in conn.executed if q.startswith("INSERT INTO hp_research.clinic_hp_research"))
+    from psycopg.types.json import Jsonb
+    assert isinstance(insert_params[5], Jsonb)  # treatment_categories wrapped, not a raw string
+    assert insert_params[-2] == 1  # attempts = prior_attempts(0) + 1
+    assert conn.committed == 1
+
+
+def test_supabase_hp_repo_failure_rolls_back_not_falls_back():
+    from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
+
+    class ExplodingConn(FakeTreatmentConn):
+        def cursor(self):
+            class Boom:
+                def __enter__(self2): return self2
+                def __exit__(self2, *a): return False
+                def execute(self2, *a, **k): raise RuntimeError("simulated failure")
+            return Boom()
+
+    conn = ExplodingConn()
+    repo = SupabaseHpWriteRepository(conn)
+    with pytest.raises(RuntimeError):
+        repo.upsert_result(_hp_result())
+    assert conn.rolled_back == 1 and conn.committed == 0

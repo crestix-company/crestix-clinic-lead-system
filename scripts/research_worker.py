@@ -361,6 +361,23 @@ def write_clinic_atomic(db: sqlite3.Connection, clinic_id: int, rows: list[dict]
         raise
 
 
+def _build_treatment_repo(final_db_conn):
+    """Stage4-D Gate2 WRITE backend selector for this worker, independent of app_v2.py's
+    CLINIC_WRITE_BACKEND plumbing (this is a separate process) but using the same env var and
+    the same default (sqlite) so the two stay consistent if both are configured together."""
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
+    if active_write_backend() == WRITE_BACKEND_SQLITE:
+        from src.repository.treatment_sqlite_write_adapter import SqliteTreatmentWriteRepository
+        return SqliteTreatmentWriteRepository(final_db_conn)
+    import os as _os
+    from src.repository.supabase_adapter import connect
+    from src.repository.treatment_supabase_write_adapter import SupabaseTreatmentWriteRepository
+    url = _os.environ.get("SUPABASE_DB_URL")
+    if not url:
+        raise RuntimeError("SUPABASE_DB_URL is not set")
+    return SupabaseTreatmentWriteRepository(connect(url, autocommit=False))
+
+
 # ---------------------------------------------------------------------------
 # Fetch + classify one clinic (bounded retry/backoff on the fetch step only;
 # retrying the classifier is pointless -- it is pure/deterministic)
@@ -573,6 +590,7 @@ def run_worker(manifest_path: Path, retry_failed: bool, concurrency: int, batch_
     progress_db = open_progress_db(paths["progress_db"])
     cache_db = open_cache_db(paths["cache_db"])
     final_db = open_final_db(FINAL_DB)
+    treatment_repo = _build_treatment_repo(final_db)
     seed_progress(progress_db, list(records))
     # The lockfile above guarantees no other live worker holds this manifest, so any
     # IN_PROGRESS rows here are leftovers from a prior crash/kill, not a concurrent
@@ -626,7 +644,12 @@ def run_worker(manifest_path: Path, retry_failed: bool, concurrency: int, batch_
                 "git_commit_sha": record["git_commit_sha"],
                 "researched_at": _now(),
             }
-            write_clinic_atomic(final_db, clinic_id, rows, status_row)
+            # Stage4-D Gate2: persistent WRITE to the shared final results DB goes through the
+            # Repository (same SQL/atomicity -- see write_clinic_atomic() above, now called
+            # from inside SqliteTreatmentWriteRepository rather than directly from here).
+            # cache.sqlite3/progress.sqlite3 stay local, unmanaged by the Repository (see
+            # src/repository/treatment_write_contracts.py's module docstring for why).
+            treatment_repo.write_clinic_result(clinic_id, rows, status_row)
             if "pages" in meta:
                 cache_clinic_pages(cache_db, clinic_id, meta["pages"])
             mark_progress(progress_db, clinic_id, status, error=fetch_status, candidate_count=candidate_count)

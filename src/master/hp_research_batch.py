@@ -261,6 +261,22 @@ def upsert_result(sidecar_conn, result):
     sidecar_conn.commit()
 
 
+def _build_hp_repo(sidecar_conn):
+    """Stage4-D Gate2 WRITE backend selector for this worker. Same env var/default (sqlite)
+    as app_v2.py's write_repositories_for(), consistent if both are configured together."""
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
+    if active_write_backend() == WRITE_BACKEND_SQLITE:
+        from src.repository.hp_sqlite_write_adapter import SqliteHpWriteRepository
+        return SqliteHpWriteRepository(sidecar_conn)
+    import os as _os
+    from src.repository.supabase_adapter import connect
+    from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
+    url = _os.environ.get("SUPABASE_DB_URL")
+    if not url:
+        raise RuntimeError("SUPABASE_DB_URL is not set")
+    return SupabaseHpWriteRepository(connect(url, autocommit=False))
+
+
 @dataclass
 class BatchRunReport:
     target: int
@@ -279,6 +295,7 @@ def run_batch(production_db_path, limit, batch_size=20, sidecar_path=None, treat
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     with connect_sidecar(sidecar_path) as sidecar_conn:
+        hp_repo = _build_hp_repo(sidecar_conn)
         candidates = select_candidates(production_db_path, sidecar_conn, limit, treatment_sidecar_path)
         attempted = succeeded = failed = retried = 0
         elapsed_list = []
@@ -312,7 +329,10 @@ def run_batch(production_db_path, limit, batch_size=20, sidecar_path=None, treat
                     ).fetchone()
                     if prior and prior["attempts"] > 0:
                         retried += 1
-                    upsert_result(sidecar_conn, result)
+                    # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL,
+                    # same idempotent ON CONFLICT upsert -- see upsert_result() above, now
+                    # called from inside SqliteHpWriteRepository rather than directly here).
+                    hp_repo.upsert_result(result)
                     attempted += 1
                     if result["fetch_status"] == "OK":
                         succeeded += 1
