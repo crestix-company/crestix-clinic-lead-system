@@ -64,3 +64,16 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert not app.exception and not app.error
     next(s for s in app.selectbox if s.label=="開く画面").set_value("自動情報収集（詳細）").run()
     assert not app.exception and not app.error
+
+
+def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
+    import inspect
+    import app_v2
+
+    source = inspect.getsource(app_v2.simple_workflow_ui)
+    assert '"この調査を再開"' in source
+    assert 'current["status"] in {"PAUSED", "BUDGET"}' in source
+    assert "unfinished" in source
+    assert "disabled=demo or runner.running() or unfinished or actual == 0" in source
+    assert 'j.get("kind") == "hp"' in source
+    assert "上の「ウェブサイト調査対象」は新しいジョブ用の件数" in source
