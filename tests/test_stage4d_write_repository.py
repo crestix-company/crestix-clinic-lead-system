@@ -941,19 +941,15 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
     def route_find_target(q, params):
         return "SELECT id,base_json->>'medical_institution_number'" in q
 
-    def route_base_select(q, params):
-        return "SELECT base_json FROM public.clinics WHERE id=%s FOR UPDATE" in q
-
-    def route_projection_select(q, params):
-        return "base_json,uuid,medical_key" in q
+    def route_clinic_state(q, params):
+        return "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q
 
     routes = [
         (lambda q, p: "import_batches" in q and "SELECT" in q, lambda p: None),
         (route_find_target, lambda p: [(1_000_000_001, None, None, None, None, None)]),
-        (route_base_select, lambda p: [(dict(base),)]),
-        (lambda q, p: "research.research_results" in q, lambda p: None),
+        (route_clinic_state, lambda p: [(1_000_000_001, dict(base), "uuid-1", "")]),
+        (lambda q, p: "research.research_results" in q, lambda p: []),
         (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda p: []),
-        (route_projection_select, lambda p: [(dict(base), "", "")]),
         (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda p: None),
     ]
     conn = RoutingFakeConn(routes)
@@ -966,8 +962,134 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
     counts = repo.import_maps_results(frame)
     assert counts["PRESERVED_WEBSITE"] == 1
     assert conn.committed == 1 and conn.rolled_back == 0
-    update_calls = [p for q, p in conn.executed if q.startswith("UPDATE public.clinics SET base_json")]
-    assert update_calls, "expected a base_json UPDATE to have been issued"
+    update_calls = [q for q, _ in conn.executed if "UPDATE public.clinics AS c SET base_json=v.base_json" in q]
+    assert update_calls, "expected a bulk base_json UPDATE to have been issued"
+    assert any("UPDATE public.clinics AS c SET" in q and "effective_json" in q for q, _ in conn.executed)
+
+
+def test_supabase_maps_batch_preserves_sequential_semantics_for_repeated_clinic():
+    import pandas as pd
+    from src.master.google_maps import build_maps_update
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    clinic_id = 1_000_000_031
+    initial = {"clinic_name": "順序確認クリニック", "address": "東京都港区", "uuid": "stable-uuid"}
+    routes = [
+        (lambda q, p: "import_batches" in q and "SELECT" in q, lambda _p: None),
+        (lambda q, p: "SELECT id,base_json->>'medical_institution_number'" in q,
+         lambda _p: [(clinic_id, None, "official-31", None, None, None)]),
+        (lambda q, p: "base_json->>'medical_institution_number'=ANY" in q, lambda _p: []),
+        (lambda q, p: "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q,
+         lambda _p: [(clinic_id, dict(initial), "stable-uuid", "")]),
+        (lambda q, p: "research.research_results" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda _p: None),
+    ]
+    conn = RoutingFakeConn(routes)
+    repo = SupabaseProvenanceWriteRepository(conn)
+    rows = [
+        _maps_row(internal_clinic_id=str(clinic_id), maps_match_status="MAPS_MATCHED_WEBSITE",
+                  maps_website_url="https://one.example", website_status="WEBSITE", scraped_at="t1"),
+        _maps_row(internal_clinic_id=str(clinic_id), maps_match_status="MAPS_MATCHED_WEBSITE",
+                  maps_website_url="https://two.example", website_status="WEBSITE", scraped_at="t2"),
+    ]
+    repo.import_maps_results(pd.DataFrame(rows))
+
+    expected = dict(initial)
+    expected_history = []
+    for row in rows:
+        before = dict(expected)
+        update, _ = build_maps_update(row, expected, row["maps_match_status"], "internal_clinic_id")
+        expected.update(update)
+        if before != expected:
+            expected_history.append((before, dict(expected)))
+
+    base_write = next(params for query, params in conn.executed if "UPDATE public.clinics AS c SET base_json=v.base_json" in query)
+    actual_final = base_write[1].obj
+    _raw_insert_query, raw_insert_params = next(
+        (query, params) for query, params in conn.executed
+        if query.startswith("INSERT INTO provenance.google_maps_results")
+    )
+    assert len(raw_insert_params) == 20
+    assert raw_insert_params[0] == clinic_id and raw_insert_params[2] == 2
+    assert raw_insert_params[3].obj["maps_website_url"] == "https://one.example"
+    assert raw_insert_params[10] == clinic_id and raw_insert_params[12] == 3
+    assert raw_insert_params[13].obj["maps_website_url"] == "https://two.example"
+    history_call = next(params for query, params in conn.executed if query.startswith("INSERT INTO provenance.change_history"))
+    actual_history = [
+        (json.loads(history_call[i + 2]), json.loads(history_call[i + 3]))
+        for i in range(0, len(history_call), 6)
+    ]
+    assert actual_final == expected
+    assert actual_history == expected_history
+    assert actual_final["maps_website_url"] == "https://two.example"
+    assert len(actual_history) == 2
+    assert repo._last_import_metrics["sql_execute_count"] < 20
+    projection_sql, projection_params = next(
+        (query, params) for query, params in conn.executed
+        if query.startswith("UPDATE public.clinics AS c SET") and "effective_json" in query
+    )
+    assignments = projection_sql.split(" FROM ", 1)[0]
+    assert "uuid=v." not in assignments and "id=v." not in assignments
+    from src.master.identity_contract import refresh_clinic_projection_preserving_identity
+    from src.master.store import dumps
+    projected = refresh_clinic_projection_preserving_identity(
+        {**expected, "uuid": "stable-uuid", "manual_fields": []}
+    )
+    projected["effective_json"] = dumps(projected["effective_json"])
+    for column, expected_value in projected.items():
+        actual_value = projection_params[1 + list(projected).index(column)]
+        if column in ("departments_json", "treatments_json", "signals_json"):
+            actual_value = actual_value.obj
+        if column in ("active", "owner_equal") and expected_value is not None:
+            expected_value = bool(expected_value)
+        assert actual_value == expected_value, f"projection column mismatch: {column}"
+
+
+@pytest.mark.parametrize("failure_point", ["maps_insert", "base_write", "projection_calc"])
+def test_supabase_maps_batch_failure_rolls_back_without_commit(failure_point, monkeypatch):
+    import pandas as pd
+    import src.repository.supabase_write_adapter as adapter
+
+    clinic_id = 1_000_000_041
+    state = {"clinic_name": "Rollback Clinic", "address": "東京都港区"}
+
+    class FailureCursor(RoutingFakeCursor):
+        def execute(self, query, params=None):
+            normalized = " ".join(str(query).split())
+            result = super().execute(query, params)
+            if failure_point == "maps_insert" and normalized.startswith("INSERT INTO provenance.google_maps_results"):
+                raise RuntimeError("injected failure after provenance bulk insert")
+            if failure_point == "base_write" and normalized.startswith("UPDATE public.clinics AS c SET base_json"):
+                raise RuntimeError("injected failure after clinic base write")
+            if failure_point == "projection_calc" and normalized.startswith("UPDATE public.clinics AS c SET") and "effective_json" in normalized:
+                raise RuntimeError("injected failure after projection calculation")
+            return result
+
+    class FailureConn(RoutingFakeConn):
+        def cursor(self):
+            return FailureCursor(self)
+
+    routes = [
+        (lambda q, p: "import_batches" in q and "SELECT" in q, lambda _p: None),
+        (lambda q, p: "SELECT id,base_json->>'medical_institution_number'" in q,
+         lambda _p: [(clinic_id, None, "official-41", None, None, None)]),
+        (lambda q, p: "base_json->>'medical_institution_number'=ANY" in q, lambda _p: []),
+        (lambda q, p: "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q,
+         lambda _p: [(clinic_id, dict(state), "uuid-41", "")]),
+        (lambda q, p: "research.research_results" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda _p: None),
+    ]
+    conn = FailureConn(routes)
+    frame = pd.DataFrame([_maps_row(
+        internal_clinic_id=str(clinic_id), maps_match_status="MAPS_MATCHED_WEBSITE",
+        maps_website_url="https://rollback.example", website_status="WEBSITE",
+    )])
+    with pytest.raises(RuntimeError, match="injected"):
+        adapter.SupabaseProvenanceWriteRepository(conn).import_maps_results(frame)
+    assert conn.rolled_back == 1
+    assert conn.committed == 0
 
 
 def test_supabase_import_maps_results_already_imported_is_idempotent_noop():
