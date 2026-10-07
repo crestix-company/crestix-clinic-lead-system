@@ -207,9 +207,9 @@ class SupabaseProvenanceWriteRepository:
     @staticmethod
     def _find_target(cur, row):
         """Postgres port of src.master.google_maps.find_target(), same branch order and same
-        tie-break rule (>=30 point gap, else AMBIGUOUS). effective_json is TEXT in Postgres
-        (preserves SQLite JSON text losslessly, see schema_target.sql); cast to jsonb inline for
-        the two ->> lookups, matching SQLite's json_extract(effective_json, '$....') exactly.
+        tie-break rule (>=30 point gap, else AMBIGUOUS). Identity matching uses canonical
+        base_json JSONB so losslessly preserved legacy effective_json TEXT (including escaped
+        NUL values that PostgreSQL JSONB cannot represent) is never parsed by this path.
         """
         from src.master.google_maps import _s, _name_score, _addr_score
         from src.normalizer.phone import tel_match_key
@@ -226,14 +226,14 @@ class SupabaseProvenanceWriteRepository:
         if med:
             cur.execute(
                 "SELECT id FROM public.clinics WHERE merged_into IS NULL AND "
-                "(effective_json::jsonb)->>'medical_institution_number'=%s", (med,)
+                "base_json->>'medical_institution_number'=%s", (med,)
             )
             hits = cur.fetchall()
             if len(hits) == 1:
                 return int(hits[0][0]), "medical_institution_number", 100
             cur.execute(
                 "SELECT id FROM public.clinics WHERE merged_into IS NULL AND "
-                "(effective_json::jsonb)->>'clinic_id'=%s", (med,)
+                "base_json->>'clinic_id'=%s", (med,)
             )
             hits = cur.fetchall()
             if len(hits) == 1:

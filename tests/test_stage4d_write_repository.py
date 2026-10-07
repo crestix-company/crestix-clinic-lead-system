@@ -781,6 +781,72 @@ class RoutingFakeConn:
         self.rolled_back += 1
 
 
+def test_supabase_maps_target_uses_base_json_when_legacy_effective_json_has_escaped_nul():
+    """A legacy TEXT payload containing literal ``\\u0000`` must never be cast to jsonb."""
+    import inspect
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    class LegacyNulCursor:
+        legacy_effective_json = r'{"hp_research_value":"legacy\u0000value"}'
+
+        def __init__(self):
+            self.executed = []
+            self._result = []
+
+        def execute(self, query, params=None):
+            normalized = " ".join(str(query).split())
+            self.executed.append((normalized, params))
+            if "effective_json::jsonb" in normalized:
+                raise AssertionError("legacy effective_json must not be parsed as jsonb")
+            if "base_json->>'medical_institution_number'" in normalized:
+                self._result = []
+            elif "base_json->>'clinic_id'" in normalized:
+                self._result = [(294,)]
+            else:
+                raise AssertionError(f"unexpected query: {normalized}")
+
+        def fetchall(self):
+            return self._result
+
+    cur = LegacyNulCursor()
+    result = SupabaseProvenanceWriteRepository._find_target(
+        cur, {"medical_institution_number": "official-294"}
+    )
+
+    assert result == (294, "medical_institution_number", 100)
+    sql = "\n".join(query for query, _ in cur.executed)
+    assert "base_json->>'medical_institution_number'" in sql
+    assert "base_json->>'clinic_id'" in sql
+    assert "effective_json::jsonb" not in sql
+    source = inspect.getsource(SupabaseProvenanceWriteRepository._find_target)
+    assert "effective_json::jsonb" not in source
+
+
+def test_supabase_maps_target_keeps_internal_id_priority_over_base_json_identity():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    class PriorityCursor:
+        def __init__(self):
+            self.executed = []
+
+        def execute(self, query, params=None):
+            normalized = " ".join(str(query).split())
+            self.executed.append((normalized, params))
+            assert "WHERE id=%s AND merged_into IS NULL" in normalized
+
+        def fetchone(self):
+            return (401,)
+
+    cur = PriorityCursor()
+    result = SupabaseProvenanceWriteRepository._find_target(
+        cur,
+        {"internal_clinic_id": "401", "medical_institution_number": "must-not-be-queried"},
+    )
+
+    assert result == (401, "internal_clinic_id", 100)
+    assert len(cur.executed) == 1
+
+
 def test_supabase_import_maps_results_preserves_confirmed_website():
     from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
 
