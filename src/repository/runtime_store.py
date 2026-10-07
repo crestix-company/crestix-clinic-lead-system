@@ -195,11 +195,12 @@ class SupabaseRuntimeStore:
                 "target_count": row[3], "done_count": row[4]}
 
     def hp_job_export_summary(self, job_id):
-        """Counts and export IDs for one completed HP job, all from the canonical HP ledger."""
+        """Current-job metrics plus the cumulative UUID-empty Comdesk waiting list."""
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
             "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
             "OR c.clinic_name LIKE '%%病院%%' OR c.clinic_name LIKE '%%センター%%')"
         with self._conn.cursor() as cur:
+            # The first four metrics intentionally remain scoped to the selected completed job.
             cur.execute(
                 "SELECT count(*), "
                 "count(*) FILTER (WHERE i.state='DONE'), "
@@ -218,12 +219,31 @@ class SupabaseRuntimeStore:
                 "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
                 "WHERE i.job_id=%s", ('"facility_type":"([^"]*)"', job_id),
             )
-            target, done, success, uuid_existing, ids = cur.fetchone()
+            target, done, success, uuid_existing, current_ids = cur.fetchone()
+
+            # Comdesk waiting is cumulative across HP research runs. A clinic stays here until
+            # a UUID is actually written back to public.clinics; downloading a CSV does not
+            # remove it. The canonical HP ledger + clinic_id provide durable de-duplication.
+            cur.execute(
+                "SELECT COALESCE(array_agg(c.id ORDER BY c.id),'{}') "
+                "FROM public.clinics c "
+                "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id "
+                "WHERE h.fetch_status='OK' "
+                "AND COALESCE(BTRIM(h.final_url),'')<>'' "
+                "AND COALESCE(BTRIM(c.uuid),'')='' "
+                "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion,
+                ('"facility_type":"([^"]*)"',),
+            )
+            waiting_ids = list(cur.fetchone()[0] or [])
+
+        current_set = set(current_ids or [])
+        carryover_count = sum(1 for clinic_id in waiting_ids if clinic_id not in current_set)
         return {"target_count": target, "done_count": done, "success_count": success,
-                "uuid_existing_count": uuid_existing, "export_ids": list(ids or [])}
+                "uuid_existing_count": uuid_existing, "export_ids": waiting_ids,
+                "carryover_count": carryover_count}
 
     def export_hp_job(self, job_id):
-        """Render only successful, UUID-empty clinics from the explicitly selected HP job."""
+        """Render the cumulative successful UUID-empty Comdesk waiting list."""
         summary = self.hp_job_export_summary(job_id)
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
