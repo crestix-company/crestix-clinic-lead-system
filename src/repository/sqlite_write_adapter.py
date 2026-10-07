@@ -7,12 +7,19 @@ Two kinds of methods here:
       delegates to ClinicStore today.
   (b) New target-contract methods (insert_new_clinic / update_matched_clinic_base /
       refresh_projection / resolve_review_to_*) that implement the Owner Decision 1 medical_key
-      contract via src.master.identity_contract. These are ADDITIVE: nothing in src/master/
-      store.py is imported-from-here-back or modified, and nothing in app_v2.py/jobs.py calls
-      this module yet, so today's live SQLite runtime (ClinicStore._project()/._upsert(), still
-      unconditionally rewriting medical_key) is completely unchanged. Wiring the live runtime to
-      call this module instead is the deferred "direct SQLite WRITE closure" step, done at the
-      live cutover session, not in this offline-prep pass.
+      contract via src.master.identity_contract. These are NOT wired into app_v2.py/jobs.py --
+      ClinicStore._project()/._upsert() (store.py, unmodified) remain the live code path for
+      import/save_research/override/resolve_review/Maps-import; these two methods exist as the
+      proven-equivalent target for Gate 2's eventual _project() replacement (see
+      test_refresh_projection_parity_with_existing_project), not as something currently called.
+
+app_v2.py/jobs.py/search_provider.py/google_maps.py DO call the (a)-class passthrough methods
+below (import_comdesk/import_master/resolve_review/refresh_age_model/save_research/override/
+set/job lifecycle/CachedSearch two-phase/import_maps_results) -- see
+docs/supabase_migration/24_stage4d_live_cutover_readiness.md for exactly which call sites were
+rewired. Every one of those delegates to the exact same ClinicStore/jobs.py/search_provider.py/
+google_maps.py function, with the same arguments, so CLINIC_WRITE_BACKEND=sqlite (the default)
+produces byte-identical behavior to before the rewiring -- only one more layer of indirection.
 """
 import json
 
@@ -109,6 +116,18 @@ class SqliteClinicWriteRepository:
             c.execute("UPDATE clinics SET uuid=?,base_json=?,last_seen_at=? WHERE id=?",
                       (row["uuid"] or record.get("uuid", ""), dumps(base), now(), clinic_id))
 
+    def import_comdesk(self, table, mapping=None):
+        return self._store.import_comdesk(table, mapping)
+
+    def import_master(self, frame):
+        return self._store.import_master(frame)
+
+    def resolve_review(self, review_id, target_id=None, note=""):
+        return self._store.resolve_review(review_id, target_id, note)
+
+    def refresh_age_model(self):
+        self._store.refresh_age_model()
+
 
 class SqliteResearchWriteRepository:
     def __init__(self, store):
@@ -139,9 +158,9 @@ class SqliteProvenanceWriteRepository:
             c.execute("BEGIN IMMEDIATE")
             self._store._history(c, clinic_id, action, before, after, note)
 
-    def import_maps_results(self, clinic_id, result, batch_hash):
+    def import_maps_results(self, frame):
         from src.master.google_maps import import_maps_results
-        import_maps_results(self._store, [result], batch_hash)
+        return import_maps_results(self._store, frame)
 
 
 class SqliteSettingsWriteRepository:
@@ -168,16 +187,62 @@ class SqliteJobsWriteRepository:
         return jid
 
     def pause_job(self, job_id):
-        from src.master.jobs import pause_job
-        pause_job(self._store, job_id)
+        # Moved verbatim from src.master.jobs.pause_job -- that function now delegates here
+        # (see jobs.py) so this is the single place the SQL exists, not a second copy of it.
+        with self._store.connect() as c:
+            c.execute("UPDATE research_jobs SET status='PAUSED',updated_at=? WHERE id=? AND status<>'COMPLETED'",
+                      (now(), job_id))
 
     def reset_job(self, job_id):
-        from src.master.jobs import reset_job
-        reset_job(self._store, job_id)
+        # Moved verbatim from src.master.jobs.reset_job.
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT status FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            if row[0] == "RUNNING":
+                raise ValueError("実行中の調査はリセットできません。先に一時停止し、停止完了を待ってください。")
+            c.execute("UPDATE research_job_items SET state='CANCELLED' WHERE job_id=? AND state='PENDING'", (job_id,))
+            c.execute("UPDATE research_jobs SET status='RESET',updated_at=? WHERE id=?", (now(), job_id))
 
     def job_limit(self, job_id, limit):
-        from src.master.jobs import job_limit
-        job_limit(self._store, job_id, limit)
+        # Moved verbatim from src.master.jobs.job_limit.
+        with self._store.connect() as c:
+            c.execute("UPDATE research_jobs SET max_searches=?,updated_at=? WHERE id=?",
+                      (max(0, int(limit)), now(), job_id))
+
+    def create_job_from_filters(self, filters, kind="hp", limit=100, max_searches=100, force=False, max_pages=20):
+        # Moved verbatim from src.master.jobs.create_job (the candidate SELECT and the job+item
+        # INSERT stay in the same BEGIN IMMEDIATE transaction, matching current atomicity).
+        import uuid
+        from src.master.filters import where
+        if kind not in {"hp", "epark", "media"}:
+            raise ValueError("調査種類を確認してください。")
+        limit = min(500, max(1, int(limit)))
+        max_searches = min(1000, max(0, int(max_searches)))
+        sql, args = where(filters)
+        if not force:
+            sql += {
+                "hp": " AND hp_status='UNRESEARCHED'",
+                "epark": " AND json_extract(effective_json,'$.epark_checked_at') IS NULL",
+                "media": " AND json_extract(effective_json,'$.media_checked_at') IS NULL",
+            }[kind]
+        jid = uuid.uuid4().hex
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            ids = [r[0] for r in c.execute(
+                "SELECT id FROM clinics WHERE " + sql + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
+                (*args, limit),
+            )]
+            if not ids:
+                raise ValueError("指定した条件の未調査医院がありません。条件を見直すか、強制再調査を選択してください。")
+            c.execute(
+                "INSERT INTO research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (jid, kind, dumps({"force": bool(force), "max_pages": max_pages}), max_searches, now(), now()),
+            )
+            c.executemany("INSERT INTO research_job_items(job_id,clinic_id) VALUES(?,?)", [(jid, i) for i in ids])
+        return jid
 
     def claim_next_pending_item(self, job_id):
         with self._store.connect() as c:
@@ -192,7 +257,8 @@ class SqliteJobsWriteRepository:
                       (job_id, row[0]))
             return row[0]
 
-    def mark_item_state(self, job_id, clinic_id, state, *, result=None, note=""):
+    def mark_item_state(self, job_id, clinic_id, state, *, result="", note=""):
+        # result defaults to "" (not None): research_job_items.result is NOT NULL DEFAULT ''.
         with self._store.connect() as c:
             c.execute("BEGIN IMMEDIATE")
             c.execute("UPDATE research_job_items SET state=?,result=?,note=? WHERE job_id=? AND clinic_id=?",
@@ -202,6 +268,69 @@ class SqliteJobsWriteRepository:
         with self._store.connect() as c:
             c.execute("BEGIN IMMEDIATE")
             c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?", (status, now(), job_id))
+
+    # -- The five methods below are moved verbatim from src.master.jobs._run_locked/_research_one
+    # (see jobs.py, which now calls these instead of issuing the SQL inline). Each preserves the
+    # exact original transaction boundary -- single-statement UPDATEs stay single-statement,
+    # multi-statement atomic blocks stay atomic -- so CLINIC_WRITE_BACKEND=sqlite behavior is
+    # byte-identical to before this rewiring.
+
+    def recover_job_for_run(self, job_id):
+        """Startup recovery for run_job(): any item left RUNNING by a crashed/killed previous
+        process goes back to PENDING, then the job transitions to RUNNING. Returns the job row
+        (as a dict) read before any update, or None if the job is already COMPLETED/RESET
+        (in which case nothing is updated and the caller should do nothing further)."""
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            job = dict(row)
+            if job["status"] in {"COMPLETED", "RESET"}:
+                return None
+            c.execute("UPDATE research_job_items SET state='PENDING' WHERE job_id=? AND state='RUNNING'", (job_id,))
+            c.execute("UPDATE research_jobs SET status='PAUSED' WHERE id=? AND status='RUNNING'", (job_id,))
+            c.execute("UPDATE research_jobs SET status='RUNNING',updated_at=? WHERE id=?", (now(), job_id))
+        return job
+
+    def complete_job_if_no_remaining_items(self, job_id):
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            if c.execute(
+                "SELECT 1 FROM research_job_items WHERE job_id=? AND state IN ('PENDING','RUNNING') LIMIT 1",
+                (job_id,),
+            ).fetchone() is None:
+                c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=? AND status='RUNNING'",
+                          (now(), job_id))
+
+    def claim_specific_item(self, job_id, clinic_id):
+        """Claim one named clinic_id (used by the parallel per-site-lane worker, which already
+        knows which clinic_id it's assigned) -- distinct from claim_next_pending_item(), which
+        picks whichever PENDING row sorts first. Returns True iff this call claimed it."""
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            return c.execute(
+                "UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=? AND state='PENDING'",
+                (job_id, clinic_id),
+            ).rowcount > 0
+
+    def requeue_item_for_budget_or_pause(self, job_id, clinic_id, note, job_status):
+        """BudgetReached/Stopped path: the item goes back to PENDING (not DONE -- it was never
+        actually attempted) with a note, and the job status reflects why the run stopped."""
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("UPDATE research_job_items SET state='PENDING',note=? WHERE job_id=? AND clinic_id=?",
+                      (note, job_id, clinic_id))
+            c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?", (job_status, now(), job_id))
+
+    def finish_item(self, job_id, clinic_id, status, note):
+        """Terminal state for one item (success or error) -- job status itself is untouched,
+        only its updated_at timestamp, matching the original 2-statement atomic block."""
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            c.execute("UPDATE research_job_items SET state='DONE',result=?,note=? WHERE job_id=? AND clinic_id=?",
+                      (status, note, job_id, clinic_id))
+            c.execute("UPDATE research_jobs SET updated_at=? WHERE id=?", (now(), job_id))
 
 
 class SqliteSearchWriteRepository:
@@ -228,3 +357,38 @@ class SqliteSearchWriteRepository:
     def monthly_usage_count(self, month):
         with self._store.connect() as c:
             return c.execute("SELECT count(*) FROM search_usage WHERE month=?", (month,)).fetchone()[0]
+
+    def check_cache_or_reserve(self, query_key, job_id, month, monthly_limit, max_searches, used_in_session, force):
+        """Moved verbatim from src.enrichment.search_provider.CachedSearch.search()'s
+        pre-network-call transaction: cache lookup, same_job replay check, monthly/job/session
+        budget checks, and the reservation INSERT are all one BEGIN IMMEDIATE, exactly as
+        before -- splitting the budget check from the reservation into two transactions would
+        let two concurrent calls both pass the check and jointly overrun the monthly quota.
+        Returns ("cached", result) or ("reserved", None). Raises BudgetReached over budget.
+        """
+        from src.enrichment.search_provider import BudgetReached
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            cached = c.execute("SELECT result_json FROM search_cache WHERE query_key=?", (query_key,)).fetchone()
+            same_job = job_id and c.execute(
+                "SELECT 1 FROM search_usage u JOIN search_cache s USING(query_key) "
+                "WHERE u.job_id=? AND u.query_key=? AND s.searched_at>=u.attempted_at LIMIT 1",
+                (job_id, query_key),
+            ).fetchone()
+            if cached and (not force or same_job):
+                return "cached", json.loads(cached[0])
+            used = c.execute("SELECT count(*) FROM search_usage WHERE month=?", (month,)).fetchone()[0]
+            reserve = self._store.setting("external_usage_reserve", 0)
+            monthly = min(monthly_limit, int(self._store.setting("monthly_limit", 900)))
+            if used + int(reserve) >= monthly:
+                raise BudgetReached("月間検索上限です。残りの医院を保存して停止しました。")
+            if job_id:
+                job = c.execute("SELECT * FROM research_jobs WHERE id=?", (job_id,)).fetchone()
+                if not job or job["search_count"] >= job["max_searches"]:
+                    raise BudgetReached("今回の検索上限です。上限を変更すると続きから再開できます。")
+                c.execute("UPDATE research_jobs SET search_count=search_count+1 WHERE id=?", (job_id,))
+            elif used_in_session >= max_searches:
+                raise BudgetReached("今回の検索上限です。")
+            c.execute("INSERT INTO search_usage(month,job_id,query_key,attempted_at) VALUES(?,?,?,?)",
+                      (month, job_id, query_key, now()))
+        return "reserved", None

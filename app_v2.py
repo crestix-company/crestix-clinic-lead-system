@@ -21,7 +21,8 @@ from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_de
 from src.master.research_sidecar import research_sidecar_available,clinic_research_status_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
-from src.master.jobs import JobRunner,create_job,job_status,recent_jobs,pause_job,reset_job,job_limit
+from src.master.jobs import JobRunner,job_status,recent_jobs
+from src.repository.write_backend import write_repositories_for
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
@@ -351,11 +352,11 @@ def manual_form(store,r):
         if not note.strip():
             st.warning("確認した根拠URLや理由をメモに入力してください。")
         else:
-            store.override(cid,field,value,note)
+            write_repositories_for(store).research.override(cid,field,value,note=note)
             st.success("手動値を保存しました。再調査しても保持されます。")
             st.rerun()
     if field in r.get("manual_fields",[]) and cols[1].button("この項目を自動値に戻す",key=f"manual_reset_{cid}"):
-        store.override(cid,field,None,note)
+        write_repositories_for(store).research.override(cid,field,None,note=note)
         st.rerun()
 
 
@@ -408,13 +409,13 @@ def import_ui(store,demo):
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS),hide_index=True,width="stretch")
         if st.button("既存案件を登録",type="primary"):
             with st.spinner("既存案件を登録しています…"):
-                result = store.import_comdesk(table,mapping)
+                result = write_repositories_for(store).clinics.import_comdesk(table,mapping)
             report_import(result)
     st.subheader("2. 厚生局データを統合する")
     if st.button("同梱の東京都マスターを取り込む",disabled=demo):
         with st.spinner("東京都の全施設を統合しています…"):
             frame = pd.read_csv(ROOT/"data/master/tokyo_current.csv",dtype=str,keep_default_na=False)
-            result = store.import_master(frame)
+            result = write_repositories_for(store).clinics.import_master(frame)
         report_import(result)
     st.caption("同梱データは2026-09-01基準の東京都医科一覧です。病院・休止施設も保持し、営業対象フィルターで現存クリニックを選びます。歯科一覧は別途取り込んでください。")
     st.write("取り込み済みのデータを再統合する")
@@ -438,7 +439,7 @@ def import_ui(store,demo):
         if st.button("厚生局データを統合"):
             with st.spinner("読込・統合中…"):
                 frame = load_master(upload.getvalue(),upload.name,"kanto_excel" if "帳票" in mode else "standard",pref,selected)
-                result = store.import_master(frame)
+                result = write_repositories_for(store).clinics.import_master(frame)
             report_import(result)
     st.subheader("3. Google Maps収集アプリへ渡す")
     st.caption("厚生局を母集団にした調査キューです。病院・センターは収集アプリ側で検索前に除外されます。")
@@ -453,7 +454,7 @@ def import_ui(store,demo):
         st.dataframe(maps_frame.head(10),hide_index=True,width="stretch")
         if st.button("Google Maps取得結果を取り込む",type="primary",key="maps_import_button"):
             with st.spinner("Google Maps結果をマスターへ紐付けています…"):
-                result = store.import_google_maps(maps_frame)
+                result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             if result.get("already_imported"):
                 st.info("このGoogle Maps結果は取込済みです。重複登録していません。")
             st.success(f"取込 {result.get('TOTAL',0):,}件／自動紐付け {result.get('MATCHED',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／HPなし {result.get('NO_WEBSITE',0):,}件／Maps未発見 {result.get('NOT_FOUND',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／除外 {result.get('EXCLUDED',0):,}件／エラー {result.get('ERROR',0):,}件")
@@ -471,7 +472,7 @@ def import_ui(store,demo):
                     result = cache.lookup(record.get("manager_name",""),record.get("clinic_id",""),record.get("phone",""))
                     if result.year:
                         age = estimate_profile_age({**record,"license_registration_year":result.year,"license_source":result.source})
-                        store.save_research(record["id"],{**age,"license_source":result.source})
+                        write_repositories_for(store).research.save_research(record["id"],{**age,"license_source":result.source})
                         updated += 1
                 st.success(f"{updated:,}医院の年齢推定を更新しました。")
         st.caption("同姓同名は自動で一人に決めません。公式HPの卒業年も自動調査で補完できます。")
@@ -492,9 +493,6 @@ def report_import(result):
 
 def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=None):
     """Google MapsでHP URL取得済み医院だけを対象にHP調査ジョブを作る。"""
-    import uuid as _uuid
-    from src.master.store import now as _now, dumps as _dumps
-
     conditions = [
         "merged_into IS NULL",
         "merge_hold=0",
@@ -513,26 +511,19 @@ def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=Non
     if not force:
         conditions.append("hp_status='UNRESEARCHED'")
 
-    jid = _uuid.uuid4().hex
+    # Candidate selection is read-only; the persistent job+item WRITE goes through the
+    # Repository (Stage4-D Gate2) instead of this file issuing INSERT SQL directly.
     with store.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
         ids = [r[0] for r in c.execute(
             "SELECT id FROM clinics WHERE " + " AND ".join(conditions) +
             " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",
             (*args, min(500, max(1, int(limit))))
         )]
-        if not ids:
-            raise ValueError("現在の条件でHP調査できる医院がありません。")
-        c.execute(
-            "INSERT INTO research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
-            "VALUES(?,?,?,?,?,?)",
-            (jid, "hp", _dumps({"force": bool(force), "max_pages": 20}), 0, _now(), _now())
-        )
-        c.executemany(
-            "INSERT INTO research_job_items(job_id,clinic_id) VALUES(?,?)",
-            [(jid, i) for i in ids]
-        )
-    return jid
+    if not ids:
+        raise ValueError("現在の条件でHP調査できる医院がありません。")
+    return write_repositories_for(store).jobs.create_job(
+        ids, "hp", {"force": bool(force), "max_pages": 20}, 0
+    )
 
 
 def _maps_hp_available_count(store, prefecture="", force=False, medical_types=None):
@@ -577,7 +568,7 @@ def simple_workflow_ui(store, demo):
         if st.button("東京都マスターを取り込む", type="primary", disabled=demo, key="simple_import_tokyo", use_container_width=True):
             with st.spinner("東京都マスターを取り込んでいます…"):
                 frame = pd.read_csv(ROOT/"data/master/tokyo_current.csv", dtype=str, keep_default_na=False)
-                result = store.import_master(frame)
+                result = write_repositories_for(store).clinics.import_master(frame)
             report_import(result)
             st.rerun()
 
@@ -600,7 +591,7 @@ def simple_workflow_ui(store, demo):
 
         if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", use_container_width=True):
             with st.spinner("Google Maps結果を取り込んでいます…"):
-                result = store.import_google_maps(maps_frame)
+                result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             st.success(
                 f"取込 {result.get('TOTAL',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／"
                 f"HPなし {result.get('NO_WEBSITE',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／"
@@ -663,13 +654,13 @@ def simple_workflow_ui(store, demo):
 
         can_pause = runner.running() or current["status"] == "RUNNING"
         if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
-            pause_job(store, current["id"])
+            write_repositories_for(store).jobs.pause_job(current["id"])
             st.rerun()
 
         can_reset = not runner.running() and current["status"] != "RUNNING"
         if controls[1].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
             try:
-                reset_job(store, current["id"])
+                write_repositories_for(store).jobs.reset_job(current["id"])
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -734,7 +725,7 @@ def simple_workflow_ui(store, demo):
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
         if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
             with st.spinner("既存案件を登録しています…"):
-                result = store.import_comdesk(table, mapping)
+                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
             report_import(result)
 
 
@@ -946,7 +937,7 @@ def research_ui(store,demo):
     runner = runner_for(str(store.path))
     if st.button("自動調査を開始",type="primary",disabled=demo or runner.running()):
         provider = TavilySearchProvider(api_key)
-        jid = create_job(store,f,kind,count,max_search,force,max_pages)
+        jid = write_repositories_for(store).jobs.create_job_from_filters(f,kind,count,max_search,force,max_pages)
         st.session_state["active_job"] = jid
         runner.start(store,jid,provider)
     jobs = recent_jobs(store)
@@ -959,14 +950,14 @@ def research_ui(store,demo):
         cols = st.columns(3)
         if cols[0].button("続きから再開",disabled=runner.running() or current["status"]=="COMPLETED"):
             provider = TavilySearchProvider(api_key)
-            job_limit(store,selected,increased)
+            write_repositories_for(store).jobs.job_limit(selected,increased)
             runner.start(store,selected,provider)
         if cols[1].button("一時停止",disabled=not runner.running()):
-            pause_job(store,selected)
+            write_repositories_for(store).jobs.pause_job(selected)
         reset_disabled = runner.running() or current["status"] == "RUNNING"
         if cols[2].button("この調査をリセット",disabled=reset_disabled,help="この調査の進捗履歴だけをリセットします。医院の調査結果、Google Maps取込結果、UUID、月間検索使用数は削除しません。"):
             try:
-                reset_job(store,selected)
+                write_repositories_for(store).jobs.reset_job(selected)
                 if st.session_state.get("active_job") == selected:
                     st.session_state.pop("active_job",None)
                 st.session_state["research_reset_message"] = "調査の進捗をリセットしました。保存済みの医院調査結果は削除していません。新しい医院数を設定して『自動調査を開始』してください。"
@@ -1034,7 +1025,7 @@ def settings_ui(store):
             if not note.strip():
                 st.warning("確認した根拠をメモに入力してください。")
             else:
-                store.resolve_review(rid,target,note)
+                write_repositories_for(store).clinics.resolve_review(rid,target,note)
                 st.rerun()
     st.subheader("判定の確認・手動修正")
     keyword = st.text_input("確認する医院名・電話番号・UUID",key="review_search")
@@ -1069,7 +1060,7 @@ def main():
             st.error(db_error)
             st.stop()
     store = store_for(str(path))
-    store.refresh_age_model()
+    write_repositories_for(store).clinics.refresh_age_model()
 
     if demo:
         load_demo(store)

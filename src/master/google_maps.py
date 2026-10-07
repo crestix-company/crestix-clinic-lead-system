@@ -92,6 +92,71 @@ def find_target(c, row):
     return None,"NOT_FOUND",0
 
 
+def classify_match_status(maps_status):
+    """Pure: which `import_maps_results` counts bucket this row's maps_match_status belongs
+    to, independent of whether a clinic match (cid) was found. Extracted so the Supabase write
+    adapter (src/repository/supabase_write_adapter.py) can share this exact classification
+    instead of re-deriving it -- no behavior change, counts computation is unchanged below.
+    """
+    maps_status = _s(maps_status)
+    if maps_status.startswith("EXCLUDED_"):
+        return "EXCLUDED"
+    if maps_status == "MAPS_NOT_FOUND":
+        return "NOT_FOUND"
+    if maps_status == "MAPS_AMBIGUOUS":
+        return "AMBIGUOUS"
+    if maps_status == "ERROR":
+        return "ERROR"
+    if maps_status.startswith("MAPS_MATCHED"):
+        return "WEBSITE" if maps_status == "MAPS_MATCHED_WEBSITE" else "NO_WEBSITE"
+    return None
+
+
+_PRESERVED_KEYS = (
+    "maps_presence_status", "maps_profile_url", "maps_website_url", "maps_match_method",
+    "maps_checked_at", "maps_name", "maps_phone", "maps_address",
+    "maps_regular_holiday", "maps_business_days", "maps_morning_start", "maps_morning_end",
+    "maps_afternoon_start", "maps_afternoon_end", "maps_hours_raw", "exclude_reason",
+)
+
+
+def build_maps_update(row, base, maps_status, method):
+    """Pure: given the clinic's current `base` dict and one incoming Maps result `row`, returns
+    (maps_update_dict, preserved_confirmed_website: bool). Extracted verbatim from
+    `import_maps_results` (see module docstring at classify_match_status) -- no behavior change;
+    `import_maps_results` below calls this instead of inlining the same computation, and the
+    Supabase write adapter imports and calls this exact function too (same anti-downgrade rule
+    on both backends, by construction, not by independent reimplementation).
+    """
+    existing_confirmed_website = (
+        _s(base.get("maps_presence_status")) == "MAPS_MATCHED_WEBSITE"
+        and bool(_s(base.get("maps_website_url")))
+    )
+    incoming_website_status = _s(row.get("website_status")).upper()
+    incoming_confirmed_website = (
+        maps_status == "MAPS_MATCHED_WEBSITE"
+        and bool(_s(row.get("maps_website_url")))
+        and "AMBIGUOUS" not in incoming_website_status
+        and "NO_WEBSITE" not in incoming_website_status
+        and "ERROR" not in incoming_website_status
+    )
+    preserve_confirmed_website = existing_confirmed_website and not incoming_confirmed_website
+    maps_update = {
+        "maps_presence_status": maps_status, "maps_profile_url": _s(row.get("maps_profile_url")),
+        "maps_website_url": _s(row.get("maps_website_url")),
+        "maps_match_method": _s(row.get("maps_match_method")) or method, "maps_checked_at": _s(row.get("scraped_at")),
+        "maps_name": _s(row.get("maps_name")), "maps_phone": _s(row.get("maps_phone")), "maps_address": _s(row.get("maps_address")),
+        "maps_regular_holiday": _s(row.get("休診日")), "maps_business_days": _s(row.get("診療日")),
+        "maps_morning_start": _s(row.get("午前始")), "maps_morning_end": _s(row.get("午前終")),
+        "maps_afternoon_start": _s(row.get("午後始")), "maps_afternoon_end": _s(row.get("午後終")),
+        "maps_hours_raw": _s(row.get("営業時間原文")), "exclude_reason": _s(row.get("exclude_reason")),
+    }
+    if preserve_confirmed_website:
+        for key in _PRESERVED_KEYS:
+            maps_update[key] = base.get(key, "")
+    return maps_update, preserve_confirmed_website
+
+
 def import_maps_results(store, frame: pd.DataFrame):
     frame=validate_maps_frame(frame)
     records=frame.to_dict("records")
@@ -104,14 +169,12 @@ def import_maps_results(store, frame: pd.DataFrame):
         for i,row in enumerate(records, start=2):
             cid,method,score=find_target(c,row)
             maps_status=_s(row.get("maps_match_status"))
-            if maps_status.startswith("EXCLUDED_"): counts["EXCLUDED"]+=1
-            elif maps_status=="MAPS_NOT_FOUND": counts["NOT_FOUND"]+=1
-            elif maps_status=="MAPS_AMBIGUOUS": counts["AMBIGUOUS"]+=1
-            elif maps_status=="ERROR": counts["ERROR"]+=1
-            elif maps_status.startswith("MAPS_MATCHED"):
+            bucket = classify_match_status(maps_status)
+            if bucket in ("WEBSITE", "NO_WEBSITE"):
                 counts["MATCHED"]+=1
-                if maps_status=="MAPS_MATCHED_WEBSITE": counts["WEBSITE"]+=1
-                else: counts["NO_WEBSITE"]+=1
+                counts[bucket]+=1
+            elif bucket is not None:
+                counts[bucket]+=1
             if cid is None: counts["UNLINKED"]+=1
             raw=json.dumps(row,ensure_ascii=False,sort_keys=True,separators=(",",":"))
             c.execute("INSERT INTO google_maps_results(clinic_id,batch_id,row_number,result_json,maps_match_status,maps_match_method,maps_profile_url,maps_website_url,scraped_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -124,36 +187,8 @@ def import_maps_results(store, frame: pd.DataFrame):
                 # NO_WEBSITE / AMBIGUOUS / NOT_FOUND / ERROR / URL空欄で格下げしない。
                 # 各バッチの生データは google_maps_results にそのまま保存されるため、
                 # 最新調査の事実は失わず、医院マスターの「確定済みHP」だけを保護する。
-                existing_confirmed_website = (
-                    _s(base.get("maps_presence_status")) == "MAPS_MATCHED_WEBSITE"
-                    and bool(_s(base.get("maps_website_url")))
-                )
-                incoming_website_status = _s(row.get("website_status")).upper()
-                incoming_confirmed_website = (
-                    maps_status == "MAPS_MATCHED_WEBSITE"
-                    and bool(_s(row.get("maps_website_url")))
-                    and "AMBIGUOUS" not in incoming_website_status
-                    and "NO_WEBSITE" not in incoming_website_status
-                    and "ERROR" not in incoming_website_status
-                )
-                preserve_confirmed_website = existing_confirmed_website and not incoming_confirmed_website
-
-                maps_update = {
-                    "maps_presence_status":maps_status,"maps_profile_url":_s(row.get("maps_profile_url")),"maps_website_url":_s(row.get("maps_website_url")),
-                    "maps_match_method":_s(row.get("maps_match_method")) or method,"maps_checked_at":_s(row.get("scraped_at")),
-                    "maps_name":_s(row.get("maps_name")),"maps_phone":_s(row.get("maps_phone")),"maps_address":_s(row.get("maps_address")),
-                    "maps_regular_holiday":_s(row.get("休診日")),"maps_business_days":_s(row.get("診療日")),
-                    "maps_morning_start":_s(row.get("午前始")),"maps_morning_end":_s(row.get("午前終")),"maps_afternoon_start":_s(row.get("午後始")),"maps_afternoon_end":_s(row.get("午後終")),
-                    "maps_hours_raw":_s(row.get("営業時間原文")),"exclude_reason":_s(row.get("exclude_reason")),
-                }
+                maps_update, preserve_confirmed_website = build_maps_update(row, base, maps_status, method)
                 if preserve_confirmed_website:
-                    for key in (
-                        "maps_presence_status", "maps_profile_url", "maps_website_url", "maps_match_method",
-                        "maps_checked_at", "maps_name", "maps_phone", "maps_address",
-                        "maps_regular_holiday", "maps_business_days", "maps_morning_start", "maps_morning_end",
-                        "maps_afternoon_start", "maps_afternoon_end", "maps_hours_raw", "exclude_reason",
-                    ):
-                        maps_update[key] = base.get(key, "")
                     counts["PRESERVED_WEBSITE"] += 1
                 base.update(maps_update)
                 c.execute("UPDATE clinics SET base_json=? WHERE id=?",(json.dumps(base,ensure_ascii=False,sort_keys=True,separators=(",",":")),cid))

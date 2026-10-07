@@ -74,3 +74,40 @@ def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=Non
             search=SupabaseSearchWriteRepository(conn),
         )
     raise AssertionError(backend)
+
+
+def write_repositories_for(store):
+    """Runtime call-site entry point for app_v2.py/jobs.py/search_provider.py/google_maps.py.
+
+    Unlike build_write_repositories(), the sqlite path here wraps the CALLER'S OWN existing
+    ClinicStore instance (e.g. app_v2.py's @st.cache_resource `store_for(path)` result) instead
+    of constructing a brand-new one from production_db_path(). This matters: a fresh ClinicStore
+    could theoretically resolve a different path than the session's already-resolved store
+    (demo mode, CLINIC_DEMO_DB_PATH, custom path argument) -- reusing the exact same object
+    makes CLINIC_WRITE_BACKEND=sqlite (the default) provably behavior-identical to calling the
+    store's methods directly, not just "probably the same DB file." `store` may be a
+    Stage4CClinicStore/ShadowClinicStore READ wrapper too: both delegate every attribute they
+    don't override (which is every WRITE method) straight through to the inner ClinicStore, so
+    wrapping the wrapper here is equivalent to wrapping the inner store.
+
+    The Supabase path ignores `store` entirely and opens its own connection (there is no
+    "existing Supabase object" to reuse) -- selecting CLINIC_WRITE_BACKEND=supabase is itself
+    the live-cutover action this function does not perform on its own.
+    """
+    from src.repository.write_contracts import WriteRepositories
+
+    if active_write_backend() == WRITE_BACKEND_SQLITE:
+        from src.repository.sqlite_write_adapter import (
+            SqliteClinicWriteRepository, SqliteResearchWriteRepository,
+            SqliteProvenanceWriteRepository, SqliteSettingsWriteRepository,
+            SqliteJobsWriteRepository, SqliteSearchWriteRepository,
+        )
+        return WriteRepositories(
+            clinics=SqliteClinicWriteRepository(store),
+            research=SqliteResearchWriteRepository(store),
+            provenance=SqliteProvenanceWriteRepository(store),
+            settings=SqliteSettingsWriteRepository(store),
+            jobs=SqliteJobsWriteRepository(store),
+            search=SqliteSearchWriteRepository(store),
+        )
+    return build_write_repositories()

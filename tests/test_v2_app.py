@@ -21,6 +21,9 @@ def test_import_has_no_database_side_effects(tmp_path,monkeypatch):
 def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkeypatch):
     db_path=tmp_path/"app.db"
     ClinicStore(db_path)  # CLINIC_DB_PATH必須化に対応し、事前に空のスキーマだけ用意する
+    # Stage4-C made Supabase the default READ backend; this fixture's counts only make sense
+    # against the isolated SQLite DB built above, so the backend must be pinned back to sqlite.
+    monkeypatch.setenv("CLINIC_DATA_BACKEND","sqlite")
     monkeypatch.setenv("CLINIC_DB_PATH",str(db_path))
     # サンプル用のパスも隔離し、pytestで配布dataにDBを残さない。
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH",str(tmp_path/"demo.db"))

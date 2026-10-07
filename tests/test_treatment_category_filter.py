@@ -275,6 +275,8 @@ def test_multiple_departments_and_treatments_per_clinic(filter_store):
 def _sales_app(tmp_path, monkeypatch):
     db_path = tmp_path / "ui.db"
     ClinicStore(db_path)  # CLINIC_DB_PATH必須化に対応し、事前に空のスキーマだけ用意する
+    # See tests/test_hp_abc_ui_export.py:_app -- pin READ backend to this isolated fixture.
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")
     monkeypatch.setenv("CLINIC_DB_PATH", str(db_path))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     at = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()

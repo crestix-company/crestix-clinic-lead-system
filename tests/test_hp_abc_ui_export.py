@@ -224,6 +224,11 @@ def test_treatment_status_counts_none_when_sidecar_unavailable(tmp_path, monkeyp
 # ---- UI (AppTest): 営業対象件数 = Comdesk出力対象件数 ----
 
 def _app(tmp_path, monkeypatch, db_path):
+    # Stage4-C made Supabase the default READ backend; this fixture builds an isolated SQLite
+    # DB with controlled test data, so it must pin the backend back to sqlite or it silently
+    # reads live Supabase production data instead (see docs/supabase_migration/23_...: the
+    # four tests this masked were all count assertions against this tmp fixture).
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")
     monkeypatch.setenv("CLINIC_DB_PATH", str(db_path))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     at = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()

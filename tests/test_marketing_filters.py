@@ -197,6 +197,8 @@ def test_midday_signal_filter_still_works(mstore):
 
 # ---- UI ------------------------------------------------------------------
 def _app(tmp_path, monkeypatch, db):
+    # See tests/test_hp_abc_ui_export.py:_app -- pin READ backend to this isolated fixture.
+    monkeypatch.setenv("CLINIC_DATA_BACKEND", "sqlite")
     monkeypatch.setenv("CLINIC_DB_PATH", str(db))
     monkeypatch.setenv("CLINIC_DEMO_DB_PATH", str(tmp_path / "demo.db"))
     at = AppTest.from_file(str(ROOT / "app_v2.py"), default_timeout=30).run()

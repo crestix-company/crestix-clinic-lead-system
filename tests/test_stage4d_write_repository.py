@@ -145,6 +145,10 @@ CREATE TABLE research_job_items(job_id TEXT, clinic_id INTEGER, state TEXT NOT N
 CREATE TABLE search_usage(id INTEGER PRIMARY KEY, month TEXT NOT NULL, job_id TEXT, query_key TEXT NOT NULL,
   attempted_at TEXT NOT NULL);
 CREATE TABLE search_cache(query_key TEXT PRIMARY KEY, query TEXT NOT NULL, result_json TEXT NOT NULL, searched_at TEXT NOT NULL);
+CREATE TABLE import_batches(id TEXT PRIMARY KEY, source TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE google_maps_results(id INTEGER PRIMARY KEY, clinic_id INTEGER, batch_id TEXT NOT NULL, row_number INTEGER NOT NULL,
+  result_json TEXT NOT NULL, maps_match_status TEXT NOT NULL, maps_match_method TEXT NOT NULL, maps_profile_url TEXT NOT NULL,
+  maps_website_url TEXT NOT NULL, scraped_at TEXT NOT NULL, created_at TEXT NOT NULL);
 """
 
 
@@ -414,8 +418,240 @@ def test_supabase_write_failure_rolls_back_and_raises_not_falls_back(monkeypatch
     assert conn.committed == 0
 
 
-def test_import_maps_results_is_explicitly_unimplemented_not_silently_wrong():
+# ---------------------------------------------------------------------------------------------
+# import_maps_results: shared pure business logic (classify_match_status / build_maps_update)
+# ---------------------------------------------------------------------------------------------
+
+def test_supabase_adapter_reuses_the_exact_same_pure_helpers_as_sqlite_path():
+    """Not a behavior test -- an identity (`is`) check that the Supabase adapter imports the
+    SAME function objects google_maps.import_maps_results() calls, so the anti-downgrade
+    business rule and counts classification cannot independently drift between backends."""
+    import src.master.google_maps as gm
     from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
-    conn = FakeConn()
-    with pytest.raises(NotImplementedError):
-        SupabaseProvenanceWriteRepository(conn).import_maps_results(1, {}, "hash")
+    import inspect
+    source = inspect.getsource(SupabaseProvenanceWriteRepository.import_maps_results)
+    assert "classify_match_status" in source and "build_maps_update" in source
+    # And the module-level functions really are the ones google_maps.py defines (no shadow copy).
+    assert gm.classify_match_status.__module__ == "src.master.google_maps"
+    assert gm.build_maps_update.__module__ == "src.master.google_maps"
+
+
+@pytest.mark.parametrize("status,expected_bucket", [
+    ("MAPS_MATCHED_WEBSITE", "WEBSITE"), ("MAPS_MATCHED_NO_WEBSITE", "NO_WEBSITE"),
+    ("MAPS_NOT_FOUND", "NOT_FOUND"), ("MAPS_AMBIGUOUS", "AMBIGUOUS"),
+    ("EXCLUDED_HOSPITAL", "EXCLUDED"), ("ERROR", "ERROR"), ("", None),
+])
+def test_classify_match_status_buckets(status, expected_bucket):
+    from src.master.google_maps import classify_match_status
+    assert classify_match_status(status) == expected_bucket
+
+
+def test_build_maps_update_preserves_confirmed_website_against_weaker_result():
+    from src.master.google_maps import build_maps_update
+    base = {"maps_presence_status": "MAPS_MATCHED_WEBSITE", "maps_website_url": "https://confirmed.example"}
+    weaker_row = {"maps_website_url": "", "website_status": "NO_WEBSITE"}
+    update, preserved = build_maps_update(weaker_row, base, "MAPS_MATCHED_NO_WEBSITE", "name_address")
+    assert preserved is True
+    assert update["maps_presence_status"] == "MAPS_MATCHED_WEBSITE"
+    assert update["maps_website_url"] == "https://confirmed.example"
+
+
+def test_build_maps_update_accepts_stronger_confirmed_website():
+    from src.master.google_maps import build_maps_update
+    base = {"maps_presence_status": "", "maps_website_url": ""}
+    row = {"maps_website_url": "https://new.example", "website_status": "WEBSITE"}
+    update, preserved = build_maps_update(row, base, "MAPS_MATCHED_WEBSITE", "name_address")
+    assert preserved is False
+    assert update["maps_website_url"] == "https://new.example"
+
+
+def test_build_maps_update_does_not_preserve_when_incoming_is_also_confirmed():
+    from src.master.google_maps import build_maps_update
+    base = {"maps_presence_status": "MAPS_MATCHED_WEBSITE", "maps_website_url": "https://old.example"}
+    row = {"maps_website_url": "https://new.example", "website_status": "WEBSITE"}
+    update, preserved = build_maps_update(row, base, "MAPS_MATCHED_WEBSITE", "name_address")
+    assert preserved is False
+    assert update["maps_website_url"] == "https://new.example"
+
+
+# ---------------------------------------------------------------------------------------------
+# import_maps_results: SQLite ground-truth fixture (did not previously exist as a regression
+# test anywhere in tests/ -- this both backfills coverage for the existing function and
+# establishes the parity baseline the Supabase port above is checked against)
+# ---------------------------------------------------------------------------------------------
+
+def _maps_row(**overrides):
+    from src.master.google_maps import MAPS_RESULT_HEADERS
+    row = {h: "" for h in MAPS_RESULT_HEADERS}
+    row.update(overrides)
+    return row
+
+
+def test_sqlite_import_maps_results_preserves_confirmed_website(temp_store):
+    import pandas as pd
+    from src.master.google_maps import import_maps_results
+    cid = _insert_base_clinic(temp_store, {
+        "clinic_name": "確認済みクリニック", "maps_presence_status": "MAPS_MATCHED_WEBSITE",
+        "maps_website_url": "https://confirmed.example",
+    })
+    frame = pd.DataFrame([_maps_row(
+        internal_clinic_id=str(cid), maps_match_status="MAPS_MATCHED_NO_WEBSITE",
+        maps_website_url="", website_status="NO_WEBSITE",
+    )])
+    counts = import_maps_results(temp_store, frame)
+    assert counts["PRESERVED_WEBSITE"] == 1
+    assert counts["NO_WEBSITE"] == 1
+    with temp_store.connect() as c:
+        base = json.loads(c.execute("SELECT base_json FROM clinics WHERE id=?", (cid,)).fetchone()[0])
+    assert base["maps_website_url"] == "https://confirmed.example"
+    assert base["maps_presence_status"] == "MAPS_MATCHED_WEBSITE"
+
+
+def test_sqlite_import_maps_results_accepts_new_website_match(temp_store):
+    import pandas as pd
+    from src.master.google_maps import import_maps_results
+    cid = _insert_base_clinic(temp_store, {"clinic_name": "新規クリニック"})
+    frame = pd.DataFrame([_maps_row(
+        internal_clinic_id=str(cid), maps_match_status="MAPS_MATCHED_WEBSITE",
+        maps_website_url="https://brand-new.example", website_status="WEBSITE",
+    )])
+    counts = import_maps_results(temp_store, frame)
+    assert counts["WEBSITE"] == 1 and counts["PRESERVED_WEBSITE"] == 0
+    with temp_store.connect() as c:
+        base = json.loads(c.execute("SELECT base_json FROM clinics WHERE id=?", (cid,)).fetchone()[0])
+    assert base["maps_website_url"] == "https://brand-new.example"
+
+
+def test_sqlite_import_maps_results_batch_idempotent_on_retry(temp_store):
+    import pandas as pd
+    from src.master.google_maps import import_maps_results
+    cid = _insert_base_clinic(temp_store, {"clinic_name": "重複チェック"})
+    frame = pd.DataFrame([_maps_row(internal_clinic_id=str(cid), maps_match_status="MAPS_NOT_FOUND")])
+    first = import_maps_results(temp_store, frame)
+    second = import_maps_results(temp_store, frame)
+    assert "already_imported" not in first
+    assert second["already_imported"] is True
+    assert second["NOT_FOUND"] == first["NOT_FOUND"]
+    with temp_store.connect() as c:
+        n = c.execute("SELECT count(*) FROM clinics WHERE id=? ", (cid,)).fetchone()[0]
+        history_count = c.execute("SELECT count(*) FROM change_history WHERE clinic_id=?", (cid,)).fetchone()[0]
+    assert n == 1
+    # internal_clinic_id still resolves find_target to this clinic even though maps_match_status
+    # says NOT_FOUND (the two signals are independent) -- so the first run writes one history
+    # entry (maps_presence_status changes from "" to "MAPS_NOT_FOUND"); the idempotent retry
+    # must not write a second one.
+    assert history_count == 1
+
+
+def test_sqlite_import_maps_results_unlinked_row_not_found(temp_store):
+    import pandas as pd
+    from src.master.google_maps import import_maps_results
+    frame = pd.DataFrame([_maps_row(internal_clinic_id="999999", maps_match_status="MAPS_NOT_FOUND")])
+    counts = import_maps_results(temp_store, frame)
+    assert counts["UNLINKED"] == 1
+    assert counts["NOT_FOUND"] == 1
+
+
+# ---------------------------------------------------------------------------------------------
+# import_maps_results: Supabase port, same fixtures, against a routing fake connection
+# ---------------------------------------------------------------------------------------------
+
+class RoutingFakeCursor:
+    def __init__(self, conn):
+        self._conn = conn
+        self._result = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, query, params=None):
+        q = " ".join(str(query).split())
+        self._conn.executed.append((q, params))
+        self._result = None
+        for predicate, responder in self._conn.routes:
+            if predicate(q, params):
+                self._result = responder(params)
+                return
+        if "import_batches" in q and "SELECT" in q:
+            self._result = None
+            return
+        raise AssertionError(f"RoutingFakeCursor: no route matched: {q} params={params}")
+
+    def fetchone(self):
+        return self._result[0] if (self._result and isinstance(self._result, list)) else self._result
+
+    def fetchall(self):
+        return self._result or []
+
+
+class RoutingFakeConn:
+    def __init__(self, routes):
+        self.routes = routes
+        self.executed = []
+        self.committed = 0
+        self.rolled_back = 0
+
+    def cursor(self):
+        return RoutingFakeCursor(self)
+
+    def commit(self):
+        self.committed += 1
+
+    def rollback(self):
+        self.rolled_back += 1
+
+
+def test_supabase_import_maps_results_preserves_confirmed_website():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    base = {"maps_presence_status": "MAPS_MATCHED_WEBSITE", "maps_website_url": "https://confirmed.example"}
+    research_result_holder = {}
+
+    def route_find_target(q, params):
+        return "id=%s AND merged_into" in q
+
+    def route_base_select(q, params):
+        return "SELECT base_json FROM public.clinics WHERE id=%s FOR UPDATE" in q
+
+    def route_projection_select(q, params):
+        return "base_json,uuid,medical_key" in q
+
+    routes = [
+        (lambda q, p: "import_batches" in q and "SELECT" in q, lambda p: None),
+        (route_find_target, lambda p: [(1_000_000_001,)]),
+        (route_base_select, lambda p: [(dict(base),)]),
+        (lambda q, p: "research.research_results" in q, lambda p: None),
+        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda p: []),
+        (route_projection_select, lambda p: [(dict(base), "", "")]),
+        (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda p: None),
+    ]
+    conn = RoutingFakeConn(routes)
+    repo = SupabaseProvenanceWriteRepository(conn)
+
+    frame = __import__("pandas").DataFrame([_maps_row(
+        internal_clinic_id="1000000001", maps_match_status="MAPS_MATCHED_NO_WEBSITE",
+        maps_website_url="", website_status="NO_WEBSITE",
+    )])
+    counts = repo.import_maps_results(frame)
+    assert counts["PRESERVED_WEBSITE"] == 1
+    assert conn.committed == 1 and conn.rolled_back == 0
+    update_calls = [p for q, p in conn.executed if q.startswith("UPDATE public.clinics SET base_json")]
+    assert update_calls, "expected a base_json UPDATE to have been issued"
+
+
+def test_supabase_import_maps_results_already_imported_is_idempotent_noop():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+    prior_counts = {"TOTAL": 1, "MATCHED": 0, "WEBSITE": 0, "NO_WEBSITE": 0, "NOT_FOUND": 1,
+                     "AMBIGUOUS": 0, "EXCLUDED": 0, "ERROR": 0, "UNLINKED": 1, "PRESERVED_WEBSITE": 0}
+    routes = [(lambda q, p: "import_batches" in q and "SELECT" in q, lambda p: [(dict(prior_counts),)])]
+    conn = RoutingFakeConn(routes)
+    repo = SupabaseProvenanceWriteRepository(conn)
+    frame = __import__("pandas").DataFrame([_maps_row(internal_clinic_id="42", maps_match_status="MAPS_NOT_FOUND")])
+    result = repo.import_maps_results(frame)
+    assert result["already_imported"] is True
+    assert result["NOT_FOUND"] == 1
+    # Idempotent retry must not issue any INSERT/UPDATE -- it's a pure read-and-return.
+    assert not any(q.startswith("INSERT") or q.startswith("UPDATE") for q, _ in conn.executed)

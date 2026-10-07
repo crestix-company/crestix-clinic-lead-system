@@ -1,11 +1,9 @@
 """永続ジョブ＋1医院単位の確定。プロセス間ロックで二重実行を防ぐ。"""
 from threading import Thread,Lock
 from concurrent.futures import ThreadPoolExecutor
-import uuid
 import json
 from filelock import FileLock,Timeout
-from src.master.store import now,dumps
-from src.master.filters import where
+from src.master.store import now
 from src.enrichment.search_provider import CachedSearch,BudgetReached,SearchError
 from src.enrichment.researcher import Researcher,Stopped,empty_hp_result
 from src.enrichment.hp_analysis import host
@@ -28,24 +26,10 @@ ITEM_TRANSITIONS = frozenset({
 
 
 def create_job(store,filters,kind="hp",limit=100,max_searches=100,force=False,max_pages=20):
-    if kind not in {"hp","epark","media"}:
-        raise ValueError("調査種類を確認してください。")
-    limit = min(500,max(1,int(limit)))
-    max_searches = min(1000,max(0,int(max_searches)))
-    sql,args = where(filters)
-    if not force:
-        sql += {"hp":" AND hp_status='UNRESEARCHED'", "epark":" AND json_extract(effective_json,'$.epark_checked_at') IS NULL",
-                "media":" AND json_extract(effective_json,'$.media_checked_at') IS NULL"}[kind]
-    jid = uuid.uuid4().hex
-    with store.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
-        ids = [r[0] for r in c.execute("SELECT id FROM clinics WHERE "+sql+" ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT ?",(*args,limit))]
-        if not ids:
-            raise ValueError("指定した条件の未調査医院がありません。条件を見直すか、強制再調査を選択してください。")
-        c.execute("INSERT INTO research_jobs(id,kind,options_json,max_searches,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-                  (jid,kind,dumps({"force":bool(force),"max_pages":max_pages}),max_searches,now(),now()))
-        c.executemany("INSERT INTO research_job_items(job_id,clinic_id) VALUES(?,?)",[(jid,i) for i in ids])
-    return jid
+    # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL, same atomicity --
+    # see src.repository.sqlite_write_adapter.SqliteJobsWriteRepository.create_job_from_filters).
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
+    return SqliteJobsWriteRepository(store).create_job_from_filters(filters,kind,limit,max_searches,force,max_pages)
 
 
 def job_status(store,jid):
@@ -66,21 +50,16 @@ def recent_jobs(store):
 
 
 def pause_job(store,jid):
-    with store.connect() as c:
-        c.execute("UPDATE research_jobs SET status='PAUSED',updated_at=? WHERE id=? AND status<>'COMPLETED'",(now(),jid))
+    # Stage4-D Gate2: see create_job() above.
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
+    SqliteJobsWriteRepository(store).pause_job(jid)
 
 
 def reset_job(store,jid):
     """未処理itemを終了し、jobをリセットする。既存の調査結果等は消さない。"""
-    with store.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
-        row = c.execute("SELECT status FROM research_jobs WHERE id=?",(jid,)).fetchone()
-        if not row:
-            raise ValueError("調査履歴が見つかりません。")
-        if row[0] == "RUNNING":
-            raise ValueError("実行中の調査はリセットできません。先に一時停止し、停止完了を待ってください。")
-        c.execute("UPDATE research_job_items SET state='CANCELLED' WHERE job_id=? AND state='PENDING'",(jid,))
-        c.execute("UPDATE research_jobs SET status='RESET',updated_at=? WHERE id=?",(now(),jid))
+    # Stage4-D Gate2: see create_job() above.
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
+    SqliteJobsWriteRepository(store).reset_job(jid)
 
 
 def repair_reset_job_items(store,job_ids,dry_run=True):
@@ -125,8 +104,9 @@ def repair_reset_job_items(store,job_ids,dry_run=True):
 
 
 def job_limit(store,jid,limit):
-    with store.connect() as c:
-        c.execute("UPDATE research_jobs SET max_searches=?,updated_at=? WHERE id=?",(max(0,int(limit)),now(),jid))
+    # Stage4-D Gate2: see create_job() above.
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
+    SqliteJobsWriteRepository(store).job_limit(jid,limit)
 
 
 def run_job(store,jid,provider,fetcher=None):
@@ -139,18 +119,13 @@ def run_job(store,jid,provider,fetcher=None):
 
 
 def _run_locked(store,jid,provider,fetcher):
-    with store.connect() as c:
-        c.execute("BEGIN IMMEDIATE")
-        row = c.execute("SELECT * FROM research_jobs WHERE id=?",(jid,)).fetchone()
-        if not row:
-            raise ValueError("調査履歴が見つかりません。")
-        job = dict(row)
-        if job["status"] in {"COMPLETED","RESET"}:
-            return
-        # ロック取得できた時点で旧プロセスの実行はない。未完了行だけを回復。
-        c.execute("UPDATE research_job_items SET state='PENDING' WHERE job_id=? AND state='RUNNING'",(jid,))
-        c.execute("UPDATE research_jobs SET status='PAUSED' WHERE id=? AND status='RUNNING'",(jid,))
-        c.execute("UPDATE research_jobs SET status='RUNNING',updated_at=? WHERE id=?",(now(),jid))
+    # Stage4-D Gate2: persistent WRITE goes through the Repository.
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
+    repo = SqliteJobsWriteRepository(store)
+    # ロック取得できた時点で旧プロセスの実行はない。未完了行だけを回復。
+    job = repo.recover_job_for_run(jid)
+    if job is None:
+        return
     options = json.loads(job["options_json"])
     def stopped():
         return job_status(store,jid)["status"]!="RUNNING"
@@ -160,24 +135,17 @@ def _run_locked(store,jid,provider,fetcher):
     if job["kind"]!="hp" or fetcher is not None or PARALLEL_WORKERS<=1:
         researcher = new_researcher()
         while not stopped():
-            with store.connect() as c:
-                c.execute("BEGIN IMMEDIATE")
-                row = c.execute("SELECT clinic_id FROM research_job_items WHERE job_id=? AND state='PENDING' ORDER BY clinic_id LIMIT 1",(jid,)).fetchone()
-                if row is None:
-                    c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=?",(now(),jid))
-                    return
-                cid = row[0]
-                c.execute("UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=?",(jid,cid))
+            cid = repo.claim_next_pending_item(jid)
+            if cid is None:
+                repo.mark_job_status(jid, "COMPLETED")
+                return
             if not _research_one(store,jid,job,options,researcher,cid):
                 return
         return
     while not stopped():
         lanes = _site_lanes(store,jid)
         if not lanes:
-            with store.connect() as c:
-                c.execute("BEGIN IMMEDIATE")
-                if c.execute("SELECT 1 FROM research_job_items WHERE job_id=? AND state IN ('PENDING','RUNNING') LIMIT 1",(jid,)).fetchone() is None:
-                    c.execute("UPDATE research_jobs SET status='COMPLETED',updated_at=? WHERE id=? AND status='RUNNING'",(now(),jid))
+            repo.complete_job_if_no_remaining_items(jid)
             return
         queue,queue_lock = list(lanes),Lock()
         def worker():
@@ -191,9 +159,8 @@ def _run_locked(store,jid,provider,fetcher):
                 for cid in lane:
                     if stopped():
                         return
-                    with _WRITE_LOCK, store.connect() as c:
-                        c.execute("BEGIN IMMEDIATE")
-                        claimed = c.execute("UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=? AND state='PENDING'",(jid,cid)).rowcount
+                    with _WRITE_LOCK:
+                        claimed = repo.claim_specific_item(jid, cid)
                     if claimed and not _research_one(store,jid,job,options,researcher,cid):
                         return
         with ThreadPoolExecutor(max_workers=min(PARALLEL_WORKERS,len(lanes))) as pool:
@@ -225,6 +192,10 @@ def _site_lanes(store,jid):
 
 def _research_one(store,jid,job,options,researcher,cid):
     """1医院の調査と確定。続行してよければTrue、一時停止・上限で止める場合はFalse。"""
+    # Stage4-D Gate2: persistent WRITE goes through the Repository.
+    from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository, SqliteResearchWriteRepository
+    jobs_repo = SqliteJobsWriteRepository(store)
+    research_repo = SqliteResearchWriteRepository(store)
     record = {}
     try:
         record = store.get(cid)
@@ -234,12 +205,13 @@ def _research_one(store,jid,job,options,researcher,cid):
             record["marketing_signals"] = json.loads(auto[0]).get("marketing_signals",[]) if auto else []
         result,pages = researcher.run(job["kind"],record,options.get("force",False))
         with _WRITE_LOCK:
-            store.save_research(cid,result,pages)
+            research_repo.save_research(cid,result,pages)
         status,note = result.get("research_status","SUCCESS"),""
     except (BudgetReached,Stopped) as exc:
-        with _WRITE_LOCK, store.connect() as c:
-            c.execute("UPDATE research_job_items SET state='PENDING',note=? WHERE job_id=? AND clinic_id=?",(str(exc),jid,cid))
-            c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?",("BUDGET" if isinstance(exc,BudgetReached) else "PAUSED",now(),jid))
+        with _WRITE_LOCK:
+            jobs_repo.requeue_item_for_budget_or_pause(
+                jid,cid,str(exc),"BUDGET" if isinstance(exc,BudgetReached) else "PAUSED"
+            )
         return False
     except Exception as exc:
         # 接続の秘密や生Tracebackを画面/DBへ残さない。
@@ -251,10 +223,9 @@ def _research_one(store,jid,job,options,researcher,cid):
         else:
             safe_result[job["kind"]+"_checked_at"] = now()
         with _WRITE_LOCK:
-            store.save_research(cid,safe_result,[] if job["kind"]=="hp" else None)
-    with _WRITE_LOCK, store.connect() as c:
-        c.execute("UPDATE research_job_items SET state='DONE',result=?,note=? WHERE job_id=? AND clinic_id=?",(status,note,jid,cid))
-        c.execute("UPDATE research_jobs SET updated_at=? WHERE id=?",(now(),jid))
+            research_repo.save_research(cid,safe_result,[] if job["kind"]=="hp" else None)
+    with _WRITE_LOCK:
+        jobs_repo.finish_item(jid,cid,status,note)
     return True
 
 

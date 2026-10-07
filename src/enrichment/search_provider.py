@@ -1,10 +1,8 @@
 """Tavily basicだけを使う交換可能なアダプター。全試行を予約して上限を守る。"""
 from typing import Protocol
 import hashlib
-import json
 import os
 import requests
-from src.master.store import now,dumps
 from src.utils.date_utils import today_japan
 
 
@@ -58,34 +56,24 @@ class CachedSearch:
         self.used = 0
 
     def search(self,query,force=False):
+        # Stage4-D Gate2: persistent WRITE goes through the Repository (same SQL, same single
+        # BEGIN IMMEDIATE transaction for the budget check + reservation -- see
+        # src.repository.sqlite_write_adapter.SqliteSearchWriteRepository.check_cache_or_reserve).
+        from src.repository.sqlite_write_adapter import SqliteSearchWriteRepository
+        repo = SqliteSearchWriteRepository(self.store)
         key = hashlib.sha256(("tavily-basic-v1:"+query).encode()).hexdigest()
         month = today_japan().strftime("%Y-%m")
-        with self.store.connect() as c:
-            c.execute("BEGIN IMMEDIATE")
-            cached = c.execute("SELECT result_json FROM search_cache WHERE query_key=?",(key,)).fetchone()
-            same_job = self.job_id and c.execute("SELECT 1 FROM search_usage u JOIN search_cache s USING(query_key) WHERE u.job_id=? AND u.query_key=? AND s.searched_at>=u.attempted_at LIMIT 1",(self.job_id,key)).fetchone()
-            if cached and (not force or same_job):
-                return json.loads(cached[0])
-            used = c.execute("SELECT count(*) FROM search_usage WHERE month=?",(month,)).fetchone()[0]
-            reserve = self.store.setting("external_usage_reserve",0)
-            monthly = min(self.monthly_limit,int(self.store.setting("monthly_limit",900)))
-            if used+int(reserve)>=monthly:
-                raise BudgetReached("月間検索上限です。残りの医院を保存して停止しました。")
-            if self.job_id:
-                job = c.execute("SELECT * FROM research_jobs WHERE id=?",(self.job_id,)).fetchone()
-                if not job or job["search_count"]>=job["max_searches"]:
-                    raise BudgetReached("今回の検索上限です。上限を変更すると続きから再開できます。")
-                c.execute("UPDATE research_jobs SET search_count=search_count+1 WHERE id=?",(self.job_id,))
-            elif self.used>=self.max_searches:
-                raise BudgetReached("今回の検索上限です。")
-            c.execute("INSERT INTO search_usage(month,job_id,query_key,attempted_at) VALUES(?,?,?,?)",(month,self.job_id,key,now()))
+        outcome,cached_result = repo.check_cache_or_reserve(
+            key,self.job_id,month,self.monthly_limit,self.max_searches,self.used,force
+        )
+        if outcome=="cached":
+            return cached_result
         # ネットワーク中にDBをロックしない。失敗も安全側で消費1回として残す。
         self.used += 1
         result = self.provider.search(query)
-        with self.store.connect() as c:
-            c.execute("INSERT OR REPLACE INTO search_cache VALUES(?,?,?,?)",(key,query,dumps(result),now()))
+        repo.store_cache_result(key,query,result)
         return result
 
     def monthly_usage(self):
-        with self.store.connect() as c:
-            return c.execute("SELECT count(*) FROM search_usage WHERE month=?",(today_japan().strftime("%Y-%m"),)).fetchone()[0]
+        from src.repository.sqlite_write_adapter import SqliteSearchWriteRepository
+        return SqliteSearchWriteRepository(self.store).monthly_usage_count(today_japan().strftime("%Y-%m"))

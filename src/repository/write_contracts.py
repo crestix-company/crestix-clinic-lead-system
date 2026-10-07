@@ -50,6 +50,23 @@ class ClinicWriteRepository(Protocol):
     def resolve_review_to_existing_clinic(self, clinic_id: int, record: dict, *, source: str) -> None:
         ...
 
+    # -- High-level passthroughs: these call the existing ClinicStore batch/merge orchestration
+    # verbatim on the SQLite side (import_comdesk/import_master/resolve_review/refresh_age_model
+    # already encapsulate their own transactions, digest/dedup, and _upsert/_project calls --
+    # nothing here reimplements that logic, it only moves the call site behind the Repository
+    # boundary so app_v2.py/jobs.py stop referencing ClinicStore directly). The Supabase side
+    # does not yet port these (DataFrame-batch import and merge-on-review-resolve are out of
+    # this pass's scope -- see docs/supabase_migration/23_stage4d_gate2_offline_preparation.md);
+    # it raises BackendNotSupportedError explicitly rather than guessing at a reimplementation.
+
+    def import_comdesk(self, table, mapping=None) -> dict: ...
+
+    def import_master(self, frame) -> dict: ...
+
+    def resolve_review(self, review_id: int, target_id: int | None, note: str) -> int: ...
+
+    def refresh_age_model(self) -> None: ...
+
 
 class ResearchWriteRepository(Protocol):
     """research.research_results / research.hp_pages / provenance.manual_overrides."""
@@ -68,7 +85,10 @@ class ProvenanceWriteRepository(Protocol):
 
     def history(self, clinic_id: int, action: str, before: Any, after: Any, note: str = "") -> None: ...
 
-    def import_maps_results(self, clinic_id: int, result: dict, batch_hash: str) -> None: ...
+    def import_maps_results(self, frame) -> dict:
+        """frame: pandas.DataFrame with MAPS_RESULT_HEADERS columns (src.master.google_maps).
+        Returns the same counts dict shape as src.master.google_maps.import_maps_results()."""
+        ...
 
 
 class SettingsWriteRepository(Protocol):
@@ -99,6 +119,28 @@ class JobsWriteRepository(Protocol):
 
     def mark_job_status(self, job_id: str, status: str) -> None: ...
 
+    def create_job_from_filters(self, filters, kind: str = "hp", limit: int = 100, max_searches: int = 100,
+                                 force: bool = False, max_pages: int = 20) -> str:
+        """Passthrough to src.master.jobs.create_job()'s filter-based candidate SELECT (the
+        per-kind hp/epark/media WHERE clause) -- distinct from create_job() above, which takes
+        an already-resolved clinic_id list. Not yet ported to Supabase."""
+        ...
+
+    # -- The five methods below back src.master.jobs._run_locked/_research_one's worker
+    # orchestration exactly (see sqlite_write_adapter.py for why each is its own method rather
+    # than reusing mark_item_state/mark_job_status -- NOT NULL columns and bundled-transaction
+    # side effects that don't fit the generic shape). Not yet ported to Supabase.
+
+    def recover_job_for_run(self, job_id: str) -> dict | None: ...
+
+    def complete_job_if_no_remaining_items(self, job_id: str) -> None: ...
+
+    def claim_specific_item(self, job_id: str, clinic_id: int) -> bool: ...
+
+    def requeue_item_for_budget_or_pause(self, job_id: str, clinic_id: int, note: str, job_status: str) -> None: ...
+
+    def finish_item(self, job_id: str, clinic_id: int, status: str, note: str) -> None: ...
+
 
 class SearchWriteRepository(Protocol):
     """research.search_usage / research.search_cache -- CachedSearch's two-phase contract."""
@@ -116,3 +158,14 @@ class SearchWriteRepository(Protocol):
     def get_cached(self, query_key: str) -> list[dict] | None: ...
 
     def monthly_usage_count(self, month: str) -> int: ...
+
+    def check_cache_or_reserve(self, query_key: str, job_id: str | None, month: str, monthly_limit: int,
+                                max_searches: int, used_in_session: int, force: bool) -> tuple[str, object]:
+        """The actual entry point CachedSearch.search() calls: cache lookup, same-job replay
+        check, and the full budget-check-then-reserve sequence, all in the one transaction the
+        original single-method implementation used (reserve_attempt()/store_cache_result()
+        above remain as the two standalone phases around the external call; this is phase 1,
+        reads included, exactly as before). Returns ("cached", result) or ("reserved", None);
+        raises BudgetReached (src.enrichment.search_provider) over budget.
+        """
+        ...
