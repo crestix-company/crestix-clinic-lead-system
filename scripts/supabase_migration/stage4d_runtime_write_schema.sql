@@ -1,11 +1,11 @@
 -- Stage4-D Gate2-B: runtime WRITE schema preparation (role, grants, RLS, identity columns).
 --
--- DRAFT ONLY. NOT applied to any live database by this file's presence in the repository.
--- Apply only after: Gate1.5 PASS (done), Gate2-A offline tests PASS (done), and the live-session
--- checklist in docs/supabase_migration/23_stage4d_gate2_offline_preparation.md is reviewed by the
--- owner with a fresh Security Advisor / counts / Production SHA baseline captured immediately
--- before running this script (see docs/supabase_migration/22_stage4d_write_inventory_gate.md
--- Owner Decision 2 and section 25 "Live DDL前Baseline" of the Stage4-D runbook).
+-- APPLIED LIVE 2026-10-07 to project hwdvyhunozporfuefteb (clinic-lead-shadow) as part of
+-- Stage4-D "Live Gate 1" (see docs/supabase_migration/26_stage4d_live_gate1_ddl_apply.md for the
+-- full catalog verification, Security Advisor before/after, and the sequence-grant scope fix
+-- applied in the same session -- see stage4d_scope_fix_revoke_out_of_scope_sequence_grants.sql).
+-- The sequence-grant loop below reflects that fix (explicit 7-sequence list), so re-running this
+-- exact file against a fresh environment will not repeat the original scope issue.
 --
 -- Safe-by-construction properties:
 --   * Every statement is idempotent (IF NOT EXISTS / DO $$ catalog checks) -- safe to re-run.
@@ -128,15 +128,35 @@ grant select, insert, update on hp_research.clinic_hp_research to clinic_runtime
 -- Sequence USAGE for the identity columns created above (identity sequences are owned by the
 -- column and granted via the table grant automatically for GENERATED ... AS IDENTITY in PG10+,
 -- but USAGE is granted explicitly here for clarity/portability).
+--
+-- Scoped to exactly the 7 sequences this migration creates/owns -- NOT "every sequence in
+-- public/provenance/research" (an earlier version of this migration did that and, on first
+-- live apply, it also granted USAGE on 4 pre-existing sequences belonging to out-of-scope
+-- tables -- clinic_email_enrichment, new_clinic_candidates, new_clinic_candidate_evidence,
+-- new_clinic_source_records -- that have no corresponding table GRANT or RLS policy for
+-- clinic_runtime and were never meant to be touched. Caught and revoked the same session;
+-- see stage4d_scope_fix_revoke_out_of_scope_sequence_grants.sql for the exact corrective SQL
+-- that was run live. This explicit list is the fix, so a fresh apply never repeats it.
 do $$
 declare
   seq record;
 begin
   for seq in
-    select sequencename, schemaname from pg_sequences
-    where schemaname in ('public','provenance','research')
+    select * from (values
+      ('public', 'clinics'), ('provenance', 'source_records'), ('provenance', 'change_history'),
+      ('provenance', 'match_reviews'), ('provenance', 'comdesk_original_rows'),
+      ('provenance', 'google_maps_results'), ('research', 'search_usage')
+    ) as x(schema_name, table_name)
   loop
-    execute format('grant usage, select on sequence %I.%I to clinic_runtime', seq.schemaname, seq.sequencename);
+    -- Default PostgreSQL identity-sequence naming: <table>_<column>_seq, column is always "id"
+    -- for every one of these 7 tables -- confirmed against the live catalog after first apply.
+    if exists (
+      select 1 from pg_sequences
+      where schemaname = seq.schema_name and sequencename = seq.table_name || '_id_seq'
+    ) then
+      execute format('grant usage, select on sequence %I.%I to clinic_runtime',
+                      seq.schema_name, seq.table_name || '_id_seq');
+    end if;
   end loop;
 end $$;
 
