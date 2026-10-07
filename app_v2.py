@@ -529,6 +529,53 @@ def _maps_hp_available_count(store, prefecture="", force=False, medical_types=No
     return store.maps_hp_available_count(prefecture, medical_types, force)
 
 
+def current_hp_job_export_ui(store, *, key_prefix="step5"):
+    """Step5 is intentionally scoped to the latest completed HP job, never global history."""
+    if not getattr(store, "is_supabase_runtime", False):
+        st.metric("Comdesk出力対象", "0件")
+        st.info("今回のHP調査ジョブはSupabase実行時に表示されます。全期間の出力は詳細設定をご利用ください。")
+        return
+    job = store.latest_completed_hp_job()
+    if not job:
+        st.metric("Comdesk出力対象", "0件")
+        st.info("完了したHP調査ジョブがありません。過去のHP確認済み医院を代わりに出力することはありません。")
+        return
+    summary = store.hp_job_export_summary(job["id"])
+    st.caption(f"今回のHP調査結果（ジョブ {job['id']}）")
+    cols = st.columns(5)
+    cols[0].metric("調査対象", f"{job['target_count']:,}件")
+    cols[1].metric("調査完了", f"{summary['done_count']:,}件")
+    cols[2].metric("HP確認成功", f"{summary['success_count']:,}件")
+    cols[3].metric("既存UUIDあり", f"{summary['uuid_existing_count']:,}件")
+    cols[4].metric("Comdesk出力対象", f"{len(summary['export_ids']):,}件")
+    signature = json.dumps(
+        [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision()],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if st.button(
+        "今回のHP調査結果をComdesk形式で出力",
+        type="primary",
+        key=key_prefix + "_current_hp_export",
+        disabled=not summary["export_ids"],
+        use_container_width=True,
+    ):
+        st.session_state[key_prefix + "_current_hp_export_files"] = {
+            "signature": signature,
+            "files": store.export_hp_job(job["id"]),
+        }
+    output = st.session_state.get(key_prefix + "_current_hp_export_files")
+    if output and output["signature"] == signature:
+        for name, content in output["files"].items():
+            st.download_button(
+                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
+                content,
+                name,
+                key=key_prefix + "_download_" + name,
+                use_container_width=True,
+            )
+
+
 def simple_workflow_ui(store, demo):
     metrics = store.metrics()
 
@@ -595,7 +642,7 @@ def simple_workflow_ui(store, demo):
     force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
     available = _maps_hp_available_count(store, pref, force, research_medical_types)
 
-    st.info(f"現在の条件でHP調査できる医院：{available:,}件")
+    st.info(f"ウェブサイト調査対象：{available:,}件")
 
     default_count = min(50, available) if available > 0 else 50
     count = st.number_input(
@@ -607,7 +654,7 @@ def simple_workflow_ui(store, demo):
     )
     actual = min(int(count), available)
     st.caption(
-        f"今回実際に調査する件数：{actual:,}件。"
+        f"今回のウェブサイト調査件数：{actual:,}件。"
         "設定が50件でも対象が34件なら34件だけ調査します。"
     )
 
@@ -654,33 +701,7 @@ def simple_workflow_ui(store, demo):
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
 
     st.subheader("5. Comdesk形式で出力")
-    st.caption("HP確認済みで、まだUUIDが付いていない医院を、営業条件で絞らずComdesk形式で出力します。")
-
-    step5_filters = Filters(active_only=False, hp_only=True, uuid_mode="なし")
-    step5_count = store.count(step5_filters)
-    st.write(f"対象：{step5_count:,}件")
-
-    step5_signature = json.dumps(
-        [str(store.path), asdict(step5_filters), COMDESK_HEADERS, store.revision()],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    if st.button("CSV・Excelを作成", type="primary", key="simple_step5_export", disabled=step5_count == 0, use_container_width=True):
-        st.session_state["simple_step5_export_files"] = {
-            "signature": step5_signature,
-            "files": store.export(step5_filters),
-        }
-
-    step5_output = st.session_state.get("simple_step5_export_files")
-    if step5_output and step5_output["signature"] == step5_signature:
-        for name, content in step5_output["files"].items():
-            st.download_button(
-                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
-                content,
-                name,
-                key="simple_step5_download_" + name,
-                use_container_width=True,
-            )
+    current_hp_job_export_ui(store, key_prefix="simple_step5")
 
     st.subheader("6. 5.で出したデータを手動でComdeskに入れる（＝UUIDを付与）")
 
@@ -825,60 +846,9 @@ def simple_sales_ui(store, demo=False):
     with st.expander("対象医院を確認", expanded=False):
         listing(store, filters, "simple_sales_results")
 
-    st.subheader("Comdesk形式で出力")
-    st.caption("A〜ABの28列固定。診療時間は HH:MM 形式で出力します。HP ABC判定がA・B以外の医院は出力しません。")
-
-    # 営業対象はHP ABC判定のA+Bのみ。選択内容に関わらずComdesk出力はA/Bに限定する
-    # （C/D/UNKNOWN/NO_HPを選んで一覧確認はできるが、出力対象にはならない）。
-    # UUIDの有無では絞り込まない。UUIDなし（新規案件）もUUIDあり（既存案件）と同様に出力する。
-    export_ranks = [r for r in (hp_ranks or ["A", "B"]) if r in ("A", "B")]
-    # A+B以外だけを選択した場合、export_ranksが空になりranks未指定(無制限)と区別できなくなる。
-    # 空=無制限ではなく「0件」として扱い、意図せずC/D/UNKNOWN/NO_HPを出力しない。
-    non_ab_only_selected = bool(hp_ranks) and not export_ranks
-    if non_ab_only_selected:
-        st.caption(f"選択されたHP ABC判定「{rank_choice}」は営業対象外のため、Comdesk出力はできません。")
-    export_filters = sales_filters
-
-    try:
-        export_count = 0 if non_ab_only_selected else store.count(export_filters)
-        uuid_yes_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="あり"))
-        uuid_no_count = 0 if non_ab_only_selected else store.count(replace(export_filters, uuid_mode="なし"))
-    except SalesClassificationUnavailableError as exc:
-        st.error(str(exc))
-        return
-
-    export_cols = st.columns(3)
-    export_cols[0].metric("Comdesk出力対象", f"{export_count:,}件")
-    export_cols[1].metric("既存案件(UUIDあり)", f"{uuid_yes_count:,}件")
-    export_cols[2].metric("新規案件(UUIDなし)", f"{uuid_no_count:,}件")
-    if not non_ab_only_selected and set(hp_ranks or ["A", "B"]) <= {"A", "B"} and export_count != count:
-        st.caption(
-            f"注意：営業対象（{count:,}件）とComdesk出力対象（{export_count:,}件）が一致していません。"
-            "絞り込み条件がA+B以外を含んでいないか確認してください。"
-        )
-
-    signature = json.dumps(
-        [str(store.path), asdict(export_filters), COMDESK_HEADERS, store.revision()],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    export_disabled = non_ab_only_selected or export_count == 0
-    if st.button("CSV・Excelを作成", type="primary", key="simple_export", disabled=export_disabled, use_container_width=True) and not non_ab_only_selected:
-        st.session_state["simple_export_files"] = {
-            "signature": signature,
-            "files": store.export(export_filters),
-        }
-
-    output = st.session_state.get("simple_export_files")
-    if output and output["signature"] == signature:
-        for name, content in output["files"].items():
-            st.download_button(
-                "Excelをダウンロード" if name.endswith("xlsx") else "CSVをダウンロード",
-                content,
-                name,
-                key="simple_download_" + name,
-                use_container_width=True,
-            )
+    st.subheader("今回のHP調査結果をComdesk形式で出力")
+    st.caption("上の営業対象件数は全体の参考表示です。出力は最新完了HP調査ジョブ内の成功医院に限定します。")
+    current_hp_job_export_ui(store, key_prefix="simple_sales")
 
 
 def advanced_ui(store, demo):
@@ -981,7 +951,8 @@ def sales_ui(store):
     with st.expander("選択条件での絞り込み件数",expanded=True):
         show_funnel(store,filters)
     listing(store,filters,"sales_results")
-    st.subheader("コムデスク形式で出力する")
+    st.subheader("全期間の営業対象を出力（詳細設定）")
+    st.caption("かんたん操作のStep5とは別の全期間検索です。過去のHP確認済み医院も選択条件に応じて含まれます。")
     st.caption("出力形式：A〜AB列の28項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。入力にない項目は確認できた情報を補い、不明な項目は空欄にします。")
     with st.expander("毎回1行目に出力する28項目",expanded=True):
         st.dataframe(pd.DataFrame({"列":[chr(65+i) if i<26 else "A"+chr(65+i-26) for i in range(28)],"1行目の項目名":COMDESK_HEADERS}),hide_index=True,width="stretch")

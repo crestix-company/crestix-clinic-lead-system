@@ -21,6 +21,7 @@ class WriteRepositories:
     settings: object
     jobs: object
     search: object
+    hp: object | None = None
 
 
 class ClinicWriteRepository(Protocol):

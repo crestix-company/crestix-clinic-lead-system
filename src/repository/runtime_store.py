@@ -111,7 +111,7 @@ class SupabaseRuntimeStore:
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT c.id FROM public.clinics c WHERE " + predicate +
-                " ORDER BY (c.uuid<>'') DESC,c.is_new DESC,c.id LIMIT %s", args,
+                " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
             )
             return [r[0] for r in cur.fetchall()]
 
@@ -146,6 +146,9 @@ class SupabaseRuntimeStore:
 
     def _export_rows(self, filters, as_of=None):
         records = self.query(filters, limit=100000, as_of=as_of)
+        return self._export_records(records)
+
+    def _export_records(self, records):
         ids = [r["id"] for r in records]
         originals, templates = {}, {}
         if ids:
@@ -170,6 +173,67 @@ class SupabaseRuntimeStore:
             headers, mapping = templates[chosen[0]]
             output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
         return output
+
+    def latest_completed_hp_job(self):
+        """Return the latest fully completed HP job; never fall back to historical clinics."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT j.id,j.created_at,j.updated_at,count(i.clinic_id) AS target_count, "
+                "count(*) FILTER (WHERE i.state='DONE') AS done_count "
+                "FROM research.research_jobs j "
+                "JOIN research.research_job_items i ON i.job_id=j.id "
+                "WHERE j.kind='hp' AND j.status='COMPLETED' "
+                "GROUP BY j.id,j.created_at,j.updated_at "
+                "HAVING count(i.clinic_id)>0 "
+                "AND count(*) FILTER (WHERE i.state<>'DONE')=0 "
+                "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "created_at": row[1], "updated_at": row[2],
+                "target_count": row[3], "done_count": row[4]}
+
+    def hp_job_export_summary(self, job_id):
+        """Counts and export IDs for one completed HP job, all from the canonical HP ledger."""
+        exclusion = "(c.exclude_reason IN ('hospital','center') " \
+            "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
+            "OR c.clinic_name LIKE '%病院%' OR c.clinic_name LIKE '%センター%')"
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*), "
+                "count(*) FILTER (WHERE i.state='DONE'), "
+                "count(*) FILTER (WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "AND h.fetch_status='OK' AND COALESCE(BTRIM(h.final_url),'')<>''), "
+                "count(*) FILTER (WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "AND h.fetch_status='OK' AND COALESCE(BTRIM(h.final_url),'')<>'' "
+                "AND COALESCE(BTRIM(c.uuid),'')<>''), "
+                "COALESCE(array_agg(i.clinic_id ORDER BY i.clinic_id) FILTER (WHERE "
+                "i.state='DONE' AND i.result='SUCCESS' AND h.fetch_status='OK' "
+                "AND COALESCE(BTRIM(h.final_url),'')<>'' AND COALESCE(BTRIM(c.uuid),'')='' "
+                "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion + "),'{}') "
+                "FROM research.research_job_items i "
+                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status='COMPLETED' "
+                "LEFT JOIN public.clinics c ON c.id=i.clinic_id "
+                "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
+                "WHERE i.job_id=%s", ('"facility_type":"([^"]*)"', job_id),
+            )
+            target, done, success, uuid_existing, ids = cur.fetchone()
+        return {"target_count": target, "done_count": done, "success_count": success,
+                "uuid_existing_count": uuid_existing, "export_ids": list(ids or [])}
+
+    def export_hp_job(self, job_id):
+        """Render only successful, UUID-empty clinics from the explicitly selected HP job."""
+        summary = self.hp_job_export_summary(job_id)
+        ids = summary["export_ids"]
+        records = self.repositories.clinics._batch_get(ids) if ids else []
+        rows = self._export_records(records)
+        import pandas as pd
+        frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
+        return {
+            "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_HEADERS, rows),
+        }
 
     def export(self, filters, template_id=None, as_of=None):
         rows = self._export_rows(filters, as_of)

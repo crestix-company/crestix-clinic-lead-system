@@ -59,6 +59,7 @@ def test_hp_target_count_and_candidates_share_the_exact_eligibility_predicate():
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h WHERE h.clinic_id=c.id)" in candidate_sql
     assert "hp_status" not in candidate_sql
     assert "hp_status" not in count_sql
+    assert "uuid" not in candidate_sql.lower()
 
 
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():

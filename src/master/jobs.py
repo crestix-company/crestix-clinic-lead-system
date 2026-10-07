@@ -203,6 +203,9 @@ def _research_one(store,jid,job,options,researcher,cid):
         with _WRITE_LOCK:
             research_repo.save_research(cid,result,pages)
         status,note = result.get("research_status","SUCCESS"),""
+        if job["kind"] == "hp" and repositories.hp is not None:
+            with _WRITE_LOCK:
+                repositories.hp.upsert_result(_hp_ledger_payload(cid, result, status, note))
     except (BudgetReached,Stopped) as exc:
         with _WRITE_LOCK:
             jobs_repo.requeue_item_for_budget_or_pause(
@@ -220,9 +223,57 @@ def _research_one(store,jid,job,options,researcher,cid):
             safe_result[job["kind"]+"_checked_at"] = now()
         with _WRITE_LOCK:
             research_repo.save_research(cid,safe_result,[] if job["kind"]=="hp" else None)
+        if job["kind"] == "hp" and repositories.hp is not None:
+            with _WRITE_LOCK:
+                repositories.hp.upsert_result(_hp_ledger_payload(cid, safe_result, status, note))
     with _WRITE_LOCK:
         jobs_repo.finish_item(jid,cid,status,note)
     return True
+
+
+def _hp_ledger_payload(clinic_id, result, status, note=""):
+    """Translate one terminal runtime HP attempt to the canonical HP research ledger.
+
+    A ledger row means "attempted", not "successful". Only a verified SUCCESS with a final
+    URL gets fetch_status=OK; terminal REVIEW/ERROR/NOT_FOUND attempts are retained as such.
+    This deliberately leaves HP rank and Treatment projection fields untouched.
+    """
+    from datetime import datetime, timezone
+
+    hp_url = str(result.get("hp_url") or "").strip()
+    usable = (
+        status == "SUCCESS"
+        and result.get("hp_status") == "VERIFIED"
+        and result.get("hp_verified") is True
+        and bool(hp_url)
+    )
+    fetch_status = "OK" if usable else str(status or result.get("research_status") or "ERROR").upper()
+    categories = result.get("treatment_categories") or []
+    if isinstance(categories, str):
+        try:
+            categories = json.loads(categories)
+        except (TypeError, ValueError):
+            categories = []
+    if not isinstance(categories, list):
+        categories = []
+    return {
+        "clinic_id": clinic_id,
+        "hp_url": hp_url,
+        "fetch_status": fetch_status,
+        "final_url": str(result.get("final_url") or hp_url).strip(),
+        "treatment_status": "DONE" if usable else "FETCH_FAILED",
+        "treatment_categories": json.dumps(categories, ensure_ascii=False),
+        "hp_abc_candidate": "",
+        "hp_abc_score": "",
+        "candidate_rank_1": "",
+        "candidate_rank_2": "",
+        "ambiguity_reason": "",
+        "feature_json": "[]",
+        "researched_at": result.get("hp_checked_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "engine_version": "research_jobs_hp_v1",
+        "error_detail": str(note or result.get("research_error") or ""),
+        "elapsed_seconds": 0,
+    }
 
 
 class JobRunner:

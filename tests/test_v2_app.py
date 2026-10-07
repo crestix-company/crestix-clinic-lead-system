@@ -41,13 +41,15 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
     app.radio[0].set_value("営業対象・出力").run()
     assert not app.exception and not app.error
-    # デモデータはimport時にfirst_seen_at=現在時刻となり既定の既存営業リスト（legacy cutoff）から外れるため、
-    # このexport確認では全国Clinic Masterへ切り替える。
+    assert any(m.label == "Comdesk出力対象" and m.value == "0件" for m in app.metric)
+    assert any("全期間の出力は詳細設定" in x.value for x in app.info)
+    app.radio[0].set_value("詳細設定").run()
+    next(s for s in app.selectbox if s.label == "開く画面").set_value("営業対象フィルター（詳細）").run()
     next(s for s in app.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
-    next(b for b in app.button if b.label=="CSV・Excelを作成").click().run()
+    next(b for b in app.button if b.label=="この条件でExcel・CSVを作成").click().run()
     assert not app.exception and not app.error
-    assert "final_comdesk_import.xlsx" in app.session_state["simple_export_files"]["files"]
-    for filename, content in app.session_state["simple_export_files"]["files"].items():
+    assert "final_comdesk_import.xlsx" in app.session_state["export_v2"]["files"]
+    for filename, content in app.session_state["export_v2"]["files"].items():
         assert load_table(content,filename).headers==COMDESK_HEADERS
     detail=next(s for s in app.selectbox if s.label=="詳細を確認する医院")
     detail.set_value(1).run()
