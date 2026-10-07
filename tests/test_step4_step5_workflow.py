@@ -153,7 +153,10 @@ def test_step5_keeps_current_job_metrics_but_exports_cumulative_uuid_empty_backl
         assert required in current_sql
 
     assert waiting_params == ('"facility_type":"([^"]*)"',)
-    assert "research.research_job_items" not in waiting_sql
+    assert "JOIN research.research_job_items i ON i.clinic_id=c.id" in waiting_sql
+    assert "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp'" in waiting_sql
+    assert "i.state='DONE' AND i.result='SUCCESS'" in waiting_sql
+    assert "array_agg(DISTINCT c.id ORDER BY c.id)" in waiting_sql
     assert "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in waiting_sql
     assert "h.fetch_status='OK'" in waiting_sql
     assert "COALESCE(BTRIM(c.uuid),'')=''" in waiting_sql
