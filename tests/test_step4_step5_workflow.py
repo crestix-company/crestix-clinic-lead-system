@@ -126,21 +126,40 @@ def test_latest_completed_hp_job_is_explicit_and_deterministically_ordered():
     assert "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC" in sql
 
 
-def test_step5_sql_scopes_export_to_job_success_ledger_uuid_and_existing_exclusions():
-    conn = _Conn([(9, 9, 7, 2, [101, 102])])
+def test_step5_keeps_current_job_metrics_but_exports_cumulative_uuid_empty_backlog():
+    conn = _Conn([
+        (9, 9, 7, 2, [101, 102]),
+        ([90, 101, 102],),
+    ])
     result = _runtime_store(conn).hp_job_export_summary("latest-job")
-    sql, params = conn.calls[0]
-    assert result == {"target_count": 9, "done_count": 9, "success_count": 7,
-                      "uuid_existing_count": 2, "export_ids": [101, 102]}
-    assert params == ('"facility_type":"([^"]*)"', "latest-job")
+
+    current_sql, current_params = conn.calls[0]
+    waiting_sql, waiting_params = conn.calls[1]
+    assert result == {
+        "target_count": 9,
+        "done_count": 9,
+        "success_count": 7,
+        "uuid_existing_count": 2,
+        "export_ids": [90, 101, 102],
+        "carryover_count": 1,
+    }
+    assert current_params == ('"facility_type":"([^"]*)"', "latest-job")
     for required in (
         "i.job_id=%s", "i.state='DONE'", "i.result='SUCCESS'", "h.fetch_status='OK'",
         "COALESCE(BTRIM(h.final_url),'')<>''", "COALESCE(BTRIM(c.uuid),'')=''",
         "c.merged_into IS NULL", "c.merge_hold=false", "exclude_reason IN ('hospital','center')",
         "c.clinic_name LIKE '%%病院%%'", "c.clinic_name LIKE '%%センター%%'",
     ):
-        assert required in sql
-    assert "uuid" in sql  # UUID is an export-only condition, never a Step4 target condition.
+        assert required in current_sql
+
+    assert waiting_params == ('"facility_type":"([^"]*)"',)
+    assert "research.research_job_items" not in waiting_sql
+    assert "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in waiting_sql
+    assert "h.fetch_status='OK'" in waiting_sql
+    assert "COALESCE(BTRIM(c.uuid),'')=''" in waiting_sql
+    assert "c.merged_into IS NULL" in waiting_sql
+    assert "c.merge_hold=false" in waiting_sql
+    assert "uuid" in current_sql  # UUID is an export-only condition, never a Step4 target condition.
 
 
 def test_missing_only_ledger_repository_never_overwrites_existing_rows():
