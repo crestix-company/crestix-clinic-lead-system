@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +23,15 @@ from src.repository.write_backend import write_repositories_for
 
 def _repo_for(store):
     return write_repositories_for(store).hp_human_review
+
+
+def _review_client_token():
+    """Stable per-Streamlit-session token used for multi-PC review claims."""
+    token = st.session_state.get("_hp_human_review_client_token")
+    if not token:
+        token = uuid.uuid4().hex
+        st.session_state["_hp_human_review_client_token"] = token
+    return token
 
 
 def _request_quick_review():
@@ -262,7 +272,10 @@ def _feature_mark(value):
     return "✅ 一致" if value else "❌ 不一致"
 
 
-def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, rerun=True):
+def _save_decision(
+    store, repo, row, decision, selected_url, reviewer, note,
+    *, rerun=True, claim_owner_token="",
+):
     review_id = repo.save_review(
         clinic_id=row["clinic_id"],
         hp_checked_at=row["snapshot"]["hp_checked_at"],
@@ -272,6 +285,7 @@ def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, 
         review_note=note,
         research_job_id=row.get("job_id") or "",
         auto_run_id=row.get("auto_run_id") or "",
+        claim_owner_token=claim_owner_token,
     )
     message = f"{row['clinic_name']} の判定を保存しました（{DECISION_LABELS[decision]}）。"
     if decision in POSITIVE_DECISIONS:
