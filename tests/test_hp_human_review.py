@@ -365,3 +365,39 @@ def test_human_review_sql_sanitizes_text_before_jsonb_cast():
     sanitizer = "replace(rr.result_json, chr(92) || 'u0000', '')::jsonb"
     assert source.count(sanitizer) >= 4
     assert "rr.result_json::jsonb" not in source
+
+
+
+def test_quick_human_review_dialog_is_one_by_one_and_auto_advances():
+    source = Path("src/hp_human_review_ui.py").read_text(encoding="utf-8")
+    assert '@st.dialog("HP要確認レビュー", width="large")' in source
+    assert 'repo.queue(include_reviewed=False, priority="ALL", limit=1)' in source
+    assert 'st.rerun(scope="fragment")' in source
+    assert 'key="quick_hp_human_reviewer"' in source
+    assert 'key="simple_hp_human_review_start"' in source
+    assert 'key="sidebar_hp_human_review_start"' in source
+    assert '"1件レビューする"' in source
+    assert '"次をレビュー"' in source
+
+
+def test_quick_human_review_launcher_is_wired_without_replacing_detailed_page():
+    app = Path("app_v2.py").read_text(encoding="utf-8")
+    assert "hp_human_review_card" in app
+    assert "hp_human_review_page" in app
+    assert "hp_human_review_sidebar" in app
+    assert "hp_human_review_dialog" in app
+    assert 'st.session_state.pop("_open_hp_human_review_dialog", False)' in app
+    assert 'hp_human_review_sidebar(store)' in app
+    assert 'hp_human_review_dialog(store)' in app
+    assert '"HP Human Review"' in app
+
+
+def test_quick_review_does_not_change_auto_run_controller():
+    source = Path("src/hp_human_review_ui.py").read_text(encoding="utf-8")
+    dialog_start = source.index('@st.dialog("HP要確認レビュー"')
+    dialog_end = source.index("def _candidate_frame", dialog_start)
+    dialog_source = source[dialog_start:dialog_end]
+    assert "auto_repo" not in dialog_source
+    assert "auto_runner" not in dialog_source
+    assert ".pause()" not in dialog_source
+    assert ".resume()" not in dialog_source
