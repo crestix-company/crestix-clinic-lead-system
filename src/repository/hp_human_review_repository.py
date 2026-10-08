@@ -144,6 +144,24 @@ class SupabaseHpHumanReviewRepository:
         output["reviewed"] = bool(row.get("human_review_id"))
         return output
 
+    def legacy_name_only_mismatch_candidates(self, *, limit=200):
+        """Legacy REVIEW rows eligible for the one-time identity-rule backfill.
+
+        This is deliberately not part of the user-facing Human Review queue model. Until the
+        backfill actually replaces the old REVIEW result, the row remains visible and auditable
+        in that queue; successful or content-failed backfill results naturally leave it because
+        their canonical result is no longer REVIEW.
+        """
+        if not self.available():
+            return []
+        rows = [self._decorate(row) for row in self._current_rows()]
+        rows = [
+            row for row in rows
+            if not row["reviewed"] and row["snapshot"].get("auto_accept_without_human")
+        ]
+        rows.sort(key=lambda row: (-int(row["snapshot"].get("score") or 0), int(row["clinic_id"])))
+        return rows if limit is None else rows[: max(0, int(limit))]
+
     def queue(self, *, include_reviewed=False, priority="ALL", limit=200):
         if not self.available():
             return []
