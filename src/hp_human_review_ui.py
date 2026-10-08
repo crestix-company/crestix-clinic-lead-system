@@ -160,7 +160,7 @@ def hp_human_review_dialog(store):
     reviewer = st.text_input(
         "確認者",
         value=st.session_state.get("hp_human_reviewer", reviewer_default),
-        key="hp_human_reviewer",
+        key="quick_hp_human_reviewer",
         placeholder="例：前川",
     )
 
