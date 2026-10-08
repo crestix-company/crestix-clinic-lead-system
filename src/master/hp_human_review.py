@@ -123,3 +123,99 @@ def review_snapshot(result: dict | None) -> dict:
     snapshot["priority"] = review_priority(snapshot)
     snapshot["bucket"] = review_bucket(snapshot)
     return snapshot
+
+
+def reanalyze_human_verified_hp(store, *, human_review_id, clinic_id, selected_url):
+    """Re-run normal HP content analysis after human identity verification.
+
+    The human label is already committed before this function is called. On success,
+    the canonical research result + HP ledger are refreshed. On fetch/analysis failure,
+    the human-verified URL remains preserved by manual override while the HP ledger is
+    marked failed; the previous REVIEW evidence row is intentionally kept for audit/retry.
+    """
+    from src.enrichment.researcher import (
+        empty_hp_result,
+        research_human_verified_hp,
+    )
+    from src.enrichment.safe_web import WebError
+    from src.master.jobs import _hp_ledger_payload
+    from src.master.store import now
+    from src.repository.write_backend import write_repositories_for
+
+    repositories = write_repositories_for(store)
+    if repositories.hp is None or repositories.hp_human_review is None:
+        raise RuntimeError("HP Human ReviewのSupabase保存先を利用できません。")
+
+    cid = int(clinic_id)
+    url = str(selected_url or "").strip()
+    started_at = now()
+
+    record = store.get(cid)
+    saved = repositories.research.get_saved_research(cid)
+    record["marketing_signals"] = saved.get("marketing_signals", [])
+
+    try:
+        result, pages = research_human_verified_hp(record, url)
+        repositories.research.save_research(cid, result, pages)
+        repositories.hp.upsert_result(
+            _hp_ledger_payload(cid, result, "SUCCESS", "Human Review verified")
+        )
+        categories = result.get("treatment_categories") or []
+        if not isinstance(categories, list):
+            categories = []
+        repositories.hp_human_review.record_reanalysis(
+            human_review_id=human_review_id,
+            clinic_id=cid,
+            selected_url=url,
+            status="DONE",
+            treatment_categories=categories,
+            started_at=started_at,
+            finished_at=now(),
+        )
+        return {
+            "status": "DONE",
+            "treatment_categories": categories,
+            "treatment_count": len(categories),
+            "fetch_status": "OK",
+        }
+    except Exception as exc:
+        # SafeFetcher/WebError messages contain useful HTTP/robots context, while arbitrary
+        # unexpected exceptions may contain implementation details and must not be persisted.
+        note = str(exc) if isinstance(exc, WebError) else (
+            "Human Review後のHP内容解析でエラーが発生しました。再試行してください。"
+        )
+        safe_result = empty_hp_result("ERROR", record)
+        safe_result.update(
+            hp_status="VERIFIED",
+            hp_verified=True,
+            hp_url=url,
+            final_url=url,
+            hp_checked_at=now(),
+            hp_identity_source="HUMAN_REVIEW",
+            human_verified_source_url=url,
+            research_status="ERROR",
+            research_error=note,
+        )
+        # Do not overwrite research.research_results on failure: the original REVIEW
+        # evidence remains inspectable and retryable. Only the canonical batch ledger
+        # becomes FETCH_FAILED/ERROR for top-level metrics.
+        repositories.hp.upsert_result(
+            _hp_ledger_payload(cid, safe_result, "ERROR", note)
+        )
+        repositories.hp_human_review.record_reanalysis(
+            human_review_id=human_review_id,
+            clinic_id=cid,
+            selected_url=url,
+            status="FAILED",
+            treatment_categories=[],
+            error_detail=note,
+            started_at=started_at,
+            finished_at=now(),
+        )
+        return {
+            "status": "FAILED",
+            "treatment_categories": [],
+            "treatment_count": 0,
+            "fetch_status": "ERROR",
+            "error_detail": note,
+        }
