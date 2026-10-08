@@ -38,10 +38,34 @@ create index if not exists hp_human_reviews_attempt_idx
 create index if not exists hp_human_reviews_decision_idx
   on provenance.hp_human_reviews(human_decision,reviewed_at desc);
 
+create table if not exists provenance.hp_human_review_research_runs (
+  id text primary key,
+  human_review_id text not null references provenance.hp_human_reviews(id),
+  clinic_id bigint not null references public.clinics(id),
+  selected_url text not null,
+  status text not null check (status in ('DONE','FAILED')),
+  identity_source text not null default 'HUMAN_REVIEW'
+    check (identity_source='HUMAN_REVIEW'),
+  treatment_categories jsonb not null default '[]'::jsonb,
+  treatment_count integer not null default 0,
+  error_detail text not null default '',
+  started_at timestamptz not null default now(),
+  finished_at timestamptz not null default now()
+);
+
+create index if not exists hp_human_review_research_runs_review_idx
+  on provenance.hp_human_review_research_runs(human_review_id,finished_at desc);
+
+create index if not exists hp_human_review_research_runs_clinic_idx
+  on provenance.hp_human_review_research_runs(clinic_id,finished_at desc);
+
 alter table provenance.hp_human_reviews enable row level security;
+alter table provenance.hp_human_review_research_runs enable row level security;
 
 grant select, insert on provenance.hp_human_reviews to clinic_runtime;
+grant select, insert on provenance.hp_human_review_research_runs to clinic_runtime;
 revoke all on provenance.hp_human_reviews from anon, authenticated, public;
+revoke all on provenance.hp_human_review_research_runs from anon, authenticated, public;
 
 do $$
 begin
@@ -70,6 +94,33 @@ begin
       to clinic_runtime
       with check (true);
   end if;
+
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_research_runs'
+      and policyname='clinic_runtime_hp_human_review_run_select'
+  ) then
+    create policy clinic_runtime_hp_human_review_run_select
+      on provenance.hp_human_review_research_runs
+      for select
+      to clinic_runtime
+      using (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_research_runs'
+      and policyname='clinic_runtime_hp_human_review_run_insert'
+  ) then
+    create policy clinic_runtime_hp_human_review_run_insert
+      on provenance.hp_human_review_research_runs
+      for insert
+      to clinic_runtime
+      with check (true);
+  end if;
 end $$;
 
 commit;
@@ -77,13 +128,15 @@ commit;
 -- Read-only validation after apply:
 --
 -- select to_regclass('provenance.hp_human_reviews');
+-- select to_regclass('provenance.hp_human_review_research_runs');
 -- select relrowsecurity
 -- from pg_class c join pg_namespace n on n.oid=c.relnamespace
 -- where n.nspname='provenance' and c.relname='hp_human_reviews';
 --
 -- select grantee,privilege_type
 -- from information_schema.table_privileges
--- where table_schema='provenance' and table_name='hp_human_reviews'
+-- where table_schema='provenance'
+--   and table_name in ('hp_human_reviews','hp_human_review_research_runs')
 -- order by grantee,privilege_type;
 --
 -- expect:
