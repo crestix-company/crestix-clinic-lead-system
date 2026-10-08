@@ -28,6 +28,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 
 from psycopg.types.json import Jsonb
+from psycopg.errors import SerializationFailure
 
 from src.master.store import now, dumps
 from src.master.matching import medical_key
@@ -1064,6 +1065,26 @@ class SupabaseClinicWriteRepository:
         return row
 
     @staticmethod
+    def _comdesk_candidate_fence(row):
+        """Immutable snapshot used to detect stale candidate state before bulk overwrite."""
+        base = row.get("base_json") or {}
+        if not isinstance(base, dict):
+            base = json.loads(base)
+        return {
+            "base_json": dict(base),
+            "uuid": str(row.get("uuid") or ""),
+            "medical_key": str(row.get("medical_key") or ""),
+            "tel_match_key": str(row.get("tel_match_key") or ""),
+            "name_norm": str(row.get("name_norm") or ""),
+            "name_prefix": str(row.get("name_prefix") or ""),
+            "address_norm": str(row.get("address_norm") or ""),
+            "prefecture": str(row.get("prefecture") or ""),
+            "medical_type": str(row.get("medical_type") or ""),
+            "merge_hold": bool(row.get("merge_hold")),
+            "source_as_of_date": str(row.get("source_as_of_date") or ""),
+        }
+
+    @staticmethod
     def _prefetch_comdesk_candidates(cur, records):
         """Load every DB row that the canonical Comdesk matcher could ask for.
 
@@ -1159,17 +1180,22 @@ class SupabaseClinicWriteRepository:
 
         if prefix_prefecture_pairs:
             pairs = sorted(prefix_prefecture_pairs)
-            cur.execute(
-                "WITH input_pairs AS (SELECT * FROM unnest(%s::text[],%s::text[]) "
-                "AS p(name_prefix,prefecture)) "
-                "SELECT " + ",".join("c." + name for name in columns.split(",")) + " "
-                "FROM public.clinics c JOIN input_pairs p "
-                "ON c.name_prefix=p.name_prefix "
-                "AND (c.prefecture=p.prefecture OR c.prefecture='') "
-                "WHERE c.merged_into IS NULL",
-                ([item[0] for item in pairs], [item[1] for item in pairs]),
-            )
-            collect(cur.fetchall())
+            # Chunk only the input-pair transport. Do not LIMIT candidate rows here: the
+            # canonical matcher still owns its historical [:200] rule, so prefetch must not
+            # silently change which candidates are available for that rule.
+            for offset in range(0, len(pairs), 250):
+                chunk = pairs[offset:offset + 250]
+                cur.execute(
+                    "WITH input_pairs AS (SELECT * FROM unnest(%s::text[],%s::text[]) "
+                    "AS p(name_prefix,prefecture)) "
+                    "SELECT " + ",".join("c." + name for name in columns.split(",")) + " "
+                    "FROM public.clinics c JOIN input_pairs p "
+                    "ON c.name_prefix=p.name_prefix "
+                    "AND (c.prefecture=p.prefecture OR c.prefecture='') "
+                    "WHERE c.merged_into IS NULL",
+                    ([item[0] for item in chunk], [item[1] for item in chunk]),
+                )
+                collect(cur.fetchall())
 
         return list(candidates.values())
 
@@ -1255,6 +1281,11 @@ class SupabaseClinicWriteRepository:
         try:
             with self._conn.cursor() as raw_cur:
                 cur = _CountingCursor(raw_cur)
+                # The legacy row-by-row path locked each matched clinic before merging.
+                # Fast prefetch must not turn that into a lost-update window. REPEATABLE READ
+                # guarantees that a row changed after this snapshot causes serialization
+                # failure rather than allowing a stale bulk overwrite.
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 cur.execute(
                     "SELECT result_json FROM provenance.import_batches WHERE id=%s",
                     (batch,),
@@ -1275,8 +1306,13 @@ class SupabaseClinicWriteRepository:
                 candidate_rows = self._prefetch_comdesk_candidates(
                     cur, [item[2] for item in prepared]
                 )
+                initial_candidate_fences = {
+                    int(row["id"]): self._comdesk_candidate_fence(row)
+                    for row in candidate_rows
+                }
                 matcher = _PrefetchedMatchingConnection(candidate_rows)
                 phase["candidate_prefetch_seconds"] = time.perf_counter() - started
+                phase["candidate_prefetch_rows"] = len(candidate_rows)
 
                 started = time.perf_counter()
                 next_temp_id = -1
@@ -1345,6 +1381,44 @@ class SupabaseClinicWriteRepository:
                     counts[match.status] += 1
                 phase["matching_and_simulation_seconds"] = time.perf_counter() - started
 
+                existing_ids = sorted(cid for cid in mutated_ids if cid > 0)
+                if existing_ids:
+                    lock_columns = (
+                        "id,base_json,uuid,medical_key,tel_match_key,name_norm,name_prefix,"
+                        "address_norm,prefecture,medical_type,merge_hold,source_as_of_date"
+                    )
+                    cur.execute(
+                        "SELECT " + lock_columns + " FROM public.clinics "
+                        "WHERE id=ANY(%s::bigint[]) ORDER BY id FOR UPDATE",
+                        (existing_ids,),
+                    )
+                    locked_rows = {}
+                    names = (
+                        "id", "base_json", "uuid", "medical_key", "tel_match_key",
+                        "name_norm", "name_prefix", "address_norm", "prefecture",
+                        "medical_type", "merge_hold", "source_as_of_date",
+                    )
+                    for values in cur.fetchall():
+                        row = dict(zip(names, values))
+                        row["id"] = int(row["id"])
+                        locked_rows[row["id"]] = row
+                    missing = set(existing_ids) - set(locked_rows)
+                    if missing:
+                        raise RuntimeError(
+                            f"Matched clinic disappeared before Comdesk batch lock: {min(missing)}"
+                        )
+                    stale = [
+                        cid for cid in existing_ids
+                        if self._comdesk_candidate_fence(locked_rows[cid])
+                        != initial_candidate_fences.get(cid)
+                    ]
+                    if stale:
+                        raise RuntimeError(
+                            "既存案件取込中に別処理が医院データを更新しました。"
+                            "安全のため取込を取り消しました。もう一度実行してください。"
+                        )
+                phase["existing_clinic_lock_count"] = len(existing_ids)
+
                 # Materialize NEW clinics first so all provenance/history rows can use final IDs.
                 started = time.perf_counter()
                 for temp_id in new_temp_ids:
@@ -1365,7 +1439,6 @@ class SupabaseClinicWriteRepository:
                     assert_high_range(real_id, table="public.clinics")
                     temp_to_real[temp_id] = real_id
 
-                existing_ids = sorted(cid for cid in mutated_ids if cid > 0)
                 existing_update_rows = []
                 for cid in existing_ids:
                     state = matcher.get(cid)
@@ -1505,6 +1578,12 @@ class SupabaseClinicWriteRepository:
             phase["rows_per_second"] = len(rows) / max(phase["total_seconds"], 1e-9)
             self._last_import_metrics = phase
             return counts
+        except SerializationFailure as exc:
+            self._conn.rollback()
+            raise RuntimeError(
+                "既存案件取込中に別処理が同じ医院を更新しました。"
+                "データ保護のため取込を取り消しました。もう一度実行してください。"
+            ) from exc
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
 
