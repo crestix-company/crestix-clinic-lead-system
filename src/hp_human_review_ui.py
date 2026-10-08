@@ -62,13 +62,29 @@ def hp_human_review_sidebar(store):
     summary = repo.summary()
     with st.sidebar:
         st.divider()
-        st.markdown("**🔍 HP Human Review**")
-        st.caption(
-            f"未レビュー {summary['unreviewed']:,}件"
-            f" ／ 高確度 {summary['HIGH']:,}件"
+        st.markdown("### 🔍 HP Human Review")
+        st.markdown(
+            f"""
+            <div style="border:1px solid #dbe5f0;border-radius:12px;padding:12px 12px 8px 12px;background:#f8fbff;">
+              <div style="display:flex;justify-content:space-between;margin-bottom:8px;">
+                <span>未レビュー</span><strong>{summary['unreviewed']:,}</strong>
+              </div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span>高確度候補</span><strong>{summary['HIGH']:,}</strong>
+              </div>
+              <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
+                <span>中確度候補</span><strong>{summary['MEDIUM']:,}</strong>
+              </div>
+              <div style="display:flex;justify-content:space-between;">
+                <span>低確度候補</span><strong>{summary['LOW']:,}</strong>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
         if st.button(
             "次をレビュー",
+            type="primary",
             key="sidebar_hp_human_review_start",
             use_container_width=True,
             disabled=summary["unreviewed"] <= 0,
@@ -89,14 +105,6 @@ def hp_human_review_dialog(store):
         st.success(flash)
 
     summary = repo.summary()
-    st.caption(
-        f"未レビュー {summary['unreviewed']:,}件"
-        f" ／ 高 {summary['HIGH']:,}"
-        f" ／ 中 {summary['MEDIUM']:,}"
-        f" ／ 低 {summary['LOW']:,}"
-    )
-
-    # queue() already sorts HIGH -> MEDIUM -> LOW and then score descending.
     queue = repo.queue(include_reviewed=False, priority="ALL", limit=1)
     if not queue:
         st.success("未レビューのHP要確認はありません。")
@@ -107,41 +115,74 @@ def hp_human_review_dialog(store):
     row = queue[0]
     snapshot = row["snapshot"]
     priority = PRIORITY_LABELS.get(snapshot.get("priority"), snapshot.get("priority", ""))
-    st.markdown(f"### {row['clinic_name']}")
-    st.caption(
-        f"Clinic ID {row['clinic_id']} ／ {row.get('prefecture') or '-'}"
-        f" ／ {priority} ／ score {int(snapshot.get('score') or 0)}"
+    reviewed_count = int(summary.get("reviewed") or 0)
+    total_count = int(summary.get("total") or 0)
+    position = min(reviewed_count + 1, total_count) if total_count else 0
+
+    top_left, top_right = st.columns([4, 1])
+    with top_left:
+        st.markdown(f"### {row['clinic_name']}")
+    with top_right:
+        st.markdown(
+            f"<div style='text-align:right;font-weight:700;font-size:1.05rem;padding-top:8px;'>{position:,} / {total_count:,}</div>",
+            unsafe_allow_html=True,
+        )
+
+    badge = {
+        "HIGH": ("#fff1f4", "#c81e4b"),
+        "MEDIUM": ("#fff8e6", "#9a6700"),
+        "LOW": ("#f2f4f7", "#475467"),
+    }.get(snapshot.get("priority"), ("#f2f4f7", "#475467"))
+    st.markdown(
+        f"""
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin:-2px 0 10px 0;">
+          <span><b>Clinic ID</b> {row['clinic_id']}</span>
+          <span><b>都道府県</b> {row.get('prefecture') or '-'}</span>
+          <span><b>自動スコア</b> {int(snapshot.get('score') or 0)}</span>
+          <span style="background:{badge[0]};color:{badge[1]};padding:4px 10px;border-radius:999px;font-weight:700;">{priority}</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    st.write(f"**電話番号：** {row.get('phone') or '-'}")
-    st.write(f"**住所：** {row.get('address') or '-'}")
+    st.write(f"📞 **{row.get('phone') or '-'}**")
+    st.write(f"📍 {row.get('address') or '-'}")
 
-    match_cols = st.columns(4)
-    match_cols[0].metric("医院名", _feature_mark(snapshot.get("name_match")))
-    match_cols[1].metric("電話", _feature_mark(snapshot.get("phone_match")))
-    match_cols[2].metric("住所", _feature_mark(snapshot.get("address_match")))
-    match_cols[3].metric("院長名", _feature_mark(snapshot.get("manager_match")))
-    bucket = snapshot.get("bucket") or "OTHER"
-    st.caption(f"判定条件：{BUCKET_LABELS.get(bucket, bucket)}")
-
-    if snapshot.get("hp_match_reason"):
-        st.info(" / ".join(str(x) for x in snapshot["hp_match_reason"]))
+    evidence_col, url_col = st.columns([1, 1], gap="large")
+    with evidence_col:
+        with st.container(border=True):
+            st.markdown("#### 自動判定の根拠")
+            match_cols = st.columns(2)
+            match_cols[0].write(f"医院名　{_feature_mark(snapshot.get('name_match'))}")
+            match_cols[1].write(f"電話番号　{_feature_mark(snapshot.get('phone_match'))}")
+            match_cols[0].write(f"住所　{_feature_mark(snapshot.get('address_match'))}")
+            match_cols[1].write(f"院長名　{_feature_mark(snapshot.get('manager_match'))}")
+            bucket = snapshot.get("bucket") or "OTHER"
+            st.caption(f"判定条件：{BUCKET_LABELS.get(bucket, bucket)}")
+            st.caption(f"Rule: {snapshot.get('rule_version', '')}")
+            if snapshot.get("hp_match_reason"):
+                st.info(" / ".join(str(x) for x in snapshot["hp_match_reason"]))
 
     candidate_urls = snapshot.get("candidate_urls") or []
     selected_url = ""
-    if candidate_urls:
-        default_url = snapshot.get("best_candidate_url")
-        default_index = candidate_urls.index(default_url) if default_url in candidate_urls else 0
-        selected_url = st.selectbox(
-            "候補URL",
-            candidate_urls,
-            index=default_index,
-            key=f"quick_hp_human_review_url_{row['clinic_id']}",
-        )
-        st.link_button("候補HPを開く", selected_url, use_container_width=True)
-    else:
-        st.warning("候補URLがありません。Positive判定は選択できません。")
+    with url_col:
+        with st.container(border=True):
+            st.markdown("#### 判定する候補URL")
+            if candidate_urls:
+                default_url = snapshot.get("best_candidate_url")
+                default_index = candidate_urls.index(default_url) if default_url in candidate_urls else 0
+                selected_url = st.selectbox(
+                    "候補URL",
+                    candidate_urls,
+                    index=default_index,
+                    key=f"quick_hp_human_review_url_{row['clinic_id']}",
+                    label_visibility="collapsed",
+                )
+                st.link_button("HPを開く ↗", selected_url, use_container_width=True)
+            else:
+                st.warning("候補URLがありません。Positive判定は選択できません。")
+            st.caption("候補ページを別タブで確認してから判定してください。")
 
-    with st.expander("候補の本人確認情報・メモ", expanded=False):
+    with st.expander("候補ごとの本人確認情報", expanded=False):
         candidates = _candidate_frame(snapshot)
         if not candidates.empty:
             st.dataframe(
@@ -150,21 +191,25 @@ def hp_human_review_dialog(store):
                 width="stretch",
                 column_config={"候補URL": st.column_config.LinkColumn()},
             )
-        note = st.text_area(
-            "確認メモ（任意）",
-            key=f"quick_hp_human_review_note_{row['clinic_id']}",
-            placeholder="判断理由や補足があれば入力",
-        )
+        if snapshot.get("crawl_errors"):
+            st.caption("取得時のエラー")
+            st.dataframe(pd.DataFrame(snapshot["crawl_errors"]), hide_index=True, width="stretch")
+
+    note = st.text_area(
+        "確認メモ（任意）",
+        key=f"quick_hp_human_review_note_{row['clinic_id']}",
+        placeholder="判断理由や補足があれば入力",
+    )
 
     reviewer_default = os.environ.get("CLINIC_REVIEWER_NAME", "")
     reviewer = st.text_input(
         "確認者",
-        value=st.session_state.get("hp_human_reviewer", reviewer_default),
+        value=st.session_state.get("quick_hp_human_reviewer", reviewer_default),
         key="quick_hp_human_reviewer",
         placeholder="例：前川",
     )
 
-    st.markdown("#### 判定")
+    st.markdown("#### この医院をどう判定しますか？")
     first = st.columns(3)
     second = st.columns(2)
     decision_buttons = [
@@ -187,8 +232,7 @@ def hp_human_review_dialog(store):
                     store, repo, row, decision, selected_url, reviewer, note,
                     rerun=False,
                 )
-                # Dialogs inherit fragment semantics. Keep the modal open and load the
-                # next unreviewed row without rerunning the Auto Run screen.
+                # Keep the dialog open and immediately advance to the next queue item.
                 st.rerun(scope="fragment")
             except ValueError as exc:
                 st.error(str(exc))
