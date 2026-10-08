@@ -198,7 +198,13 @@ class _StatefulCursor:
         if q.startswith("INSERT INTO provenance.templates"):
             return
 
-        if q.startswith("SELECT id,base_json,uuid,medical_key,tel_match_key"):
+        if (
+            q.startswith("SELECT id,base_json,uuid,medical_key,tel_match_key")
+            or (
+                q.startswith("WITH input_pairs AS")
+                and "SELECT c.id,c.base_json,c.uuid,c.medical_key,c.tel_match_key" in q
+            )
+        ):
             rows = list(self.conn.clinics.values())
             if "uuid=ANY" in q:
                 allowed = set(params[0])
