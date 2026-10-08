@@ -174,44 +174,64 @@ class SupabaseRuntimeStore:
                 "target_count": row[3], "done_count": row[4]}
 
     def hp_job_export_summary(self, job_id):
-        """Current-job metrics plus the cumulative UUID-empty Comdesk waiting list."""
+        """Current-job metrics plus cumulative UUID-empty HPs, including Human Review positives."""
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
             "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
             "OR c.clinic_name LIKE '%%病院%%' OR c.clinic_name LIKE '%%センター%%')"
+        eligible = (
+            "(i.result='SUCCESS' OR (i.result='REVIEW' AND "
+            "hr.human_decision IN ('OFFICIAL','ORGANIZATION_PAGE','ACCESS_RESTRICTED')))"
+        )
         with self._conn.cursor() as cur:
-            # The first four metrics intentionally remain scoped to the selected completed job.
+            # Keep one latest Human Review label per clinic/job. Automatic REVIEW history is
+            # preserved; a positive human decision upgrades export eligibility without rewriting
+            # the original job-item result.
             cur.execute(
+                "WITH human_latest AS ("
+                " SELECT DISTINCT ON (clinic_id,research_job_id) "
+                " clinic_id,research_job_id,human_decision "
+                " FROM provenance.hp_human_reviews "
+                " ORDER BY clinic_id,research_job_id,reviewed_at DESC,id DESC"
+                ") "
                 "SELECT count(*), "
                 "count(*) FILTER (WHERE i.state='DONE'), "
-                "count(*) FILTER (WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "count(*) FILTER (WHERE i.state='DONE' AND " + eligible + " "
                 "AND h.fetch_status='OK' AND COALESCE(BTRIM(h.final_url),'')<>''), "
-                "count(*) FILTER (WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "count(*) FILTER (WHERE i.state='DONE' AND " + eligible + " "
                 "AND h.fetch_status='OK' AND COALESCE(BTRIM(h.final_url),'')<>'' "
                 "AND COALESCE(BTRIM(c.uuid),'')<>''), "
                 "COALESCE(array_agg(i.clinic_id ORDER BY i.clinic_id) FILTER (WHERE "
-                "i.state='DONE' AND i.result='SUCCESS' AND h.fetch_status='OK' "
+                "i.state='DONE' AND " + eligible + " AND h.fetch_status='OK' "
                 "AND COALESCE(BTRIM(h.final_url),'')<>'' AND COALESCE(BTRIM(c.uuid),'')='' "
                 "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion + "),'{}') "
                 "FROM research.research_job_items i "
                 "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status='COMPLETED' "
                 "LEFT JOIN public.clinics c ON c.id=i.clinic_id "
                 "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
+                "LEFT JOIN human_latest hr ON hr.clinic_id=i.clinic_id AND hr.research_job_id=i.job_id "
                 "WHERE i.job_id=%s", ('"facility_type":"([^"]*)"', job_id),
             )
             target, done, success, uuid_existing, current_ids = cur.fetchone()
 
-            # Comdesk waiting is cumulative across HP jobs created by this application,
-            # not across the entire historical HP ledger. This prevents migrated/reconciled
-            # ledger rows that were never part of an operator HP job from inflating Step5.
-            # A successful clinic stays in the waiting list until a UUID is actually written
-            # back to public.clinics. DISTINCT clinic_id prevents duplicates across re-runs.
+            # Cumulative waiting list includes:
+            #   1) automatic SUCCESS; and
+            #   2) automatic REVIEW later confirmed by Human Review.
+            # In both cases the HP ledger must be OK after content reanalysis, so a human label
+            # alone never enters Comdesk before the selected URL was actually fetched/analyzed.
             cur.execute(
+                "WITH human_latest AS ("
+                " SELECT DISTINCT ON (clinic_id,research_job_id) "
+                " clinic_id,research_job_id,human_decision "
+                " FROM provenance.hp_human_reviews "
+                " ORDER BY clinic_id,research_job_id,reviewed_at DESC,id DESC"
+                ") "
                 "SELECT COALESCE(array_agg(DISTINCT c.id ORDER BY c.id),'{}') "
                 "FROM public.clinics c "
                 "JOIN research.research_job_items i ON i.clinic_id=c.id "
                 "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' "
                 "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id "
-                "WHERE i.state='DONE' AND i.result='SUCCESS' "
+                "LEFT JOIN human_latest hr ON hr.clinic_id=c.id AND hr.research_job_id=i.job_id "
+                "WHERE i.state='DONE' AND " + eligible + " "
                 "AND h.fetch_status='OK' "
                 "AND COALESCE(BTRIM(h.final_url),'')<>'' "
                 "AND COALESCE(BTRIM(c.uuid),'')='' "
