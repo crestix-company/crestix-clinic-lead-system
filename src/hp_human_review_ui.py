@@ -15,6 +15,7 @@ from src.master.hp_human_review import (
     DECISION_LABELS,
     POSITIVE_DECISIONS,
     PRIORITY_LABELS,
+    reanalyze_human_verified_hp,
 )
 from src.repository.write_backend import write_repositories_for
 
@@ -67,7 +68,7 @@ def _feature_mark(value):
     return "✅ 一致" if value else "❌ 不一致"
 
 
-def _save_decision(repo, row, decision, selected_url, reviewer, note):
+def _save_decision(store, repo, row, decision, selected_url, reviewer, note):
     review_id = repo.save_review(
         clinic_id=row["clinic_id"],
         hp_checked_at=row["snapshot"]["hp_checked_at"],
@@ -78,14 +79,27 @@ def _save_decision(repo, row, decision, selected_url, reviewer, note):
         research_job_id=row.get("job_id") or "",
         auto_run_id=row.get("auto_run_id") or "",
     )
-    st.session_state["_hp_human_review_flash"] = (
-        f"{row['clinic_name']} の判定を保存しました（{DECISION_LABELS[decision]}）。"
-    )
+    message = f"{row['clinic_name']} の判定を保存しました（{DECISION_LABELS[decision]}）。"
+    if decision in POSITIVE_DECISIONS:
+        with st.spinner("Human確認済みHPを再取得し、治療カテゴリを解析しています…"):
+            outcome = reanalyze_human_verified_hp(
+                store,
+                human_review_id=review_id,
+                clinic_id=row["clinic_id"],
+                selected_url=selected_url,
+            )
+        if outcome["status"] == "DONE":
+            count = int(outcome.get("treatment_count") or 0)
+            destination = "治療カテゴリ検出あり" if count > 0 else "治療カテゴリ検出なし"
+            message += f" 再解析完了：{count}カテゴリ → {destination}。"
+        else:
+            message += " HP内容を取得できなかったため「Webサイト調査失敗」へ反映しました。後から再試行できます。"
+    st.session_state["_hp_human_review_flash"] = message
     st.session_state["_hp_human_review_last_id"] = review_id
     st.rerun()
 
 
-def _review_tab(repo):
+def _review_tab(store, repo):
     flash = st.session_state.pop("_hp_human_review_flash", None)
     if flash:
         st.success(flash)
@@ -201,6 +215,47 @@ def _review_tab(repo):
         if row.get("review_note"):
             st.caption("前回メモ：" + str(row["review_note"]))
 
+        if row.get("reanalysis_status") == "DONE":
+            count = int(row.get("reanalysis_treatment_count") or 0)
+            destination = "治療カテゴリ検出あり" if count > 0 else "治療カテゴリ検出なし"
+            categories = row.get("reanalysis_treatment_categories") or []
+            st.success(f"治療カテゴリ再解析：完了／{count}カテゴリ → {destination}")
+            if categories:
+                st.caption("検出：" + " / ".join(str(x) for x in categories))
+        elif row.get("reanalysis_status") == "FAILED":
+            st.warning(
+                "治療カテゴリ再解析：失敗"
+                + (f"／{row.get('reanalysis_error')}" if row.get("reanalysis_error") else "")
+            )
+            retry_url = row.get("reviewed_url") or selected_url
+            if (
+                row.get("human_decision") in POSITIVE_DECISIONS
+                and retry_url
+                and st.button(
+                    "治療カテゴリ再解析を再試行",
+                    key=f"hp_human_review_retry_{row['clinic_id']}",
+                    use_container_width=True,
+                )
+            ):
+                with st.spinner("治療カテゴリを再解析しています…"):
+                    outcome = reanalyze_human_verified_hp(
+                        store,
+                        human_review_id=row["human_review_id"],
+                        clinic_id=row["clinic_id"],
+                        selected_url=retry_url,
+                    )
+                if outcome["status"] == "DONE":
+                    count = int(outcome.get("treatment_count") or 0)
+                    destination = "治療カテゴリ検出あり" if count > 0 else "治療カテゴリ検出なし"
+                    st.session_state["_hp_human_review_flash"] = (
+                        f"{row['clinic_name']} の再解析が完了しました：{count}カテゴリ → {destination}。"
+                    )
+                else:
+                    st.session_state["_hp_human_review_flash"] = (
+                        f"{row['clinic_name']} の再解析は再度失敗しました。"
+                    )
+                st.rerun()
+
     note = st.text_area(
         "確認メモ（任意）",
         key=f"hp_human_review_note_{row['clinic_id']}",
@@ -225,13 +280,15 @@ def _review_tab(repo):
             disabled=disabled,
         ):
             try:
-                _save_decision(repo, row, decision, selected_url, reviewer, note)
+                _save_decision(store, repo, row, decision, selected_url, reviewer, note)
             except ValueError as exc:
                 st.error(str(exc))
 
     st.caption(
         "OFFICIAL / 法人内正式ページ / URL正しい・アクセス制限を選ぶと、"
-        "HP URLとHP確認状態も手動値として保存されます。"
+        "HP URLとHP確認状態を保存した直後に、そのURLをHuman本人確認済みとして再クロールします。"
+        "治療カテゴリが1件以上なら「治療カテゴリ検出あり」、0件なら「治療カテゴリ検出なし」、"
+        "取得失敗なら「Webサイト調査失敗」へ反映します。"
         "「公式HPではない」「判断できない」は教師ラベルだけを保存し、NOT_FOUNDには自動変更しません。"
     )
 
@@ -297,6 +354,11 @@ def _analytics_tab(repo):
                 "priority": snapshot.get("priority"),
                 "bucket": snapshot.get("bucket"),
                 "reviewed_at": row.get("reviewed_at"),
+                "treatment_reanalysis_status": row.get("reanalysis_status"),
+                "treatment_categories": " / ".join(row.get("reanalysis_treatment_categories") or []),
+                "treatment_category_count": row.get("reanalysis_treatment_count"),
+                "treatment_reanalysis_error": row.get("reanalysis_error"),
+                "treatment_reanalysis_finished_at": row.get("reanalysis_finished_at"),
             })
         csv = pd.DataFrame(export_rows).to_csv(index=False).encode("utf-8-sig")
         st.download_button(
@@ -332,6 +394,6 @@ def hp_human_review_page(store):
 
     review_tab, analytics_tab = st.tabs(["1件ずつレビュー", "精度分析"])
     with review_tab:
-        _review_tab(repo)
+        _review_tab(store, repo)
     with analytics_tab:
         _analytics_tab(repo)
