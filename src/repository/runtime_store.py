@@ -178,9 +178,14 @@ class SupabaseRuntimeStore:
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
             "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
             "OR c.clinic_name LIKE '%%病院%%' OR c.clinic_name LIKE '%%センター%%')"
+        auto_reverified = (
+            "COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_identity_source','')="
+            "'AUTO_NAME_ONLY_MISMATCH'"
+        )
         eligible = (
-            "(i.result='SUCCESS' OR (i.result='REVIEW' AND "
-            "hr.human_decision IN ('OFFICIAL','ORGANIZATION_PAGE','ACCESS_RESTRICTED')))"
+            "(i.result='SUCCESS' OR (i.result='REVIEW' AND ("
+            "hr.human_decision IN ('OFFICIAL','ORGANIZATION_PAGE','ACCESS_RESTRICTED') OR "
+            + auto_reverified + ")))"
         )
         with self._conn.cursor() as cur:
             # Keep one latest Human Review label per clinic/job. Automatic REVIEW history is
@@ -208,6 +213,7 @@ class SupabaseRuntimeStore:
                 "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status='COMPLETED' "
                 "LEFT JOIN public.clinics c ON c.id=i.clinic_id "
                 "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
+                "LEFT JOIN research.research_results rr ON rr.clinic_id=i.clinic_id "
                 "LEFT JOIN human_latest hr ON hr.clinic_id=i.clinic_id AND hr.research_job_id=i.job_id "
                 "WHERE i.job_id=%s", ('"facility_type":"([^"]*)"', job_id),
             )
@@ -230,6 +236,7 @@ class SupabaseRuntimeStore:
                 "JOIN research.research_job_items i ON i.clinic_id=c.id "
                 "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' "
                 "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id "
+                "LEFT JOIN research.research_results rr ON rr.clinic_id=c.id "
                 "LEFT JOIN human_latest hr ON hr.clinic_id=c.id AND hr.research_job_id=i.job_id "
                 "WHERE i.state='DONE' AND " + eligible + " "
                 "AND h.fetch_status='OK' "
