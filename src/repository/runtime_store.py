@@ -14,28 +14,7 @@ from src.master.fixed_export import fixed_row
 from src.master.filters import Filters
 
 
-def _maps_hp_target_predicate(prefecture="", medical_types=None, force=False):
-    """Canonical Step4 target predicate shared by displayed count and job candidates."""
-    conditions = [
-        "c.merged_into IS NULL",
-        "c.merge_hold=false",
-        "c.active=true",
-        "c.maps_presence_status='MAPS_MATCHED_WEBSITE'",
-        "COALESCE(BTRIM(c.maps_website_url),'')<>''",
-    ]
-    args = []
-    if prefecture:
-        conditions.append("c.prefecture=%s")
-        args.append(prefecture)
-    if medical_types:
-        conditions.append("c.medical_type=ANY(%s::text[])")
-        args.append(list(medical_types))
-    if not force:
-        conditions.append(
-            "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h "
-            "WHERE h.clinic_id=c.id)"
-        )
-    return " AND ".join(conditions), args
+from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
 
 
 class SupabaseRuntimeStore:

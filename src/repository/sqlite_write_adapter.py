@@ -22,6 +22,8 @@ google_maps.py function, with the same arguments, so CLINIC_WRITE_BACKEND=sqlite
 produces byte-identical behavior to before the rewiring -- only one more layer of indirection.
 """
 import json
+from datetime import datetime, timedelta, timezone
+import uuid
 
 from src.master.store import now, dumps
 from src.master.matching import medical_key
@@ -318,7 +320,12 @@ class SqliteJobsWriteRepository:
             job = dict(row)
             if job["status"] in {"COMPLETED", "RESET"}:
                 return None
-            c.execute("UPDATE research_job_items SET state='PENDING' WHERE job_id=? AND state='RUNNING'", (job_id,))
+            cutoff = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            c.execute(
+                "UPDATE research_job_items SET state='PENDING',lease_until='',note='' "
+                "WHERE job_id=? AND state='RUNNING' AND (lease_until='' OR lease_until<=?)",
+                (job_id, cutoff),
+            )
             c.execute("UPDATE research_jobs SET status='PAUSED' WHERE id=? AND status='RUNNING'", (job_id,))
             c.execute("UPDATE research_jobs SET status='RUNNING',updated_at=? WHERE id=?", (now(), job_id))
         return job
@@ -343,6 +350,68 @@ class SqliteJobsWriteRepository:
                 "UPDATE research_job_items SET state='RUNNING' WHERE job_id=? AND clinic_id=? AND state='PENDING'",
                 (job_id, clinic_id),
             ).rowcount > 0
+
+    def claim_specific_item_with_token(self, job_id, clinic_id):
+        token = "lease:" + uuid.uuid4().hex
+        lease = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds")
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            claimed = c.execute(
+                "UPDATE research_job_items SET state='RUNNING',note=?,lease_until=? "
+                "WHERE job_id=? AND clinic_id=? AND state='PENDING'",
+                (token, lease, job_id, clinic_id),
+            ).rowcount > 0
+        return token if claimed else None
+
+    def claim_next_pending_item_with_token(self, job_id):
+        token = "lease:" + uuid.uuid4().hex
+        lease = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds")
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            row = c.execute(
+                "SELECT clinic_id FROM research_job_items WHERE job_id=? AND state='PENDING' "
+                "ORDER BY clinic_id LIMIT 1", (job_id,),
+            ).fetchone()
+            if not row:
+                return None
+            changed = c.execute(
+                "UPDATE research_job_items SET state='RUNNING',note=?,lease_until=? "
+                "WHERE job_id=? AND clinic_id=? AND state='PENDING'",
+                (token, lease, job_id, row[0]),
+            ).rowcount
+        return (row[0], token) if changed else None
+
+    def item_claim_is_current(self, job_id, clinic_id, token):
+        with self._store.connect() as c:
+            row = c.execute(
+                "SELECT 1 FROM research_job_items WHERE job_id=? AND clinic_id=? "
+                "AND state='RUNNING' AND note=?", (job_id, clinic_id, token),
+            ).fetchone()
+            return bool(row)
+
+    def requeue_claimed_item(self, job_id, clinic_id, token, note, job_status):
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            changed = c.execute(
+                "UPDATE research_job_items SET state='PENDING',note=?,lease_until='' "
+                "WHERE job_id=? AND clinic_id=? AND state='RUNNING' AND note=?",
+                (note, job_id, clinic_id, token),
+            ).rowcount
+            if changed:
+                c.execute("UPDATE research_jobs SET status=?,updated_at=? WHERE id=?", (job_status, now(), job_id))
+        return bool(changed)
+
+    def finish_claimed_item(self, job_id, clinic_id, token, status, note):
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            changed = c.execute(
+                "UPDATE research_job_items SET state='DONE',result=?,note=?,lease_until='' "
+                "WHERE job_id=? AND clinic_id=? AND state='RUNNING' AND note=?",
+                (status, note, job_id, clinic_id, token),
+            ).rowcount
+            if changed:
+                c.execute("UPDATE research_jobs SET updated_at=? WHERE id=?", (now(), job_id))
+        return bool(changed)
 
     def requeue_item_for_budget_or_pause(self, job_id, clinic_id, note, job_status):
         """BudgetReached/Stopped path: the item goes back to PENDING (not DONE -- it was never

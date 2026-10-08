@@ -135,17 +135,16 @@ def test_created_job_uses_the_supabase_candidate_ids(monkeypatch):
             self.received = (prefecture, medical_types, force, limit)
             return [101, 202]
 
-    class Jobs:
-        def create_job(self, ids, kind, options, max_searches):
-            self.created = (ids, kind, options, max_searches)
+    class AutoHp:
+        def create_single_job(self, prefecture, medical_types, force, limit):
+            self.created = (prefecture, medical_types, force, limit)
             return "job-test"
 
-    store, jobs = RuntimeStore(), Jobs()
-    monkeypatch.setattr(app_v2, "write_repositories_for", lambda _store: type("R", (), {"jobs": jobs})())
+    store, auto_hp = RuntimeStore(), AutoHp()
+    monkeypatch.setattr(app_v2, "write_repositories_for", lambda _store: type("R", (), {"auto_hp": auto_hp})())
 
     assert app_v2._create_maps_hp_job(store, "東京都", 50, False, ["医科"]) == "job-test"
-    assert store.received == ("東京都", ["医科"], False, 50)
-    assert jobs.created == ([101, 202], "hp", {"force": False, "max_pages": 20}, 0)
+    assert auto_hp.created == ("東京都", ["医科"], False, 50)
 
 
 def test_sqlite_projection_is_not_used_to_guess_step4_research_completion():

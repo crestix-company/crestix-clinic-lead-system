@@ -39,11 +39,11 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     app.toggle[0].set_value(True).run()
     assert not app.exception and not app.error
     assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
-    app.radio[0].set_value("営業対象・出力").run()
+    next(r for r in app.radio if r.label == "メニュー").set_value("営業対象・出力").run()
     assert not app.exception and not app.error
     assert any(m.label == "Comdesk出力対象" and m.value == "0件" for m in app.metric)
     assert any("全期間の出力は詳細設定" in x.value for x in app.info)
-    app.radio[0].set_value("詳細設定").run()
+    next(r for r in app.radio if r.label == "メニュー").set_value("詳細設定").run()
     next(s for s in app.selectbox if s.label == "開く画面").set_value("営業対象フィルター（詳細）").run()
     next(s for s in app.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
     next(b for b in app.button if b.label=="この条件でExcel・CSVを作成").click().run()
@@ -54,7 +54,7 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     detail=next(s for s in app.selectbox if s.label=="詳細を確認する医院")
     detail.set_value(1).run()
     assert not app.exception and not app.error
-    app.radio[0].set_value("詳細設定").run()
+    next(r for r in app.radio if r.label == "メニュー").set_value("詳細設定").run()
     section=next(s for s in app.selectbox if s.label=="開く画面")
     section.set_value("要確認・設定").run()
     assert not app.exception and not app.error
@@ -74,6 +74,6 @@ def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
     assert '"この調査を再開"' in source
     assert 'current["status"] in {"PAUSED", "BUDGET"}' in source
     assert "unfinished" in source
-    assert "disabled=demo or runner.running() or unfinished or actual == 0" in source
+    assert "disabled=demo or runner.running() or unfinished or auto_active or actual == 0" in source
     assert 'j.get("kind") == "hp"' in source
     assert "上の「ウェブサイト調査対象」は新しいジョブ用の件数" in source

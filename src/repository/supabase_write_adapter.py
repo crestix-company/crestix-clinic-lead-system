@@ -24,6 +24,8 @@ tests/test_stage4d_write_repository.py for the parity tests this relies on.
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
+import uuid
 
 from psycopg.types.json import Jsonb
 
@@ -125,7 +127,7 @@ class _CountingCursor:
 
 
 class SupabaseSettingsWriteRepository:
-    _ALLOWED = {"monthly_limit", "external_usage_reserve", "filter_defaults", "age_basis"}
+    _ALLOWED = {"monthly_limit", "external_usage_reserve", "filter_defaults", "age_basis", "hp_auto_run_state"}
 
     def __init__(self, conn):
         self._conn = conn
@@ -1370,7 +1372,12 @@ class SupabaseJobsWriteRepository:
                 if job["status"] in {"COMPLETED", "RESET"}:
                     self._conn.commit()
                     return None
-                cur.execute("UPDATE research.research_job_items SET state='PENDING' WHERE job_id=%s AND state='RUNNING'", (job_id,))
+                cutoff = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                cur.execute(
+                    "UPDATE research.research_job_items SET state='PENDING',lease_until='',note='' "
+                    "WHERE job_id=%s AND state='RUNNING' AND (lease_until='' OR lease_until<=%s)",
+                    (job_id, cutoff),
+                )
                 cur.execute("UPDATE research.research_jobs SET status='PAUSED' WHERE id=%s AND status='RUNNING'", (job_id,))
                 cur.execute("UPDATE research.research_jobs SET status='RUNNING',updated_at=%s WHERE id=%s", (now(), job_id))
             self._conn.commit()
@@ -1395,6 +1402,81 @@ class SupabaseJobsWriteRepository:
                 claimed = cur.rowcount > 0
             self._conn.commit()
             return claimed
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
+
+    def claim_specific_item_with_token(self, job_id, clinic_id):
+        token = "lease:" + uuid.uuid4().hex
+        lease = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds")
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE research.research_job_items SET state='RUNNING',note=%s,lease_until=%s "
+                    "WHERE job_id=%s AND clinic_id=%s AND state='PENDING'",
+                    (token, lease, job_id, clinic_id),
+                )
+                claimed = cur.rowcount > 0
+            self._conn.commit()
+            return token if claimed else None
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
+
+    def claim_next_pending_item_with_token(self, job_id):
+        token = "lease:" + uuid.uuid4().hex
+        lease = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds")
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE research.research_job_items SET state='RUNNING',note=%s,lease_until=%s "
+                    "WHERE (job_id,clinic_id) = ("
+                    " SELECT job_id,clinic_id FROM research.research_job_items "
+                    " WHERE job_id=%s AND state='PENDING' ORDER BY clinic_id LIMIT 1 FOR UPDATE SKIP LOCKED"
+                    ") RETURNING clinic_id",
+                    (token, lease, job_id),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+            return (row[0], token) if row else None
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
+
+    def item_claim_is_current(self, job_id, clinic_id, token):
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM research.research_job_items WHERE job_id=%s AND clinic_id=%s "
+                "AND state='RUNNING' AND note=%s", (job_id, clinic_id, token),
+            )
+            return bool(cur.fetchone())
+
+    def requeue_claimed_item(self, job_id, clinic_id, token, note, job_status):
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE research.research_job_items SET state='PENDING',note=%s,lease_until='' "
+                    "WHERE job_id=%s AND clinic_id=%s AND state='RUNNING' AND note=%s",
+                    (note, job_id, clinic_id, token),
+                )
+                changed = cur.rowcount > 0
+                if changed:
+                    cur.execute("UPDATE research.research_jobs SET status=%s,updated_at=%s WHERE id=%s", (job_status, now(), job_id))
+            self._conn.commit()
+            return changed
+        except Exception as exc:
+            _rollback_and_raise(self._conn, exc)
+
+    def finish_claimed_item(self, job_id, clinic_id, token, status, note):
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE research.research_job_items SET state='DONE',result=%s,note=%s,lease_until='' "
+                    "WHERE job_id=%s AND clinic_id=%s AND state='RUNNING' AND note=%s",
+                    (status, note, job_id, clinic_id, token),
+                )
+                changed = cur.rowcount > 0
+                if changed:
+                    cur.execute("UPDATE research.research_jobs SET updated_at=%s WHERE id=%s", (now(), job_id))
+            self._conn.commit()
+            return changed
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
 

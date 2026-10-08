@@ -22,6 +22,7 @@ from src.master.research_sidecar import research_sidecar_available,clinic_resear
 from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,job_status,recent_jobs
+from src.master.hp_auto_run import AutoHpRunner
 from src.repository.write_backend import write_repositories_for
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
@@ -104,7 +105,7 @@ def show_web_research_metrics(store):
         ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
         ("Webサイト調査完了", "researched", "登録されたWebサイトの取得・解析を完了し、HP ABC判定と治療カテゴリ判定まで完了した医院数です。"),
         ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
-        ("Webサイト未調査", "not_researched", "WebサイトURLは登録されていますが、まだ自動調査が完了していない医院数です。"),
+        ("Webサイト未調査", "not_researched", "非アクティブ医院も含む、WebサイトURL登録済み・自動調査未完了の参考件数です。Step 4の「HP調査可能・未調査」とは分母が異なります。"),
         ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
         ("治療カテゴリ検出なし", "treatment_not_detected", "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
     ]
@@ -141,6 +142,11 @@ def resolve_production_db_path():
 @st.cache_resource
 def runner_for(path):
     return JobRunner()
+
+
+@st.cache_resource
+def auto_hp_runner_for(path):
+    return AutoHpRunner()
 
 
 def ad_count_options(store):
@@ -513,12 +519,10 @@ def _create_maps_hp_job(store, prefecture, limit, force=False, medical_types=Non
     # projection cannot answer whether a clinic has ever been researched.
     if not getattr(store, "is_supabase_runtime", False):
         raise RuntimeError("Step4 HP target selection requires the Supabase research ledger.")
-    # Candidate selection is read-only; persistent job+item WRITE goes through Repository.
-    ids = store.maps_hp_candidate_ids(prefecture, medical_types, force, limit)
-    if not ids:
-        raise ValueError("現在の条件でHP調査できる医院がありません。")
-    return write_repositories_for(store).jobs.create_job(
-        ids, "hp", {"force": bool(force), "max_pages": 20}, 0
+    # Candidate reservation and job creation share one PostgreSQL transaction so a
+    # simultaneous Mac/Windows start cannot enqueue the same clinic twice.
+    return write_repositories_for(store).auto_hp.create_single_job(
+        prefecture, medical_types, force, limit
     )
 
 
@@ -660,26 +664,38 @@ def simple_workflow_ui(store, demo):
 
     force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
     available = _maps_hp_available_count(store, pref, force, research_medical_types)
-
-    st.info(f"ウェブサイト調査対象：{available:,}件")
-
-    default_count = min(50, available) if available > 0 else 50
-    count = st.number_input(
-        "最大調査件数",
-        min_value=1,
-        max_value=500,
-        value=max(1, default_count),
-        key="simple_count",
+    st.info(
+        f"HP調査可能・未調査：{available:,}件",
+        icon="ℹ️",
     )
-    actual = min(int(count), available)
-    st.caption(
-        f"今回のウェブサイト調査件数：{actual:,}件。"
-        "設定が50件でも対象が34件なら34件だけ調査します。"
-    )
+    st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・未調査（強制再調査時を除く）で、未完了jobにも入っていない医院です。上の参考件数とは分母が異なります。")
 
+    mode = st.radio(
+        "調査モード",
+        ["指定件数だけ調査", "未調査がなくなるまで自動調査"],
+        index=0,
+        key="simple_research_mode",
+    )
     runner = runner_for(str(store.path))
+    auto_runner = auto_hp_runner_for(str(store.path))
+    auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
+    auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
+    auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
+    if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
+        # Any PC may offer an executor, but the persisted lease allows only one controller.
+        auto_runner.start(store)
+
     hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
-    current = job_status(store, hp_jobs[0]["id"]) if hp_jobs else None
+    def is_auto_child(job):
+        options = job.get("options_json") or {}
+        if isinstance(options, str):
+            try:
+                options = json.loads(options)
+            except (TypeError, ValueError):
+                options = {}
+        return bool(options.get("auto_run_id")) if isinstance(options, dict) else False
+    single_jobs = [job for job in hp_jobs if not is_auto_child(job)]
+    current = job_status(store, single_jobs[0]["id"]) if single_jobs else None
     unfinished = bool(current and current["status"] in {"RUNNING", "PAUSED", "BUDGET"})
     remaining = 0
     if unfinished:
@@ -691,18 +707,99 @@ def simple_workflow_ui(store, demo):
             "この未完了ジョブの残り件数とは別です。"
         )
 
-    if st.button(
-        "HP自動調査を開始",
-        type="primary",
-        disabled=demo or runner.running() or unfinished or actual == 0,
-        key="simple_start",
-        use_container_width=True,
-    ):
-        provider = TavilySearchProvider("")
-        jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
-        st.session_state["active_job"] = jid
-        runner.start(store, jid, provider)
-        st.rerun()
+    if mode == "指定件数だけ調査":
+        default_count = min(50, available) if available > 0 else 50
+        count = st.number_input(
+            "最大調査件数", min_value=1, max_value=500,
+            value=max(1, default_count), key="simple_count",
+        )
+        actual = min(int(count), available)
+        st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
+        if st.button(
+            "HP自動調査を開始", type="primary",
+            disabled=demo or runner.running() or unfinished or auto_active or actual == 0,
+            key="simple_start", use_container_width=True,
+        ):
+            provider = TavilySearchProvider("")
+            jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
+            st.session_state["active_job"] = jid
+            runner.start(store, jid, provider)
+            st.rerun()
+    else:
+        batch_size = st.number_input(
+            "1Batch件数", min_value=1, max_value=500, value=500,
+            key="simple_auto_batch_size",
+        )
+        estimated = (available + int(batch_size) - 1) // int(batch_size) if available else 0
+        st.write(f"Auto Run対象：{available:,}件")
+        st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
+        if st.button(
+            "未調査がなくなるまで自動調査を開始", type="primary",
+            disabled=demo or auto_repo is None or auto_active or runner.running() or unfinished or available == 0,
+            key="simple_auto_start", use_container_width=True,
+        ):
+            auto_repo.start(pref, research_medical_types, force, int(batch_size))
+            auto_runner.start(store)
+            st.rerun()
+
+    if auto_state.get("status") != "IDLE":
+        labels = {
+            "RUNNING": "実行中", "PAUSED": "一時停止", "WAITING_NETWORK": "通信回復待ち",
+            "COMPLETED": "完了", "ERROR": "エラー", "CANCELLED": "終了済み",
+        }
+        frozen_types = "・".join(auto_state.get("medical_types") or ["両方"])
+        frozen_pref = auto_state.get("prefecture") or "すべて"
+        st.write(f"自動HP調査：{labels.get(auto_state.get('status'), auto_state.get('status'))}")
+        st.caption(
+            f"固定条件：都道府県={frozen_pref}／医科・歯科={frozen_types}／"
+            f"再調査={'する' if auto_state.get('force') else 'しない'}／1Batch={int(auto_state.get('batch_size', 500)):,}件"
+        )
+        auto_current = None
+        if auto_state.get("current_job_id"):
+            try:
+                auto_current = job_status(store, auto_state["current_job_id"])
+            except ValueError:
+                auto_current = None
+        current_remaining = 0
+        if auto_current:
+            current_remaining = auto_current["counts"].get("PENDING", 0) + auto_current["counts"].get("RUNNING", 0)
+        future_remaining = auto_repo.remaining_count(auto_state) if auto_repo else 0
+        total_remaining = current_remaining + future_remaining
+        initial_count = int(auto_state.get("initial_count", 0))
+        processed = max(0, initial_count - total_remaining)
+        cumulative = auto_repo.cumulative_results(auto_state.get("run_id", "")) if auto_repo else {}
+        estimated_total = (initial_count + int(auto_state.get("batch_size", 500)) - 1) // int(auto_state.get("batch_size", 500)) if initial_count else 0
+        metrics_cols = st.columns(4)
+        metrics_cols[0].metric("開始時対象", f"{initial_count:,}件")
+        metrics_cols[1].metric("処理済み", f"{processed:,}件")
+        metrics_cols[2].metric("残り", f"{total_remaining:,}件")
+        metrics_cols[3].metric("Batch", f"{int(auto_state.get('current_batch', 0))} / 推定{estimated_total}")
+        if auto_current:
+            st.caption(
+                f"現在Job ID：{auto_state.get('current_job_id')}／現在Batch："
+                f"{auto_current['counts'].get('DONE', 0):,} / {auto_current['total']:,}／"
+                f"完了Batch：{int(auto_state.get('completed_batches', 0)):,}"
+            )
+        result_cols = st.columns(4)
+        result_cols[0].metric("成功", f"{cumulative.get('SUCCESS', 0):,}件")
+        result_cols[1].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件")
+        result_cols[2].metric("要確認", f"{cumulative.get('REVIEW', 0):,}件")
+        result_cols[3].metric("エラー", f"{cumulative.get('ERROR', 0):,}件")
+        st.caption("通信状態：" + ("WAITING" if auto_state.get("status") == "WAITING_NETWORK" else "ONLINE"))
+        auto_controls = st.columns(2)
+        if auto_controls[0].button(
+            "自動調査を一時停止", disabled=auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
+            key="simple_auto_pause", use_container_width=True,
+        ):
+            auto_repo.pause()
+            st.rerun()
+        if auto_controls[1].button(
+            "自動調査を再開", disabled=auto_state.get("status") not in {"PAUSED", "ERROR"},
+            key="simple_auto_resume", use_container_width=True,
+        ):
+            auto_repo.resume()
+            auto_runner.start(store)
+            st.rerun()
 
     if current:
         st.write("現在の調査")
@@ -739,6 +836,11 @@ def simple_workflow_ui(store, demo):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
         st.write("最大HPページ数：20ページ")
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
+        if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}:
+            st.warning("完全終了しても完了済み調査結果は削除されません。現在BatchはPAUSEDで保持されます。")
+            if st.button("自動調査を終了", key="simple_auto_cancel"):
+                auto_repo.cancel()
+                st.rerun()
 
     st.subheader("5. Comdesk形式で出力")
     current_hp_job_export_ui(store, key_prefix="simple_step5")
