@@ -59,13 +59,29 @@ create index if not exists hp_human_review_research_runs_review_idx
 create index if not exists hp_human_review_research_runs_clinic_idx
   on provenance.hp_human_review_research_runs(clinic_id,finished_at desc);
 
+create table if not exists provenance.hp_human_review_claims (
+  clinic_id bigint primary key references public.clinics(id),
+  hp_checked_at text not null,
+  owner_token text not null,
+  owner_label text not null default '',
+  claimed_at timestamptz not null default now(),
+  lease_until timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists hp_human_review_claims_lease_idx
+  on provenance.hp_human_review_claims(lease_until);
+
 alter table provenance.hp_human_reviews enable row level security;
 alter table provenance.hp_human_review_research_runs enable row level security;
+alter table provenance.hp_human_review_claims enable row level security;
 
 grant select, insert on provenance.hp_human_reviews to clinic_runtime;
 grant select, insert on provenance.hp_human_review_research_runs to clinic_runtime;
+grant select, insert, update, delete on provenance.hp_human_review_claims to clinic_runtime;
 revoke all on provenance.hp_human_reviews from anon, authenticated, public;
 revoke all on provenance.hp_human_review_research_runs from anon, authenticated, public;
+revoke all on provenance.hp_human_review_claims from anon, authenticated, public;
 
 do $$
 begin
@@ -121,6 +137,60 @@ begin
       to clinic_runtime
       with check (true);
   end if;
+
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_claims'
+      and policyname='clinic_runtime_hp_human_review_claim_select'
+  ) then
+    create policy clinic_runtime_hp_human_review_claim_select
+      on provenance.hp_human_review_claims
+      for select
+      to clinic_runtime
+      using (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_claims'
+      and policyname='clinic_runtime_hp_human_review_claim_insert'
+  ) then
+    create policy clinic_runtime_hp_human_review_claim_insert
+      on provenance.hp_human_review_claims
+      for insert
+      to clinic_runtime
+      with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_claims'
+      and policyname='clinic_runtime_hp_human_review_claim_update'
+  ) then
+    create policy clinic_runtime_hp_human_review_claim_update
+      on provenance.hp_human_review_claims
+      for update
+      to clinic_runtime
+      using (true)
+      with check (true);
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname='provenance'
+      and tablename='hp_human_review_claims'
+      and policyname='clinic_runtime_hp_human_review_claim_delete'
+  ) then
+    create policy clinic_runtime_hp_human_review_claim_delete
+      on provenance.hp_human_review_claims
+      for delete
+      to clinic_runtime
+      using (true);
+  end if;
 end $$;
 
 commit;
@@ -129,6 +199,7 @@ commit;
 --
 -- select to_regclass('provenance.hp_human_reviews');
 -- select to_regclass('provenance.hp_human_review_research_runs');
+-- select to_regclass('provenance.hp_human_review_claims');
 -- select relrowsecurity
 -- from pg_class c join pg_namespace n on n.oid=c.relnamespace
 -- where n.nspname='provenance' and c.relname='hp_human_reviews';
@@ -136,9 +207,10 @@ commit;
 -- select grantee,privilege_type
 -- from information_schema.table_privileges
 -- where table_schema='provenance'
---   and table_name in ('hp_human_reviews','hp_human_review_research_runs')
+--   and table_name in ('hp_human_reviews','hp_human_review_research_runs','hp_human_review_claims')
 -- order by grantee,privilege_type;
 --
 -- expect:
---   clinic_runtime: INSERT, SELECT
+--   hp_human_reviews / hp_human_review_research_runs: clinic_runtime INSERT, SELECT
+--   hp_human_review_claims: clinic_runtime DELETE, INSERT, SELECT, UPDATE
 --   anon/authenticated/PUBLIC: no rows
