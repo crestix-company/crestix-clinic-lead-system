@@ -118,7 +118,7 @@ def _sales_list_tab(repo):
             width="stretch",
             column_config={
                 "HP URL": st.column_config.LinkColumn(),
-                "確度": st.column_config.NumberColumn(format="%.0f%%"),
+                "確度": st.column_config.NumberColumn(format="percent"),
             },
         )
         if count > len(frame):
