@@ -392,6 +392,30 @@ def _review_tab(store, repo):
     row = next(row for row in queue if row["clinic_id"] == selected_id)
     snapshot = row["snapshot"]
 
+    detail_owner_token = _review_client_token()
+    previous_claim = st.session_state.get("_hp_human_detail_claim")
+    if previous_claim and int(previous_claim.get("clinic_id", -1)) != int(row["clinic_id"]):
+        repo.release_claim(
+            clinic_id=previous_claim["clinic_id"],
+            hp_checked_at=previous_claim.get("hp_checked_at"),
+            owner_token=detail_owner_token,
+        )
+    detail_claim = repo.claim(
+        clinic_id=row["clinic_id"],
+        hp_checked_at=snapshot["hp_checked_at"],
+        owner_token=detail_owner_token,
+        owner_label=reviewer or f"端末-{detail_owner_token[:6]}",
+        lease_seconds=300,
+    ) if repo.claiming_available() else None
+    if detail_claim:
+        st.session_state["_hp_human_detail_claim"] = {
+            "clinic_id": row["clinic_id"],
+            "hp_checked_at": snapshot["hp_checked_at"],
+        }
+        st.caption("🔒 この医院はこの端末が5分間レビュー中です。")
+    else:
+        st.warning("この医院は現在ほかのPCがレビュー中です。判定保存はできません。")
+
     st.markdown(f"### {row['clinic_name']}")
     info_cols = st.columns(4)
     info_cols[0].metric("Clinic ID", str(row["clinic_id"]))
@@ -510,7 +534,11 @@ def _review_tab(store, repo):
         ("UNCERTAIN", "❓ 判断できない"),
     ]
     for col, (decision, label) in zip(buttons, decisions):
-        disabled = not reviewer.strip() or (decision in POSITIVE_DECISIONS and not selected_url)
+        disabled = (
+            not detail_claim
+            or not reviewer.strip()
+            or (decision in POSITIVE_DECISIONS and not selected_url)
+        )
         if col.button(
             label,
             key=f"hp_human_review_decision_{row['clinic_id']}_{decision}",
@@ -518,7 +546,10 @@ def _review_tab(store, repo):
             disabled=disabled,
         ):
             try:
-                _save_decision(store, repo, row, decision, selected_url, reviewer, note)
+                _save_decision(
+                    store, repo, row, decision, selected_url, reviewer, note,
+                    claim_owner_token=detail_owner_token,
+                )
             except ValueError as exc:
                 st.error(str(exc))
 
