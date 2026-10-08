@@ -25,6 +25,7 @@ from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.repository.write_backend import write_repositories_for
 from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
+from src.dental_sales_tags_ui import dental_sales_tags_page
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
@@ -1095,7 +1096,7 @@ def advanced_ui(store, demo):
     st.caption("普段は使わない設定・確認機能です。")
     section = st.selectbox(
         "開く画面",
-        ["マスター管理", "自動情報収集（詳細）", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "ダッシュボード"],
+        ["マスター管理", "自動情報収集（詳細）", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "歯科営業タグ", "ダッシュボード"],
         key="advanced_section",
     )
 
@@ -1109,6 +1110,8 @@ def advanced_ui(store, demo):
         settings_ui(store)
     elif section == "HP Human Review":
         hp_human_review_page(store)
+    elif section == "歯科営業タグ":
+        dental_sales_tags_page(store)
     else:
         cols = st.columns(5)
         for i, (label, value) in enumerate(store.metrics().items()):

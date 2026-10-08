@@ -237,6 +237,240 @@ class SupabaseDentalSalesTagRepository:
             self._conn.rollback()
             raise
 
+    def priority_summary(self):
+        """Effective clinic-level primary tag counts after latest Human Review overrides."""
+        if not self.available():
+            return []
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest_review AS (
+                      SELECT DISTINCT ON (clinic_id,tag_code)
+                        clinic_id,tag_code,human_decision
+                      FROM provenance.dental_sales_tag_reviews
+                      ORDER BY clinic_id,tag_code,reviewed_at DESC,id DESC
+                    ),
+                    effective AS (
+                      SELECT t.*
+                      FROM provenance.dental_sales_tags t
+                      LEFT JOIN latest_review r
+                        ON r.clinic_id=t.clinic_id AND r.tag_code=t.tag_code
+                      WHERE t.active=true
+                        AND (
+                          (t.auto_status='CONFIRMED' AND COALESCE(r.human_decision,'')<>'REJECTED')
+                          OR r.human_decision='CONFIRMED'
+                        )
+                    ),
+                    primary_tag AS (
+                      SELECT DISTINCT ON (clinic_id)
+                        clinic_id,priority_group,sort_order,tag_code,tag_label
+                      FROM effective
+                      ORDER BY clinic_id,priority_group,sort_order,tag_code
+                    )
+                    SELECT priority_group,tag_code,tag_label,count(*) AS clinics
+                    FROM primary_tag
+                    GROUP BY priority_group,tag_code,tag_label
+                    ORDER BY priority_group,tag_code
+                    """
+                )
+                rows = [
+                    {
+                        "priority_group": int(row[0]), "tag_code": row[1],
+                        "tag_label": row[2], "clinics": int(row[3]),
+                    }
+                    for row in cur.fetchall()
+                ]
+            self._conn.commit()
+            return rows
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def list_effective_clinics(self, *, priority_groups=None, tag_codes=None, limit=500, offset=0):
+        """Clinic-level effective dental list ordered by sales priority."""
+        priority_groups = [int(x) for x in (priority_groups or [])]
+        tag_codes = [str(x) for x in (tag_codes or [])]
+        filters, args = [], []
+        if priority_groups:
+            filters.append("p.priority_group=ANY(%s::smallint[])")
+            args.append(priority_groups)
+        if tag_codes:
+            filters.append(
+                "EXISTS(SELECT 1 FROM effective e2 "
+                "WHERE e2.clinic_id=c.id AND e2.tag_code=ANY(%s::text[]))"
+            )
+            args.append(tag_codes)
+        where_extra = (" AND " + " AND ".join(filters)) if filters else ""
+        args.extend([max(1, min(int(limit or 500), 100000)), max(0, int(offset or 0))])
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest_review AS (
+                      SELECT DISTINCT ON (clinic_id,tag_code)
+                        clinic_id,tag_code,human_decision
+                      FROM provenance.dental_sales_tag_reviews
+                      ORDER BY clinic_id,tag_code,reviewed_at DESC,id DESC
+                    ),
+                    effective AS (
+                      SELECT t.*
+                      FROM provenance.dental_sales_tags t
+                      LEFT JOIN latest_review r
+                        ON r.clinic_id=t.clinic_id AND r.tag_code=t.tag_code
+                      WHERE t.active=true
+                        AND (
+                          (t.auto_status='CONFIRMED' AND COALESCE(r.human_decision,'')<>'REJECTED')
+                          OR r.human_decision='CONFIRMED'
+                        )
+                    ),
+                    primary_tag AS (
+                      SELECT DISTINCT ON (clinic_id)
+                        clinic_id,priority_group,sort_order,tag_code,tag_label,
+                        confidence,source,rule_id
+                      FROM effective
+                      ORDER BY clinic_id,priority_group,sort_order,tag_code
+                    ),
+                    all_tags AS (
+                      SELECT clinic_id,
+                             string_agg(tag_label,' / ' ORDER BY priority_group,sort_order,tag_code) AS labels,
+                             string_agg(tag_code,' / ' ORDER BY priority_group,sort_order,tag_code) AS codes
+                      FROM effective
+                      GROUP BY clinic_id
+                    )
+                    SELECT
+                      c.id,c.uuid,c.clinic_name,c.phone,c.address,c.prefecture,
+                      COALESCE(NULLIF(c.hp_url,''),NULLIF(c.maps_website_url,''),'') AS hp_url,
+                      p.priority_group,p.tag_code,p.tag_label,p.confidence,p.source,p.rule_id,
+                      a.labels,a.codes
+                    FROM public.clinics c
+                    JOIN primary_tag p ON p.clinic_id=c.id
+                    JOIN all_tags a ON a.clinic_id=c.id
+                    WHERE c.medical_type='歯科'
+                      AND c.merged_into IS NULL
+                      AND c.merge_hold=false
+                      AND c.active=true
+                    """ + where_extra + """
+                    ORDER BY p.priority_group,p.sort_order,c.id
+                    LIMIT %s OFFSET %s
+                    """,
+                    tuple(args),
+                )
+                columns = [item.name for item in cur.description]
+                rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            self._conn.commit()
+            return rows
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def effective_count(self, *, priority_groups=None, tag_codes=None):
+        priority_groups = [int(x) for x in (priority_groups or [])]
+        tag_codes = [str(x) for x in (tag_codes or [])]
+        filters, args = [], []
+        if priority_groups:
+            filters.append("p.priority_group=ANY(%s::smallint[])")
+            args.append(priority_groups)
+        if tag_codes:
+            filters.append(
+                "EXISTS(SELECT 1 FROM effective e2 "
+                "WHERE e2.clinic_id=c.id AND e2.tag_code=ANY(%s::text[]))"
+            )
+            args.append(tag_codes)
+        where_extra = (" AND " + " AND ".join(filters)) if filters else ""
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest_review AS (
+                      SELECT DISTINCT ON (clinic_id,tag_code)
+                        clinic_id,tag_code,human_decision
+                      FROM provenance.dental_sales_tag_reviews
+                      ORDER BY clinic_id,tag_code,reviewed_at DESC,id DESC
+                    ),
+                    effective AS (
+                      SELECT t.*
+                      FROM provenance.dental_sales_tags t
+                      LEFT JOIN latest_review r
+                        ON r.clinic_id=t.clinic_id AND r.tag_code=t.tag_code
+                      WHERE t.active=true
+                        AND (
+                          (t.auto_status='CONFIRMED' AND COALESCE(r.human_decision,'')<>'REJECTED')
+                          OR r.human_decision='CONFIRMED'
+                        )
+                    ),
+                    primary_tag AS (
+                      SELECT DISTINCT ON (clinic_id)
+                        clinic_id,priority_group,sort_order,tag_code,tag_label
+                      FROM effective
+                      ORDER BY clinic_id,priority_group,sort_order,tag_code
+                    )
+                    SELECT count(*)
+                    FROM public.clinics c
+                    JOIN primary_tag p ON p.clinic_id=c.id
+                    WHERE c.medical_type='歯科'
+                      AND c.merged_into IS NULL
+                      AND c.merge_hold=false
+                      AND c.active=true
+                    """ + where_extra,
+                    tuple(args),
+                )
+                count = int(cur.fetchone()[0] or 0)
+            self._conn.commit()
+            return count
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def review_queue(self, *, only_review=True, include_reviewed=False, limit=200):
+        """Return auto tag candidates for Human Review, REVIEW first then confidence ascending."""
+        if not self.available():
+            return []
+        conditions = ["t.active=true"]
+        args = []
+        if only_review:
+            conditions.append("t.auto_status='REVIEW'")
+        if not include_reviewed:
+            conditions.append("r.human_decision IS NULL")
+        args.append(max(1, min(int(limit or 200), 1000)))
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    WITH latest_review AS (
+                      SELECT DISTINCT ON (clinic_id,tag_code)
+                        clinic_id,tag_code,human_decision,reviewer,review_note,reviewed_at
+                      FROM provenance.dental_sales_tag_reviews
+                      ORDER BY clinic_id,tag_code,reviewed_at DESC,id DESC
+                    )
+                    SELECT
+                      t.clinic_id,c.clinic_name,c.prefecture,c.phone,c.address,
+                      COALESCE(NULLIF(c.hp_url,''),NULLIF(c.maps_website_url,''),'') AS hp_url,
+                      t.tag_code,t.tag_label,t.priority_group,t.sort_order,t.auto_status,
+                      t.confidence,t.source,t.matched_alias,t.evidence_text,t.rule_id,
+                      t.classifier_version,
+                      r.human_decision,r.reviewer,r.review_note,r.reviewed_at
+                    FROM provenance.dental_sales_tags t
+                    JOIN public.clinics c ON c.id=t.clinic_id
+                    LEFT JOIN latest_review r
+                      ON r.clinic_id=t.clinic_id AND r.tag_code=t.tag_code
+                    WHERE """ + " AND ".join(conditions) + """
+                    ORDER BY
+                      CASE WHEN t.auto_status='REVIEW' THEN 0 ELSE 1 END,
+                      t.confidence ASC,
+                      t.priority_group,t.sort_order,t.clinic_id
+                    LIMIT %s
+                    """,
+                    tuple(args),
+                )
+                columns = [item.name for item in cur.description]
+                rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+            self._conn.commit()
+            return rows
+        except Exception:
+            self._conn.rollback()
+            raise
+
     def training_stats(self):
         if not self.available():
             return []
