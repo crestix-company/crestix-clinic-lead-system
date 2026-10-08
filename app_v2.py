@@ -24,7 +24,7 @@ from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.repository.write_backend import write_repositories_for
-from src.hp_human_review_ui import hp_human_review_card, hp_human_review_page
+from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
@@ -1273,6 +1273,10 @@ def main():
         path = None
     store = store_for(str(path) if path is not None else None)
     write_repositories_for(store).clinics.refresh_age_model()
+
+    hp_human_review_sidebar(store)
+    if st.session_state.pop("_open_hp_human_review_dialog", False):
+        hp_human_review_dialog(store)
 
     if demo:
         load_demo(store)

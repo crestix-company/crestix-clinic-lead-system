@@ -24,29 +24,179 @@ def _repo_for(store):
     return write_repositories_for(store).hp_human_review
 
 
+def _request_quick_review():
+    """Request a one-shot full-app rerun that opens the quick-review dialog."""
+    st.session_state["_open_hp_human_review_dialog"] = True
+    st.rerun()
+
+
 @st.fragment(run_every="10s")
 def hp_human_review_card(store):
-    """Compact card for the simple workflow. Hidden until the migration exists."""
+    """Compact Human Review entry point shown in the simple workflow."""
     repo = _repo_for(store)
     if repo is None or not repo.available():
         return
     summary = repo.summary()
-    st.markdown("#### 🔍 HP要確認レビュー")
+    st.markdown("#### 🔍 HP要確認")
     cols = st.columns(4)
     cols[0].metric("未レビュー", f"{summary['unreviewed']:,}件")
-    cols[1].metric("高確度候補", f"{summary['HIGH']:,}件")
-    cols[2].metric("中確度候補", f"{summary['MEDIUM']:,}件")
-    cols[3].metric("低確度候補", f"{summary['LOW']:,}件")
-    st.caption("公式HPを自動確定できなかった医院を、人間が1件ずつ確認して教師データとして保存します。")
+    cols[1].metric("高確度", f"{summary['HIGH']:,}件")
+    cols[2].metric("中確度", f"{summary['MEDIUM']:,}件")
+    cols[3].metric("低確度", f"{summary['LOW']:,}件")
+    st.caption("Auto Runを止めずに、要確認だけ1件ずつHuman Reviewできます。")
     if st.button(
-        "要確認をレビューする",
+        "1件レビューする",
         type="primary",
         key="simple_hp_human_review_start",
         use_container_width=True,
         disabled=summary["unreviewed"] <= 0,
     ):
-        st.session_state["_jump_to_hp_human_review"] = True
-        st.rerun()
+        _request_quick_review()
+
+
+def hp_human_review_sidebar(store):
+    """Always-available compact launcher in the sidebar."""
+    repo = _repo_for(store)
+    if repo is None or not repo.available():
+        return
+    summary = repo.summary()
+    with st.sidebar:
+        st.divider()
+        st.markdown("**🔍 HP Human Review**")
+        st.caption(
+            f"未レビュー {summary['unreviewed']:,}件"
+            f" ／ 高確度 {summary['HIGH']:,}件"
+        )
+        if st.button(
+            "次をレビュー",
+            key="sidebar_hp_human_review_start",
+            use_container_width=True,
+            disabled=summary["unreviewed"] <= 0,
+        ):
+            _request_quick_review()
+
+
+@st.dialog("HP要確認レビュー", width="large")
+def hp_human_review_dialog(store):
+    """Fast one-by-one review dialog. The queue automatically advances after each label."""
+    repo = _repo_for(store)
+    if repo is None or not repo.available():
+        st.warning("HP Human Reviewを利用できません。")
+        return
+
+    flash = st.session_state.pop("_hp_human_review_flash", None)
+    if flash:
+        st.success(flash)
+
+    summary = repo.summary()
+    st.caption(
+        f"未レビュー {summary['unreviewed']:,}件"
+        f" ／ 高 {summary['HIGH']:,}"
+        f" ／ 中 {summary['MEDIUM']:,}"
+        f" ／ 低 {summary['LOW']:,}"
+    )
+
+    # queue() already sorts HIGH -> MEDIUM -> LOW and then score descending.
+    queue = repo.queue(include_reviewed=False, priority="ALL", limit=1)
+    if not queue:
+        st.success("未レビューのHP要確認はありません。")
+        if st.button("閉じる", use_container_width=True, key="quick_review_close_empty"):
+            st.rerun()
+        return
+
+    row = queue[0]
+    snapshot = row["snapshot"]
+    priority = PRIORITY_LABELS.get(snapshot.get("priority"), snapshot.get("priority", ""))
+    st.markdown(f"### {row['clinic_name']}")
+    st.caption(
+        f"Clinic ID {row['clinic_id']} ／ {row.get('prefecture') or '-'}"
+        f" ／ {priority} ／ score {int(snapshot.get('score') or 0)}"
+    )
+    st.write(f"**電話番号：** {row.get('phone') or '-'}")
+    st.write(f"**住所：** {row.get('address') or '-'}")
+
+    match_cols = st.columns(4)
+    match_cols[0].metric("医院名", _feature_mark(snapshot.get("name_match")))
+    match_cols[1].metric("電話", _feature_mark(snapshot.get("phone_match")))
+    match_cols[2].metric("住所", _feature_mark(snapshot.get("address_match")))
+    match_cols[3].metric("院長名", _feature_mark(snapshot.get("manager_match")))
+    bucket = snapshot.get("bucket") or "OTHER"
+    st.caption(f"判定条件：{BUCKET_LABELS.get(bucket, bucket)}")
+
+    if snapshot.get("hp_match_reason"):
+        st.info(" / ".join(str(x) for x in snapshot["hp_match_reason"]))
+
+    candidate_urls = snapshot.get("candidate_urls") or []
+    selected_url = ""
+    if candidate_urls:
+        default_url = snapshot.get("best_candidate_url")
+        default_index = candidate_urls.index(default_url) if default_url in candidate_urls else 0
+        selected_url = st.selectbox(
+            "候補URL",
+            candidate_urls,
+            index=default_index,
+            key=f"quick_hp_human_review_url_{row['clinic_id']}",
+        )
+        st.link_button("候補HPを開く", selected_url, use_container_width=True)
+    else:
+        st.warning("候補URLがありません。Positive判定は選択できません。")
+
+    with st.expander("候補の本人確認情報・メモ", expanded=False):
+        candidates = _candidate_frame(snapshot)
+        if not candidates.empty:
+            st.dataframe(
+                candidates,
+                hide_index=True,
+                width="stretch",
+                column_config={"候補URL": st.column_config.LinkColumn()},
+            )
+        note = st.text_area(
+            "確認メモ（任意）",
+            key=f"quick_hp_human_review_note_{row['clinic_id']}",
+            placeholder="判断理由や補足があれば入力",
+        )
+
+    reviewer_default = os.environ.get("CLINIC_REVIEWER_NAME", "")
+    reviewer = st.text_input(
+        "確認者",
+        value=st.session_state.get("hp_human_reviewer", reviewer_default),
+        key="quick_hp_human_reviewer",
+        placeholder="例：前川",
+    )
+
+    st.markdown("#### 判定")
+    first = st.columns(3)
+    second = st.columns(2)
+    decision_buttons = [
+        (first[0], "OFFICIAL", "✅ 公式HP"),
+        (first[1], "ORGANIZATION_PAGE", "🏢 法人内正式ページ"),
+        (first[2], "NOT_OFFICIAL", "❌ 公式HPではない"),
+        (second[0], "ACCESS_RESTRICTED", "🔒 URL正しい・制限"),
+        (second[1], "UNCERTAIN", "❓ 判断できない"),
+    ]
+    for col, decision, label in decision_buttons:
+        disabled = not reviewer.strip() or (decision in POSITIVE_DECISIONS and not selected_url)
+        if col.button(
+            label,
+            key=f"quick_hp_human_review_decision_{row['clinic_id']}_{decision}",
+            use_container_width=True,
+            disabled=disabled,
+        ):
+            try:
+                _save_decision(
+                    store, repo, row, decision, selected_url, reviewer, note,
+                    rerun=False,
+                )
+                # Dialogs inherit fragment semantics. Keep the modal open and load the
+                # next unreviewed row without rerunning the Auto Run screen.
+                st.rerun(scope="fragment")
+            except ValueError as exc:
+                st.error(str(exc))
+
+    st.caption(
+        "Positive判定はHuman本人確認済みURLとして再クロールし、"
+        "治療カテゴリ検出あり／なし／調査失敗へ自動反映します。"
+    )
 
 
 def _candidate_frame(snapshot):
@@ -68,7 +218,7 @@ def _feature_mark(value):
     return "✅ 一致" if value else "❌ 不一致"
 
 
-def _save_decision(store, repo, row, decision, selected_url, reviewer, note):
+def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, rerun=True):
     review_id = repo.save_review(
         clinic_id=row["clinic_id"],
         hp_checked_at=row["snapshot"]["hp_checked_at"],
@@ -96,7 +246,9 @@ def _save_decision(store, repo, row, decision, selected_url, reviewer, note):
             message += " HP内容を取得できなかったため「Webサイト調査失敗」へ反映しました。後から再試行できます。"
     st.session_state["_hp_human_review_flash"] = message
     st.session_state["_hp_human_review_last_id"] = review_id
-    st.rerun()
+    if rerun:
+        st.rerun()
+    return review_id
 
 
 def _review_tab(store, repo):
