@@ -121,13 +121,15 @@ class _PrefetchedMatchingConnection:
     legacy row-order semantics without another database round trip.
     """
 
-    def __init__(self, rows=()):
+    def __init__(self, rows=(), *, fuzzy_fallback=None):
         self._rows = {}
         self._by_uuid = {}
         self._by_medical_key = {}
         self._by_phone = {}
         self._by_name_address = {}
         self._by_prefix_prefecture = {}
+        self._fuzzy_fallback = fuzzy_fallback
+        self._fuzzy_cache = {}
         for row in rows:
             self.upsert(dict(row))
 
@@ -201,8 +203,28 @@ class _PrefetchedMatchingConnection:
             ids = set(self._by_name_address.get((args[0], args[1]), ()))
         elif "name_prefix=? AND (prefecture=? OR prefecture='')" in statement:
             prefix, prefecture = args[0], args[1]
-            ids = set(self._by_prefix_prefecture.get((prefix, prefecture), ()))
-            ids.update(self._by_prefix_prefecture.get((prefix, ""), ()))
+            key = (prefix, prefecture)
+            if self._fuzzy_fallback is not None and key not in self._fuzzy_cache:
+                # Fuzzy matching is the only branch where legacy result order can matter
+                # because match_record truncates the raw pool to 200 before scoring.
+                # Execute the canonical legacy SELECT once per unique pair, cache its order,
+                # and overlay any earlier in-batch identity changes in memory.
+                rows = list(self._fuzzy_fallback.execute(statement, args))
+                ordered_ids = []
+                for row in rows:
+                    cid = int(row["id"])
+                    if cid not in self._rows:
+                        self.upsert(row)
+                    ordered_ids.append(cid)
+                self._fuzzy_cache[key] = ordered_ids
+
+            current = set(self._by_prefix_prefecture.get((prefix, prefecture), ()))
+            current.update(self._by_prefix_prefecture.get((prefix, ""), ()))
+            if key in self._fuzzy_cache:
+                ordered = [cid for cid in self._fuzzy_cache[key] if cid in current]
+                ordered.extend(sorted(current - set(ordered)))
+                return [dict(self._rows[cid]) for cid in ordered]
+            ids = current
         else:
             raise ValueError("Prefetched Comdesk matcher received an unknown query shape.")
 
@@ -1097,7 +1119,7 @@ class SupabaseClinicWriteRepository:
         from src.normalizer.clinic_name import normalize_clinic_name
 
         uuids, medical_keys, phone_keys = set(), set(), set()
-        name_address_pairs, prefix_prefecture_pairs = set(), set()
+        name_address_pairs = set()
         for record in records:
             uid = str(record.get("uuid", "")).strip()
             if uid:
@@ -1112,7 +1134,6 @@ class SupabaseClinicWriteRepository:
             address = normalize_address(record.get("address"))
             if name and address:
                 name_address_pairs.add((name, address))
-                prefix_prefecture_pairs.add((name[:2], record.get("prefecture", "")))
 
         columns = (
             "id,base_json,uuid,medical_key,tel_match_key,name_norm,name_prefix,"
@@ -1177,25 +1198,6 @@ class SupabaseClinicWriteRepository:
                 ([item[0] for item in pairs], [item[1] for item in pairs]),
             )
             collect(cur.fetchall())
-
-        if prefix_prefecture_pairs:
-            pairs = sorted(prefix_prefecture_pairs)
-            # Chunk only the input-pair transport. Do not LIMIT candidate rows here: the
-            # canonical matcher still owns its historical [:200] rule, so prefetch must not
-            # silently change which candidates are available for that rule.
-            for offset in range(0, len(pairs), 250):
-                chunk = pairs[offset:offset + 250]
-                cur.execute(
-                    "WITH input_pairs AS (SELECT * FROM unnest(%s::text[],%s::text[]) "
-                    "AS p(name_prefix,prefecture)) "
-                    "SELECT " + ",".join("c." + name for name in columns.split(",")) + " "
-                    "FROM public.clinics c JOIN input_pairs p "
-                    "ON c.name_prefix=p.name_prefix "
-                    "AND (c.prefecture=p.prefecture OR c.prefecture='') "
-                    "WHERE c.merged_into IS NULL",
-                    ([item[0] for item in chunk], [item[1] for item in chunk]),
-                )
-                collect(cur.fetchall())
 
         return list(candidates.values())
 
@@ -1310,7 +1312,9 @@ class SupabaseClinicWriteRepository:
                     int(row["id"]): self._comdesk_candidate_fence(row)
                     for row in candidate_rows
                 }
-                matcher = _PrefetchedMatchingConnection(candidate_rows)
+                matcher = _PrefetchedMatchingConnection(
+                    candidate_rows, fuzzy_fallback=_MatchingConnection(cur)
+                )
                 phase["candidate_prefetch_seconds"] = time.perf_counter() - started
                 phase["candidate_prefetch_rows"] = len(candidate_rows)
 
