@@ -115,6 +115,138 @@ def show_web_research_metrics(store):
             column.metric(label, f"{counts[key]:,}件", help=help_text)
 
 
+AUTO_HP_PROGRESS_REFRESH_SECONDS = 5
+AUTO_HP_ACTIVE_STATUSES = {"RUNNING", "WAITING_NETWORK"}
+
+
+def _auto_hp_progress_snapshot(store, auto_repo):
+    """Read one consistent-enough Auto HP progress snapshot for display only."""
+    state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
+    auto_current = None
+    if state.get("current_job_id"):
+        try:
+            auto_current = job_status(store, state["current_job_id"])
+        except ValueError:
+            auto_current = None
+
+    current_done = auto_current["counts"].get("DONE", 0) if auto_current else 0
+    current_pending = auto_current["counts"].get("PENDING", 0) if auto_current else 0
+    current_running = auto_current["counts"].get("RUNNING", 0) if auto_current else 0
+    current_total = auto_current["total"] if auto_current else 0
+    current_remaining = current_pending + current_running
+
+    future_remaining = auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
+    total_remaining = current_remaining + future_remaining
+    initial_count = int(state.get("initial_count", 0) or 0)
+    processed = max(0, initial_count - total_remaining)
+    cumulative = auto_repo.cumulative_results(state.get("run_id", "")) if auto_repo is not None and state.get("run_id") else {}
+    batch_size = max(1, int(state.get("batch_size", 500) or 500))
+    estimated_total = (initial_count + batch_size - 1) // batch_size if initial_count else 0
+
+    return {
+        "state": state,
+        "current": auto_current,
+        "initial_count": initial_count,
+        "processed": processed,
+        "total_remaining": total_remaining,
+        "current_done": current_done,
+        "current_pending": current_pending,
+        "current_running": current_running,
+        "current_total": current_total,
+        "cumulative": cumulative,
+        "estimated_total": estimated_total,
+        "last_updated": (
+            (auto_current or {}).get("updated_at")
+            or state.get("last_progress_at")
+            or ""
+        ),
+    }
+
+
+def _render_auto_hp_progress(snapshot, *, live=False):
+    state = snapshot["state"]
+    labels = {
+        "RUNNING": "実行中", "PAUSED": "一時停止", "WAITING_NETWORK": "通信回復待ち",
+        "COMPLETED": "完了", "ERROR": "エラー", "CANCELLED": "終了済み",
+    }
+    frozen_types = "・".join(state.get("medical_types") or ["両方"])
+    frozen_pref = state.get("prefecture") or "すべて"
+    status_label = labels.get(state.get("status"), state.get("status", "不明"))
+    st.write(f"自動HP調査：{status_label}")
+    st.caption(
+        f"固定条件：都道府県={frozen_pref}／医科・歯科={frozen_types}／"
+        f"再調査={'する' if state.get('force') else 'しない'}／"
+        f"1Batch={int(state.get('batch_size', 500) or 500):,}件"
+        + (f"／進捗は{AUTO_HP_PROGRESS_REFRESH_SECONDS}秒ごとに自動更新" if live else "")
+    )
+
+    initial_count = snapshot["initial_count"]
+    processed = snapshot["processed"]
+    total_remaining = snapshot["total_remaining"]
+    overall_ratio = min(1.0, max(0.0, processed / initial_count)) if initial_count else 0.0
+    overall_pct = overall_ratio * 100
+    st.progress(
+        overall_ratio,
+        text=f"全体進捗：{processed:,} / {initial_count:,}件（{overall_pct:.1f}%）",
+    )
+
+    current_total = snapshot["current_total"]
+    current_done = snapshot["current_done"]
+    if current_total:
+        batch_ratio = min(1.0, max(0.0, current_done / current_total))
+        batch_pct = batch_ratio * 100
+        st.progress(
+            batch_ratio,
+            text=(
+                f"現在Batch：{current_done:,} / {current_total:,}件（{batch_pct:.1f}%）"
+                f"／処理中 {snapshot['current_running']:,}件"
+            ),
+        )
+
+    metrics_cols = st.columns(4)
+    metrics_cols[0].metric("開始時対象", f"{initial_count:,}件")
+    metrics_cols[1].metric("処理済み", f"{processed:,}件")
+    metrics_cols[2].metric("残り", f"{total_remaining:,}件")
+    metrics_cols[3].metric(
+        "Batch",
+        f"{int(state.get('current_batch', 0) or 0)} / 推定{snapshot['estimated_total']}",
+    )
+
+    current = snapshot["current"]
+    if current:
+        st.caption(
+            f"現在Job ID：{state.get('current_job_id')}／"
+            f"現在Batch：{current_done:,} / {current_total:,}／"
+            f"PENDING {snapshot['current_pending']:,}／RUNNING {snapshot['current_running']:,}／"
+            f"完了Batch：{int(state.get('completed_batches', 0) or 0):,}"
+        )
+
+    cumulative = snapshot["cumulative"]
+    result_cols = st.columns(4)
+    result_cols[0].metric("成功", f"{cumulative.get('SUCCESS', 0):,}件")
+    result_cols[1].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件")
+    result_cols[2].metric("要確認", f"{cumulative.get('REVIEW', 0):,}件")
+    result_cols[3].metric("エラー", f"{cumulative.get('ERROR', 0):,}件")
+
+    network = "WAITING" if state.get("status") == "WAITING_NETWORK" else "ONLINE"
+    updated = snapshot.get("last_updated") or "未取得"
+    st.caption(f"通信状態：{network}／最終DB更新：{updated}")
+
+
+@st.fragment(run_every=f"{AUTO_HP_PROGRESS_REFRESH_SECONDS}s")
+def _live_auto_hp_progress(store):
+    """Refresh only the Auto HP progress panel while a background run is active."""
+    auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
+    if auto_repo is None:
+        st.warning("Auto HP Researchの進捗を取得できません。")
+        return
+    snapshot = _auto_hp_progress_snapshot(store, auto_repo)
+    _render_auto_hp_progress(snapshot, live=True)
+    if snapshot["state"].get("status") not in AUTO_HP_ACTIVE_STATUSES:
+        # Refresh the whole page once when the run transitions to PAUSED/COMPLETED/ERROR.
+        st.rerun()
+
+
 def resolve_production_db_path():
     """Production DBの絶対パスを検証する。存在しない/開けない場合は自動生成せずエラー文を返す。
 
@@ -743,49 +875,11 @@ def simple_workflow_ui(store, demo):
             st.rerun()
 
     if auto_state.get("status") != "IDLE":
-        labels = {
-            "RUNNING": "実行中", "PAUSED": "一時停止", "WAITING_NETWORK": "通信回復待ち",
-            "COMPLETED": "完了", "ERROR": "エラー", "CANCELLED": "終了済み",
-        }
-        frozen_types = "・".join(auto_state.get("medical_types") or ["両方"])
-        frozen_pref = auto_state.get("prefecture") or "すべて"
-        st.write(f"自動HP調査：{labels.get(auto_state.get('status'), auto_state.get('status'))}")
-        st.caption(
-            f"固定条件：都道府県={frozen_pref}／医科・歯科={frozen_types}／"
-            f"再調査={'する' if auto_state.get('force') else 'しない'}／1Batch={int(auto_state.get('batch_size', 500)):,}件"
-        )
-        auto_current = None
-        if auto_state.get("current_job_id"):
-            try:
-                auto_current = job_status(store, auto_state["current_job_id"])
-            except ValueError:
-                auto_current = None
-        current_remaining = 0
-        if auto_current:
-            current_remaining = auto_current["counts"].get("PENDING", 0) + auto_current["counts"].get("RUNNING", 0)
-        future_remaining = auto_repo.remaining_count(auto_state) if auto_repo else 0
-        total_remaining = current_remaining + future_remaining
-        initial_count = int(auto_state.get("initial_count", 0))
-        processed = max(0, initial_count - total_remaining)
-        cumulative = auto_repo.cumulative_results(auto_state.get("run_id", "")) if auto_repo else {}
-        estimated_total = (initial_count + int(auto_state.get("batch_size", 500)) - 1) // int(auto_state.get("batch_size", 500)) if initial_count else 0
-        metrics_cols = st.columns(4)
-        metrics_cols[0].metric("開始時対象", f"{initial_count:,}件")
-        metrics_cols[1].metric("処理済み", f"{processed:,}件")
-        metrics_cols[2].metric("残り", f"{total_remaining:,}件")
-        metrics_cols[3].metric("Batch", f"{int(auto_state.get('current_batch', 0))} / 推定{estimated_total}")
-        if auto_current:
-            st.caption(
-                f"現在Job ID：{auto_state.get('current_job_id')}／現在Batch："
-                f"{auto_current['counts'].get('DONE', 0):,} / {auto_current['total']:,}／"
-                f"完了Batch：{int(auto_state.get('completed_batches', 0)):,}"
-            )
-        result_cols = st.columns(4)
-        result_cols[0].metric("成功", f"{cumulative.get('SUCCESS', 0):,}件")
-        result_cols[1].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件")
-        result_cols[2].metric("要確認", f"{cumulative.get('REVIEW', 0):,}件")
-        result_cols[3].metric("エラー", f"{cumulative.get('ERROR', 0):,}件")
-        st.caption("通信状態：" + ("WAITING" if auto_state.get("status") == "WAITING_NETWORK" else "ONLINE"))
+        if auto_state.get("status") in AUTO_HP_ACTIVE_STATUSES:
+            _live_auto_hp_progress(store)
+        else:
+            _render_auto_hp_progress(_auto_hp_progress_snapshot(store, auto_repo), live=False)
+
         auto_controls = st.columns(2)
         if auto_controls[0].button(
             "自動調査を一時停止", disabled=auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
