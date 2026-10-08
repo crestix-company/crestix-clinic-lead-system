@@ -107,6 +107,107 @@ class _MatchingConnection:
         return _DictRows(self._cur.fetchall(), names)
 
 
+class _PrefetchedMatchingConnection:
+    """In-memory read surface for the canonical match_record algorithm.
+
+    Step7 can contain tens of thousands of rows. The legacy PostgreSQL adapter asked the
+    database for UUID/medical-key/phone/name candidates again for every row. This adapter is
+    deliberately narrow: it supports exactly the query shapes emitted by match_record for
+    ordinary Comdesk imports, while the matching algorithm itself remains unchanged.
+
+    Rows are mutable because a prior row in the same Comdesk batch can fill an empty UUID,
+    name, phone or address. Updating the indexes after every simulated write preserves the
+    legacy row-order semantics without another database round trip.
+    """
+
+    def __init__(self, rows=()):
+        self._rows = {}
+        self._by_uuid = {}
+        self._by_medical_key = {}
+        self._by_phone = {}
+        self._by_name_address = {}
+        self._by_prefix_prefecture = {}
+        for row in rows:
+            self.upsert(dict(row))
+
+    @staticmethod
+    def _add(index, key, clinic_id):
+        if key is None or key == "" or key == ("", ""):
+            return
+        index.setdefault(key, set()).add(clinic_id)
+
+    @staticmethod
+    def _discard(index, key, clinic_id):
+        if key not in index:
+            return
+        index[key].discard(clinic_id)
+        if not index[key]:
+            index.pop(key, None)
+
+    def _index_row(self, row):
+        cid = int(row["id"])
+        self._add(self._by_uuid, row.get("uuid", ""), cid)
+        self._add(self._by_medical_key, row.get("medical_key", ""), cid)
+        self._add(self._by_phone, row.get("tel_match_key", ""), cid)
+        self._add(
+            self._by_name_address,
+            (row.get("name_norm", ""), row.get("address_norm", "")),
+            cid,
+        )
+        prefix = row.get("name_prefix", "")
+        if prefix:
+            self._add(self._by_prefix_prefecture, (prefix, row.get("prefecture", "")), cid)
+
+    def _unindex_row(self, row):
+        cid = int(row["id"])
+        self._discard(self._by_uuid, row.get("uuid", ""), cid)
+        self._discard(self._by_medical_key, row.get("medical_key", ""), cid)
+        self._discard(self._by_phone, row.get("tel_match_key", ""), cid)
+        self._discard(
+            self._by_name_address,
+            (row.get("name_norm", ""), row.get("address_norm", "")),
+            cid,
+        )
+        prefix = row.get("name_prefix", "")
+        if prefix:
+            self._discard(self._by_prefix_prefecture, (prefix, row.get("prefecture", "")), cid)
+
+    def upsert(self, row):
+        cid = int(row["id"])
+        previous = self._rows.get(cid)
+        if previous is not None:
+            self._unindex_row(previous)
+        self._rows[cid] = dict(row)
+        self._index_row(self._rows[cid])
+
+    def get(self, clinic_id):
+        return dict(self._rows[int(clinic_id)])
+
+    def execute(self, statement, args=()):
+        # import_comdesk calls match_record with its default scope. Refuse an unexpected
+        # shape instead of silently returning a different candidate set.
+        if " NOT IN (" in statement or "EXISTS(SELECT 1 FROM comdesk_original_rows" in statement:
+            raise ValueError("Prefetched Comdesk matcher received an unsupported scoped query.")
+
+        ids = set()
+        if "uuid=?" in statement:
+            ids = set(self._by_uuid.get(str(args[0]).strip(), ()))
+        elif "medical_key=?" in statement:
+            ids = set(self._by_medical_key.get(args[0], ()))
+        elif "tel_match_key=?" in statement:
+            ids = set(self._by_phone.get(args[0], ()))
+        elif "name_norm=? AND address_norm=?" in statement:
+            ids = set(self._by_name_address.get((args[0], args[1]), ()))
+        elif "name_prefix=? AND (prefecture=? OR prefecture='')" in statement:
+            prefix, prefecture = args[0], args[1]
+            ids = set(self._by_prefix_prefecture.get((prefix, prefecture), ()))
+            ids.update(self._by_prefix_prefecture.get((prefix, ""), ()))
+        else:
+            raise ValueError("Prefetched Comdesk matcher received an unknown query shape.")
+
+        return [dict(self._rows[cid]) for cid in sorted(ids)]
+
+
 def _rollback_and_raise(conn, exc):
     conn.rollback()
     raise exc
