@@ -24,6 +24,7 @@ class WriteRepositories:
     hp: object | None = None
     auto_hp: object | None = None
     hp_human_review: object | None = None
+    dental_sales_tags: object | None = None
 
 
 class ClinicWriteRepository(Protocol):
