@@ -2,6 +2,7 @@
 from threading import Thread,Lock
 from concurrent.futures import ThreadPoolExecutor
 import json
+import logging
 from filelock import FileLock,Timeout
 from src.master.store import now
 from src.enrichment.search_provider import CachedSearch,BudgetReached,SearchError
@@ -217,6 +218,23 @@ def _research_one(store,jid,job,options,researcher,cid,claim_token=None):
         if job["kind"] == "hp" and repositories.hp is not None:
             with _WRITE_LOCK:
                 repositories.hp.upsert_result(_hp_ledger_payload(cid, result, status, note))
+        if (
+            job["kind"] == "hp"
+            and record.get("medical_type") == "歯科"
+            and repositories.dental_sales_tags is not None
+        ):
+            # Dental tags are a derived sales sidecar. A missing/not-yet-deployed sidecar or
+            # a tag refresh failure must never change the canonical HP research outcome.
+            try:
+                if repositories.dental_sales_tags.available():
+                    from src.master.dental_sales_tags import classify_dental_sales_tags
+                    dental_tags = classify_dental_sales_tags(record, pages or ())
+                    with _WRITE_LOCK:
+                        repositories.dental_sales_tags.replace_auto_tags_bulk([(cid, dental_tags)])
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Dental sales tag refresh failed for clinic_id=%s", cid, exc_info=True
+                )
     except (BudgetReached,Stopped) as exc:
         with _WRITE_LOCK:
             if claim_token:
@@ -244,6 +262,21 @@ def _research_one(store,jid,job,options,researcher,cid,claim_token=None):
         if job["kind"] == "hp" and repositories.hp is not None:
             with _WRITE_LOCK:
                 repositories.hp.upsert_result(_hp_ledger_payload(cid, safe_result, status, note))
+        if (
+            job["kind"] == "hp"
+            and record.get("medical_type") == "歯科"
+            and repositories.dental_sales_tags is not None
+        ):
+            try:
+                if repositories.dental_sales_tags.available():
+                    from src.master.dental_sales_tags import classify_dental_sales_tags
+                    dental_tags = classify_dental_sales_tags(record, ())
+                    with _WRITE_LOCK:
+                        repositories.dental_sales_tags.replace_auto_tags_bulk([(cid, dental_tags)])
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "Dental sales tag fallback refresh failed for clinic_id=%s", cid, exc_info=True
+                )
     with _WRITE_LOCK:
         if claim_token:
             jobs_repo.finish_claimed_item(jid,cid,claim_token,status,note)
