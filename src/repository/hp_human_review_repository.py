@@ -16,6 +16,7 @@ from src.master.store import dumps, now
 
 
 TABLE_NAME = "provenance.hp_human_reviews"
+RUN_TABLE_NAME = "provenance.hp_human_review_research_runs"
 
 
 def _as_dict(value):
@@ -35,8 +36,9 @@ class SupabaseHpHumanReviewRepository:
     def available(self):
         try:
             with self._conn.cursor() as cur:
-                cur.execute("SELECT to_regclass(%s)", (TABLE_NAME,))
-                exists = cur.fetchone()[0] is not None
+                cur.execute("SELECT to_regclass(%s),to_regclass(%s)", (TABLE_NAME, RUN_TABLE_NAME))
+                row = cur.fetchone()
+                exists = row[0] is not None and row[1] is not None
             self._conn.commit()
             return exists
         except Exception:
@@ -64,6 +66,11 @@ class SupabaseHpHumanReviewRepository:
                       latest_review.reviewer,
                       latest_review.review_note,
                       latest_review.reviewed_at,
+                      latest_run.status AS reanalysis_status,
+                      latest_run.treatment_categories AS reanalysis_treatment_categories,
+                      latest_run.treatment_count AS reanalysis_treatment_count,
+                      latest_run.error_detail AS reanalysis_error,
+                      latest_run.finished_at AS reanalysis_finished_at,
                       source_job.job_id,
                       source_job.auto_run_id
                     FROM research.research_results rr
@@ -76,6 +83,13 @@ class SupabaseHpHumanReviewRepository:
                       ORDER BY h.reviewed_at DESC,h.id DESC
                       LIMIT 1
                     ) latest_review ON true
+                    LEFT JOIN LATERAL (
+                      SELECT x.status,x.treatment_categories,x.treatment_count,x.error_detail,x.finished_at
+                      FROM provenance.hp_human_review_research_runs x
+                      WHERE x.human_review_id=latest_review.id
+                      ORDER BY x.finished_at DESC,x.id DESC
+                      LIMIT 1
+                    ) latest_run ON true
                     LEFT JOIN LATERAL (
                       SELECT j.id AS job_id,COALESCE(j.options_json::jsonb->>'auto_run_id','') AS auto_run_id
                       FROM research.research_job_items i
@@ -261,6 +275,87 @@ class SupabaseHpHumanReviewRepository:
             self._conn.rollback()
             raise
 
+    def record_reanalysis(
+        self,
+        *,
+        human_review_id,
+        clinic_id,
+        selected_url,
+        status,
+        treatment_categories=None,
+        error_detail="",
+        started_at=None,
+        finished_at=None,
+    ):
+        if status not in {"DONE", "FAILED"}:
+            raise ValueError("治療カテゴリ再解析の状態を確認してください。")
+        categories = treatment_categories if isinstance(treatment_categories, list) else []
+        run_id = uuid.uuid4().hex
+        started_at = started_at or now()
+        finished_at = finished_at or now()
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT human_decision,selected_url FROM provenance.hp_human_reviews WHERE id=%s",
+                    (str(human_review_id),),
+                )
+                review = cur.fetchone()
+                if not review:
+                    raise ValueError("Human Review履歴が見つかりません。")
+                if review[0] not in POSITIVE_DECISIONS:
+                    raise ValueError("Positive Human Reviewだけが治療カテゴリ再解析の対象です。")
+                if str(review[1] or "") != str(selected_url or ""):
+                    raise ValueError("Human Reviewで確定したURLと再解析URLが一致しません。")
+                cur.execute(
+                    """
+                    INSERT INTO provenance.hp_human_review_research_runs(
+                      id,human_review_id,clinic_id,selected_url,status,identity_source,
+                      treatment_categories,treatment_count,error_detail,started_at,finished_at
+                    ) VALUES(%s,%s,%s,%s,%s,'HUMAN_REVIEW',%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        run_id, str(human_review_id), int(clinic_id), str(selected_url or ""),
+                        status, Jsonb(categories), len(categories), str(error_detail or ""),
+                        started_at, finished_at,
+                    ),
+                )
+            self._conn.commit()
+            return run_id
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def latest_reanalysis(self, human_review_id):
+        if not self.available():
+            return None
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT status,treatment_categories,treatment_count,error_detail,started_at,finished_at
+                    FROM provenance.hp_human_review_research_runs
+                    WHERE human_review_id=%s
+                    ORDER BY finished_at DESC,id DESC
+                    LIMIT 1
+                    """,
+                    (str(human_review_id),),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if not row:
+            return None
+        return {
+            "status": row[0],
+            "treatment_categories": row[1] if isinstance(row[1], list) else [],
+            "treatment_count": int(row[2] or 0),
+            "error_detail": row[3] or "",
+            "started_at": row[4],
+            "finished_at": row[5],
+        }
+
     def analytics(self):
         if not self.available():
             return {
@@ -328,9 +423,21 @@ class SupabaseHpHumanReviewRepository:
                       h.id,h.clinic_id,c.clinic_name,c.prefecture,c.phone,
                       h.hp_checked_at,h.research_job_id,h.auto_run_id,h.selected_url,
                       h.human_decision,h.reviewer,h.review_note,h.rule_version,
-                      h.auto_snapshot,h.reviewed_at
+                      h.auto_snapshot,h.reviewed_at,
+                      latest_run.status AS reanalysis_status,
+                      latest_run.treatment_categories AS reanalysis_treatment_categories,
+                      latest_run.treatment_count AS reanalysis_treatment_count,
+                      latest_run.error_detail AS reanalysis_error,
+                      latest_run.finished_at AS reanalysis_finished_at
                     FROM provenance.hp_human_reviews h
                     JOIN public.clinics c ON c.id=h.clinic_id
+                    LEFT JOIN LATERAL (
+                      SELECT x.status,x.treatment_categories,x.treatment_count,x.error_detail,x.finished_at
+                      FROM provenance.hp_human_review_research_runs x
+                      WHERE x.human_review_id=h.id
+                      ORDER BY x.finished_at DESC,x.id DESC
+                      LIMIT 1
+                    ) latest_run ON true
                     ORDER BY h.clinic_id,h.hp_checked_at,h.reviewed_at DESC,h.id DESC
                     """
                 )
