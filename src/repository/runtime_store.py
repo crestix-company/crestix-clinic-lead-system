@@ -17,6 +17,36 @@ from src.master.filters import Filters
 from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
 
 
+PROVISIONAL_COMDESK_EMAIL_HEADER = "メールアドレス"
+
+
+def _step5_comdesk_headers():
+    """Current Step 5 shape; deliberately separate from the future formal schema."""
+    return [*COMDESK_HEADERS, PROVISIONAL_COMDESK_EMAIL_HEADER]
+
+
+def _verified_email_map(rows):
+    """Build deterministic, de-duplicated Step 5 email values by clinic_id."""
+    buckets = {}
+    for clinic_id, email, status, verified_on_official in rows:
+        if status != "VERIFIED_EMAIL" or verified_on_official is not True:
+            continue
+        value = str(email or "").strip()
+        if not value:
+            continue
+        # Email domains are case-insensitive and real enrichment feeds may repeat the same
+        # address with casing differences. Keep one deterministic representation.
+        key = value.casefold()
+        choices = buckets.setdefault(int(clinic_id), {})
+        previous = choices.get(key)
+        if previous is None or value < previous:
+            choices[key] = value
+    return {
+        clinic_id: ";".join(sorted(values.values(), key=lambda value: (value.casefold(), value)))
+        for clinic_id, values in buckets.items()
+    }
+
+
 class SupabaseRuntimeStore:
     is_supabase_runtime = True
     runtime_identity = "supabase"
@@ -153,6 +183,26 @@ class SupabaseRuntimeStore:
             output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
         return output
 
+    def _verified_emails_for_ids(self, clinic_ids):
+        """Read already-enriched, exportable emails; database errors must remain visible."""
+        ids = [int(clinic_id) for clinic_id in clinic_ids]
+        if not ids:
+            return {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT clinic_id,email,status,verified_on_official "
+                "FROM public.clinic_email_enrichment "
+                "WHERE clinic_id=ANY(%s) "
+                "AND status='VERIFIED_EMAIL' "
+                "AND verified_on_official=true "
+                "ORDER BY clinic_id,lower(btrim(email)),btrim(email)",
+                (ids,),
+            )
+            rows = cur.fetchall()
+        # Intentionally no exception fallback: permission/SQL/connection failures must not be
+        # misreported as clinics with no email.
+        return _verified_email_map(rows)
+
     def latest_completed_hp_job(self):
         """Return the latest fully completed HP job; never fall back to historical clinics."""
         with self._conn.cursor() as cur:
@@ -259,11 +309,17 @@ class SupabaseRuntimeStore:
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
         rows = self._export_records(records)
+        emails = self._verified_emails_for_ids([record["id"] for record in records])
+        rows = [
+            [*row, emails.get(int(record["id"]), "")]
+            for record, row in zip(records, rows)
+        ]
+        headers = _step5_comdesk_headers()
         import pandas as pd
-        frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
+        frame = pd.DataFrame(rows, columns=headers)
         return {
             "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
-            "final_comdesk_import.csv": csv_bytes(COMDESK_HEADERS, rows),
+            "final_comdesk_import.csv": csv_bytes(headers, rows),
         }
 
     def export(self, filters, template_id=None, as_of=None):
