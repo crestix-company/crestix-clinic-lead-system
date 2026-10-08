@@ -4,7 +4,7 @@ import json
 import pandas as pd
 import pytest
 
-from src.io.input_loader import load_table
+from src.io.input_loader import InputTable
 from src.master.comdesk import COMDESK_HEADERS, record_from_row
 from src.master.matching import match_record
 from src.normalizer.address import normalize_address
@@ -363,8 +363,7 @@ class _StatefulConn:
 def _table(rows):
     headers = ["UUID", "名前", "Tel1", "都道府県", "住所１", "住所２"]
     frame = pd.DataFrame(rows, columns=headers)
-    from src.io.input_loader import LoadedTable
-    return LoadedTable(headers=headers, data=frame, source_name="test.csv")
+    return InputTable(headers=headers, data=frame)
 
 
 def test_fast_import_preserves_matched_history_provenance_originals_and_idempotency():
