@@ -4,6 +4,7 @@ import pytest
 
 from src.master.hp_human_review import (
     POSITIVE_DECISIONS,
+    reanalyze_human_verified_hp,
     review_snapshot,
 )
 from src.repository.hp_human_review_repository import SupabaseHpHumanReviewRepository
@@ -174,6 +175,174 @@ def test_stale_review_attempt_is_rejected():
 def test_schema_migration_is_private_and_rls_guarded():
     sql = Path("scripts/supabase_migration/hp_human_review_schema.sql").read_text(encoding="utf-8").lower()
     assert "alter table provenance.hp_human_reviews enable row level security" in sql
+    assert "alter table provenance.hp_human_review_research_runs enable row level security" in sql
     assert "grant select, insert on provenance.hp_human_reviews to clinic_runtime" in sql
+    assert "grant select, insert on provenance.hp_human_review_research_runs to clinic_runtime" in sql
     assert "revoke all on provenance.hp_human_reviews from anon, authenticated, public" in sql
+    assert "revoke all on provenance.hp_human_review_research_runs from anon, authenticated, public" in sql
     assert "grant select" not in sql.split("to clinic_runtime")[0].split("create table")[0]
+
+
+class _ResearchRepo:
+    def __init__(self):
+        self.saved = []
+
+    def get_saved_research(self, _clinic_id):
+        return {"marketing_signals": []}
+
+    def save_research(self, clinic_id, result, pages):
+        self.saved.append((clinic_id, result, pages))
+
+
+class _HpRepo:
+    def __init__(self):
+        self.rows = []
+
+    def upsert_result(self, row):
+        self.rows.append(row)
+
+
+class _HumanRepo:
+    def __init__(self):
+        self.runs = []
+
+    def record_reanalysis(self, **kwargs):
+        self.runs.append(kwargs)
+        return "run-1"
+
+
+class _Store:
+    def get(self, clinic_id):
+        return {
+            "id": clinic_id,
+            "clinic_name": "テスト医院",
+            "phone": "03-1234-5678",
+            "address": "東京都千代田区1-1-1",
+            "marketing_signals": [],
+        }
+
+
+def _repos():
+    return type(
+        "Repos",
+        (),
+        {
+            "research": _ResearchRepo(),
+            "hp": _HpRepo(),
+            "hp_human_review": _HumanRepo(),
+        },
+    )()
+
+
+def test_human_verified_success_reanalyzes_and_updates_canonical_ledger(monkeypatch):
+    import src.enrichment.researcher as researcher_module
+    import src.repository.write_backend as backend
+
+    repos = _repos()
+    monkeypatch.setattr(backend, "write_repositories_for", lambda _store: repos)
+    monkeypatch.setattr(
+        researcher_module,
+        "research_human_verified_hp",
+        lambda record, url: (
+            {
+                "research_status": "SUCCESS",
+                "hp_status": "VERIFIED",
+                "hp_verified": True,
+                "hp_url": url,
+                "final_url": url,
+                "hp_checked_at": "2026-10-08T07:00:00+00:00",
+                "treatment_categories": ["白内障", "緑内障"],
+            },
+            [{"url": url}],
+        ),
+    )
+
+    result = reanalyze_human_verified_hp(
+        _Store(),
+        human_review_id="review-1",
+        clinic_id=123,
+        selected_url="https://clinic.example/",
+    )
+
+    assert result["status"] == "DONE"
+    assert result["treatment_count"] == 2
+    assert repos.research.saved[0][0] == 123
+    assert repos.hp.rows[0]["fetch_status"] == "OK"
+    assert repos.hp.rows[0]["treatment_status"] == "DONE"
+    assert '"白内障"' in repos.hp.rows[0]["treatment_categories"]
+    assert repos.hp_human_review.runs[0]["status"] == "DONE"
+    assert repos.hp_human_review.runs[0]["treatment_categories"] == ["白内障", "緑内障"]
+
+
+def test_human_verified_fetch_failure_marks_batch_failed_but_preserves_review_evidence(monkeypatch):
+    import src.enrichment.researcher as researcher_module
+    import src.repository.write_backend as backend
+    from src.enrichment.safe_web import WebError
+
+    repos = _repos()
+    monkeypatch.setattr(backend, "write_repositories_for", lambda _store: repos)
+
+    def fail(_record, _url):
+        raise WebError("HTTP 403")
+
+    monkeypatch.setattr(researcher_module, "research_human_verified_hp", fail)
+
+    result = reanalyze_human_verified_hp(
+        _Store(),
+        human_review_id="review-1",
+        clinic_id=123,
+        selected_url="https://clinic.example/",
+    )
+
+    assert result["status"] == "FAILED"
+    assert repos.research.saved == []  # original REVIEW evidence remains available for retry/audit
+    assert repos.hp.rows[0]["fetch_status"] == "ERROR"
+    assert repos.hp.rows[0]["treatment_status"] == "FETCH_FAILED"
+    assert repos.hp_human_review.runs[0]["status"] == "FAILED"
+    assert "HTTP 403" in repos.hp_human_review.runs[0]["error_detail"]
+
+
+def test_human_verified_analyzer_bypasses_identity_but_keeps_normal_content_analysis(monkeypatch):
+    import src.enrichment.researcher as researcher_module
+
+    class FakePage:
+        url = "https://clinic.example/"
+
+        def evidence(self):
+            return {"url": self.url, "title": "テスト医院"}
+
+    class FakeFetcher:
+        def fetch(self, url):
+            assert url == "https://clinic.example/"
+            return FakePage()
+
+    monkeypatch.setattr(
+        researcher_module,
+        "crawl",
+        lambda page, fetcher, max_pages, should_stop: ([page], []),
+    )
+    monkeypatch.setattr(
+        researcher_module,
+        "analyze",
+        lambda record, pages, results: {
+            "marketing_signals": [],
+            "treatment_categories": ["白内障"],
+        },
+    )
+    monkeypatch.setattr(
+        researcher_module,
+        "identity",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("identity must be bypassed")),
+    )
+
+    result, pages = researcher_module.research_human_verified_hp(
+        {"clinic_name": "テスト医院", "marketing_signals": []},
+        "https://clinic.example/",
+        fetcher=FakeFetcher(),
+    )
+
+    assert result["research_status"] == "SUCCESS"
+    assert result["hp_verified"] is True
+    assert result["hp_identity_source"] == "HUMAN_REVIEW"
+    assert result["treatment_categories"] == ["白内障"]
+    assert pages[0]["url"] == "https://clinic.example/"
