@@ -144,10 +144,24 @@ class SupabaseHpHumanReviewRepository:
         output["reviewed"] = bool(row.get("human_review_id"))
         return output
 
+    def auto_promotable(self, *, limit=200):
+        """Old REVIEW rows that match the new no-human-review acceptance rule."""
+        if not self.available():
+            return []
+        rows = [self._decorate(row) for row in self._current_rows()]
+        rows = [
+            row for row in rows
+            if not row["reviewed"] and row["snapshot"].get("auto_accept_without_human")
+        ]
+        rows.sort(key=lambda row: (-int(row["snapshot"].get("score") or 0), int(row["clinic_id"])))
+        return rows if limit is None else rows[: max(0, int(limit))]
+
     def queue(self, *, include_reviewed=False, priority="ALL", limit=200):
         if not self.available():
             return []
         rows = [self._decorate(row) for row in self._current_rows()]
+        # User-approved name-only mismatch cases are automatic reanalysis work, not Human Review.
+        rows = [row for row in rows if not row["snapshot"].get("auto_accept_without_human")]
         if not include_reviewed:
             rows = [row for row in rows if not row["reviewed"]]
         if priority in {"HIGH", "MEDIUM", "LOW"}:
@@ -166,15 +180,18 @@ class SupabaseHpHumanReviewRepository:
         if not self.available():
             return {
                 "available": False, "total": 0, "reviewed": 0, "unreviewed": 0,
+                "auto_reanalysis_pending": 0,
                 "HIGH": 0, "MEDIUM": 0, "LOW": 0,
             }
         rows = self.queue(include_reviewed=True, limit=None)
         unreviewed = [row for row in rows if not row["reviewed"]]
+        auto_pending = self.auto_promotable(limit=None)
         return {
             "available": True,
             "total": len(rows),
             "reviewed": sum(row["reviewed"] for row in rows),
             "unreviewed": len(unreviewed),
+            "auto_reanalysis_pending": len(auto_pending),
             "HIGH": sum(row["snapshot"]["priority"] == "HIGH" for row in unreviewed),
             "MEDIUM": sum(row["snapshot"]["priority"] == "MEDIUM" for row in unreviewed),
             "LOW": sum(row["snapshot"]["priority"] == "LOW" for row in unreviewed),
