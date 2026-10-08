@@ -163,18 +163,52 @@ class Researcher:
                     if not check["verified"]:
                         reviews.append({"url":page.url,**check})
                         continue
-                    pages,errors = crawl(page,self.fetcher,self.max_pages,self.should_stop)
-                    self.checkpoint()
-                    # 途中停止なら完了扱いにせず、検索キャッシュを使って再開する。
-                    for p in support:
-                        if p.url not in {x.url for x in pages}:
-                            pages.append(p)
-                    result = analyze(record,pages,results)
+                    try:
+                        pages,errors = crawl(page,self.fetcher,self.max_pages,self.should_stop)
+                        self.checkpoint()
+                        # 途中停止なら完了扱いにせず、検索キャッシュを使って再開する。
+                        for p in support:
+                            if p.url not in {x.url for x in pages}:
+                                pages.append(p)
+                        result = analyze(record,pages,results)
+                    except Stopped:
+                        raise
+                    except Exception as exc:
+                        if check.get("identity_rule") != "NAME_ONLY_MISMATCH_AUTO_VERIFY":
+                            raise
+                        note = str(exc) if isinstance(exc, WebError) else "HP内容解析でエラーが発生しました。"
+                        signals = retained_media_signals(record)
+                        result = empty_hp_result("ERROR", record)
+                        result.update(
+                            hp_status="VERIFIED",
+                            hp_verified=True,
+                            hp_url=page.url,
+                            final_url=page.url,
+                            hp_match_score=check["score"],
+                            hp_match_reason=check["reasons"],
+                            hp_checked_at=now(),
+                            hp_identity_pages=[page.url]+[p.url for p in support],
+                            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
+                            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+                            hp_candidates=reviews,
+                            crawl_errors=[{"url": page.url, "reason": note}],
+                            hp_content_status="FETCH_FAILED",
+                            hp_content_note="本人確認済みですが、HP本文の取得または解析に失敗しました。",
+                            research_status="ERROR",
+                            research_error=note,
+                            marketing_signals=signals,
+                            marketing_signal_count=len(signals),
+                            hot_status=hot_status(len(signals)),
+                        )
+                        return result,[page.evidence()]+[p.evidence() for p in support]
                     signals = dedupe_signals(result["marketing_signals"]+retained_media_signals(record))
                     result.update(marketing_signals=signals,marketing_signal_count=len(signals),hot_status=hot_status(len(signals)))
                     result.update(hp_url=page.url,hp_status="VERIFIED",hp_verified=True,hp_match_score=check["score"],
                                   hp_match_reason=check["reasons"],hp_checked_at=now(),hp_identity_pages=[page.url]+[p.url for p in support],
                                   crawl_errors=errors,research_status="SUCCESS",research_error="",hp_candidates=reviews)
+                    if check.get("identity_rule") == "NAME_ONLY_MISMATCH_AUTO_VERIFY":
+                        result["hp_identity_source"] = "AUTO_NAME_ONLY_MISMATCH"
+                        result["hp_identity_rule"] = "NAME_ONLY_MISMATCH_AUTO_VERIFY"
                     return result,[p.evidence() for p in pages]
                 except WebError as exc:
                     failures.append({"url":url,"reason":str(exc)})

@@ -144,8 +144,14 @@ class SupabaseHpHumanReviewRepository:
         output["reviewed"] = bool(row.get("human_review_id"))
         return output
 
-    def auto_promotable(self, *, limit=200):
-        """Old REVIEW rows that match the new no-human-review acceptance rule."""
+    def legacy_name_only_mismatch_candidates(self, *, limit=200):
+        """Legacy REVIEW rows eligible for the one-time identity-rule backfill.
+
+        This is deliberately not part of the user-facing Human Review queue model. Until the
+        backfill actually replaces the old REVIEW result, the row remains visible and auditable
+        in that queue; successful or content-failed backfill results naturally leave it because
+        their canonical result is no longer REVIEW.
+        """
         if not self.available():
             return []
         rows = [self._decorate(row) for row in self._current_rows()]
@@ -160,8 +166,6 @@ class SupabaseHpHumanReviewRepository:
         if not self.available():
             return []
         rows = [self._decorate(row) for row in self._current_rows()]
-        # User-approved name-only mismatch cases are automatic reanalysis work, not Human Review.
-        rows = [row for row in rows if not row["snapshot"].get("auto_accept_without_human")]
         if not include_reviewed:
             rows = [row for row in rows if not row["reviewed"]]
         if priority in {"HIGH", "MEDIUM", "LOW"}:
@@ -180,18 +184,15 @@ class SupabaseHpHumanReviewRepository:
         if not self.available():
             return {
                 "available": False, "total": 0, "reviewed": 0, "unreviewed": 0,
-                "auto_reanalysis_pending": 0,
                 "HIGH": 0, "MEDIUM": 0, "LOW": 0,
             }
         rows = self.queue(include_reviewed=True, limit=None)
         unreviewed = [row for row in rows if not row["reviewed"]]
-        auto_pending = self.auto_promotable(limit=None)
         return {
             "available": True,
             "total": len(rows),
             "reviewed": sum(row["reviewed"] for row in rows),
             "unreviewed": len(unreviewed),
-            "auto_reanalysis_pending": len(auto_pending),
             "HIGH": sum(row["snapshot"]["priority"] == "HIGH" for row in unreviewed),
             "MEDIUM": sum(row["snapshot"]["priority"] == "MEDIUM" for row in unreviewed),
             "LOW": sum(row["snapshot"]["priority"] == "LOW" for row in unreviewed),

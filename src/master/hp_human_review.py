@@ -1,6 +1,7 @@
 """Pure helpers for HP Human Review labels and training snapshots."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 RULE_VERSION = "hp-identity-v2-name-or-(phone+address+manager)"
@@ -147,13 +148,17 @@ def review_snapshot(result: dict | None) -> dict:
 
 
 def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
-    """Re-run HP content analysis for a legacy REVIEW now covered by an auto-verify rule.
+    """One-time backfill of a legacy REVIEW covered by the new identity rule.
 
-    No Human Review row is created. The current research result and HP ledger are refreshed
-    exactly like a normal successful HP job, with an explicit identity source for audit/export.
+    No Human Review row or user-facing workflow category is created. Identity was already
+    established by the saved phone/address/manager evidence. A later content-fetch failure
+    therefore remains AUTO VERIFIED and is persisted as a content failure, not REVIEW.
     """
-    from src.enrichment.researcher import research_human_verified_hp
+    from src.enrichment.hp_analysis import is_official_candidate
+    from src.enrichment.researcher import empty_hp_result, research_human_verified_hp
+    from src.enrichment.safe_web import WebError
     from src.master.jobs import _hp_ledger_payload
+    from src.master.store import now
     from src.repository.write_backend import write_repositories_for
 
     repositories = write_repositories_for(store)
@@ -164,32 +169,86 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
     url = str(selected_url or "").strip()
     if not url:
         raise ValueError("自動再解析する候補URLがありません。")
+    if not is_official_candidate(url):
+        raise ValueError("候補URLが公式HP候補の安全条件を満たしていません。")
 
     record = store.get(cid)
     saved = repositories.research.get_saved_research(cid)
     record["marketing_signals"] = saved.get("marketing_signals", [])
 
-    result, pages = research_human_verified_hp(record, url)
-    result.update(
-        hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
-        hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
-        hp_content_note="新しい本人確認ルールによりHuman Review不要として自動再解析しました。",
-    )
+    try:
+        result, pages = research_human_verified_hp(record, url)
+        # The shared verified-URL crawler labels its caller as HUMAN_REVIEW. This backfill is
+        # explicitly automatic, so remove that caller-specific marker before persistence.
+        result.pop("human_verified_source_url", None)
+        result.update(
+            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
+            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+            auto_verified_source_url=url,
+            hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
+            hp_content_note="新しい本人確認ルールによりHuman Review不要としてHP内容を解析しました。",
+        )
+        status = "SUCCESS"
+        note = "Auto identity rule legacy backfill"
+        output_status = "DONE"
+    except Exception as exc:
+        note = str(exc) if isinstance(exc, WebError) else "HP内容解析でエラーが発生しました。"
+        result = empty_hp_result("ERROR", record)
+        result.update(
+            hp_status="VERIFIED",
+            hp_verified=True,
+            hp_url=url,
+            final_url=url,
+            hp_checked_at=now(),
+            hp_identity_pages=[url],
+            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
+            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+            auto_verified_source_url=url,
+            hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
+            hp_candidates=[],
+            hp_content_status="FETCH_FAILED",
+            hp_content_note="本人確認済みですが、HP本文の取得または解析に失敗しました。",
+            research_status="ERROR",
+            research_error=note,
+            crawl_errors=[{"url": url, "reason": note}],
+        )
+        pages = []
+        status = "ERROR"
+        output_status = "CONTENT_FAILED"
+
     repositories.research.save_research(cid, result, pages)
-    repositories.hp.upsert_result(
-        _hp_ledger_payload(cid, result, "SUCCESS", "Auto identity rule reanalysis")
-    )
+    repositories.hp.upsert_result(_hp_ledger_payload(cid, result, status, note))
+    _refresh_dental_sales_tags(repositories, record, cid, pages)
     categories = result.get("treatment_categories") or []
     if not isinstance(categories, list):
         categories = []
     return {
-        "status": "DONE",
+        "status": output_status,
         "clinic_id": cid,
         "selected_url": url,
         "treatment_categories": categories,
         "treatment_count": len(categories),
-        "fetch_status": "OK",
+        "fetch_status": "OK" if status == "SUCCESS" else "ERROR",
+        "error_detail": "" if status == "SUCCESS" else note,
     }
+
+
+def _refresh_dental_sales_tags(repositories, record, clinic_id, pages):
+    """Refresh the derived dental sidecar without changing the HP backfill outcome."""
+    dental_repo = getattr(repositories, "dental_sales_tags", None)
+    if record.get("medical_type") != "歯科" or dental_repo is None:
+        return
+    try:
+        if dental_repo.available():
+            from src.master.dental_sales_tags import classify_dental_sales_tags
+            tags = classify_dental_sales_tags(record, pages or ())
+            dental_repo.replace_auto_tags_bulk([(clinic_id, tags)])
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "Dental sales tag refresh failed for legacy HP identity backfill clinic_id=%s",
+            clinic_id,
+            exc_info=True,
+        )
 
 
 def reanalyze_human_verified_hp(store, *, human_review_id, clinic_id, selected_url):

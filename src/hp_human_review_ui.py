@@ -44,11 +44,6 @@ def hp_human_review_card(store):
     cols[2].metric("中確度", f"{summary['MEDIUM']:,}件")
     cols[3].metric("低確度", f"{summary['LOW']:,}件")
     st.caption("Auto Runを止めずに、要確認だけ1件ずつHuman Reviewできます。")
-    if summary.get("auto_reanalysis_pending", 0):
-        st.caption(
-            f"医院名のみ不一致で他3項目一致：{summary['auto_reanalysis_pending']:,}件は"
-            "Human Review対象外・自動再解析待ちです。"
-        )
     if st.button(
         "1件レビューする",
         type="primary",
@@ -80,11 +75,8 @@ def hp_human_review_sidebar(store):
               <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
                 <span>中確度候補</span><strong>{summary['MEDIUM']:,}</strong>
               </div>
-              <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
-                <span>低確度候補</span><strong>{summary['LOW']:,}</strong>
-              </div>
               <div style="display:flex;justify-content:space-between;">
-                <span>自動再解析待ち</span><strong>{summary.get('auto_reanalysis_pending', 0):,}</strong>
+                <span>低確度候補</span><strong>{summary['LOW']:,}</strong>
               </div>
             </div>
             """,
@@ -590,12 +582,11 @@ def hp_human_review_page(store):
         return
 
     summary = repo.summary()
-    cols = st.columns(5)
+    cols = st.columns(4)
     cols[0].metric("未レビュー", f"{summary['unreviewed']:,}件")
     cols[1].metric("高確度候補", f"{summary['HIGH']:,}件")
     cols[2].metric("中確度候補", f"{summary['MEDIUM']:,}件")
     cols[3].metric("低確度候補", f"{summary['LOW']:,}件")
-    cols[4].metric("自動再解析待ち", f"{summary.get('auto_reanalysis_pending', 0):,}件")
 
     review_tab, analytics_tab = st.tabs(["1件ずつレビュー", "精度分析"])
     with review_tab:

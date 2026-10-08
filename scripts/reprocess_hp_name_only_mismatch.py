@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Reprocess legacy HP REVIEW rows now covered by the name-only-mismatch auto-verify rule.
+"""One-time backfill for legacy HP REVIEW rows covered by the new identity rule.
 
 Default is DRY RUN. This does not create Human Review labels.
-Use --apply to fetch/crawl the already saved candidate URL and refresh the canonical HP result.
+Use --apply to fetch/crawl the saved candidate URL and replace the legacy canonical result.
+Content-fetch failure remains AUTO VERIFIED and is recorded as a fetch/content failure.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ def main(argv=None):
     if repo is None or not repo.available():
         raise RuntimeError("HP Human Review repository is unavailable")
 
-    rows = repo.auto_promotable(limit=max(1, int(args.limit)))
+    rows = repo.legacy_name_only_mismatch_candidates(limit=max(1, int(args.limit)))
     preview = [
         {
             "clinic_id": row["clinic_id"],
@@ -45,7 +46,7 @@ def main(argv=None):
         }, ensure_ascii=False, indent=2))
         return
 
-    done, failed = [], []
+    done, content_failed, failed = [], [], []
     for row in rows:
         cid = int(row["clinic_id"])
         url = str(row["snapshot"].get("best_candidate_url") or "")
@@ -55,7 +56,10 @@ def main(argv=None):
                 clinic_id=cid,
                 selected_url=url,
             )
-            done.append(result)
+            if result.get("status") == "CONTENT_FAILED":
+                content_failed.append(result)
+            else:
+                done.append(result)
         except Exception as exc:
             failed.append({
                 "clinic_id": cid,
@@ -68,8 +72,10 @@ def main(argv=None):
         "mode": "APPLY",
         "targeted": len(rows),
         "done": len(done),
+        "content_failed": len(content_failed),
         "failed": len(failed),
         "done_rows": done,
+        "content_failed_rows": content_failed,
         "failed_rows": failed,
     }, ensure_ascii=False, indent=2))
 
