@@ -24,6 +24,7 @@ from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.repository.write_backend import write_repositories_for
+from src.hp_human_review_ui import hp_human_review_card, hp_human_review_page
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
 from src.master.filters import AD_COUNT_SQL
@@ -895,6 +896,8 @@ def simple_workflow_ui(store, demo):
             auto_runner.start(store)
             st.rerun()
 
+    hp_human_review_card(store)
+
     if current:
         st.write("現在の調査")
         st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
@@ -1092,7 +1095,8 @@ def advanced_ui(store, demo):
     st.caption("普段は使わない設定・確認機能です。")
     section = st.selectbox(
         "開く画面",
-        ["マスター管理", "自動情報収集（詳細）", "営業対象フィルター（詳細）", "要確認・設定", "ダッシュボード"],
+        ["マスター管理", "自動情報収集（詳細）", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "ダッシュボード"],
+        key="advanced_section",
     )
 
     if section == "マスター管理":
@@ -1103,6 +1107,8 @@ def advanced_ui(store, demo):
         sales_ui(store)
     elif section == "要確認・設定":
         settings_ui(store)
+    elif section == "HP Human Review":
+        hp_human_review_page(store)
     else:
         cols = st.columns(5)
         for i, (label, value) in enumerate(store.metrics().items()):
@@ -1243,6 +1249,11 @@ def main():
     st.set_page_config(page_title="クリニック営業マスター", page_icon="📋", layout="wide")
     st.title("クリニック営業マスター")
     st.caption("①データ準備 → ②Google Maps → ③HP調査 → ④営業対象・Comdesk出力")
+
+    if st.session_state.pop("_jump_to_hp_human_review", False):
+        # Apply before the sidebar/selectbox widgets are instantiated in this rerun.
+        st.session_state["navigation"] = "詳細設定"
+        st.session_state["advanced_section"] = "HP Human Review"
 
     with st.sidebar:
         nav = st.radio("メニュー", NAV, key="navigation")

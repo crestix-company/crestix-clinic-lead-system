@@ -62,6 +62,55 @@ def empty_hp_result(status,record=None):
             "marketing_signals":signals,"marketing_signal_count":len(signals),"hot_status":hot_status(len(signals)),"research_status":status}
 
 
+def research_human_verified_hp(record, url, fetcher=None, max_pages=20, should_stop=lambda:False):
+    """Analyze a URL that a human has already verified belongs to this clinic.
+
+    This bypasses ONLY the automatic identity(record, page) gate. It still applies
+    the normal official-site safety filter, SafeFetcher restrictions, same-site crawl,
+    treatment/marketing analysis, and the exact SUCCESS result shape consumed by the
+    canonical HP ledger.
+    """
+    url = str(url or "").strip()
+    if not url or not is_official_candidate(url):
+        raise WebError("Human Reviewで確認したURLが公式HP候補の安全条件を満たしていません。")
+    fetcher = fetcher or SafeFetcher()
+    if should_stop():
+        raise Stopped()
+
+    page = fetcher.fetch(url)
+    if not is_official_candidate(page.url):
+        raise WebError("Human Reviewで確認したURLの遷移先が公式HP候補ではありません。")
+
+    pages, errors = crawl(page, fetcher, max_pages, should_stop)
+    if should_stop():
+        raise Stopped()
+
+    result = analyze(record, pages, [])
+    signals = dedupe_signals(result["marketing_signals"] + retained_media_signals(record))
+    result.update(
+        marketing_signals=signals,
+        marketing_signal_count=len(signals),
+        hot_status=hot_status(len(signals)),
+        hp_url=page.url,
+        final_url=page.url,
+        hp_status="VERIFIED",
+        hp_verified=True,
+        hp_match_score=100,
+        hp_match_reason=["Human Reviewで公式HP本人確認済み"],
+        hp_checked_at=now(),
+        hp_identity_pages=[page.url],
+        hp_identity_source="HUMAN_REVIEW",
+        human_verified_source_url=url,
+        crawl_errors=errors,
+        research_status="SUCCESS",
+        research_error="",
+        hp_candidates=[],
+        hp_content_status="ANALYZED",
+        hp_content_note="Human Reviewで本人確認後、通常のHP内容解析を実行しました。",
+    )
+    return result, [p.evidence() for p in pages]
+
+
 class Researcher:
     def __init__(self,search,fetcher=None,max_pages=20,should_stop=lambda:False):
         self.search = search

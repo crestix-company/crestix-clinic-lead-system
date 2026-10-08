@@ -59,6 +59,7 @@ def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=Non
         )
         from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
         from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+        from src.repository.hp_human_review_repository import SupabaseHpHumanReviewRepository
         url = supabase_url or _os.environ.get(RUNTIME_DB_URL_ENV_VAR)
         if not url:
             raise RuntimeError(f"{RUNTIME_DB_URL_ENV_VAR} is not set")
@@ -75,6 +76,7 @@ def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=Non
             search=SupabaseSearchWriteRepository(conn),
             hp=SupabaseHpWriteRepository(conn),
             auto_hp=SupabaseHpAutoRunRepository(conn),
+            hp_human_review=SupabaseHpHumanReviewRepository(conn),
         )
     raise AssertionError(backend)
 

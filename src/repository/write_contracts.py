@@ -23,6 +23,7 @@ class WriteRepositories:
     search: object
     hp: object | None = None
     auto_hp: object | None = None
+    hp_human_review: object | None = None
 
 
 class ClinicWriteRepository(Protocol):

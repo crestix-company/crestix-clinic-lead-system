@@ -145,17 +145,21 @@ def test_step5_keeps_current_job_metrics_but_exports_cumulative_uuid_empty_backl
     }
     assert current_params == ('"facility_type":"([^"]*)"', "latest-job")
     for required in (
-        "i.job_id=%s", "i.state='DONE'", "i.result='SUCCESS'", "h.fetch_status='OK'",
-        "COALESCE(BTRIM(h.final_url),'')<>''", "COALESCE(BTRIM(c.uuid),'')=''",
-        "c.merged_into IS NULL", "c.merge_hold=false", "exclude_reason IN ('hospital','center')",
-        "c.clinic_name LIKE '%%病院%%'", "c.clinic_name LIKE '%%センター%%'",
+        "i.job_id=%s", "i.state='DONE'", "i.result='SUCCESS'", "i.result='REVIEW'",
+        "hr.human_decision IN ('OFFICIAL','ORGANIZATION_PAGE','ACCESS_RESTRICTED')",
+        "h.fetch_status='OK'", "COALESCE(BTRIM(h.final_url),'')<>''",
+        "COALESCE(BTRIM(c.uuid),'')=''", "c.merged_into IS NULL", "c.merge_hold=false",
+        "exclude_reason IN ('hospital','center')", "c.clinic_name LIKE '%%病院%%'",
+        "c.clinic_name LIKE '%%センター%%'", "provenance.hp_human_reviews",
     ):
         assert required in current_sql
 
     assert waiting_params == ('"facility_type":"([^"]*)"',)
     assert "JOIN research.research_job_items i ON i.clinic_id=c.id" in waiting_sql
     assert "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp'" in waiting_sql
-    assert "i.state='DONE' AND i.result='SUCCESS'" in waiting_sql
+    assert "i.state='DONE' AND (i.result='SUCCESS' OR (i.result='REVIEW'" in waiting_sql
+    assert "hr.human_decision IN ('OFFICIAL','ORGANIZATION_PAGE','ACCESS_RESTRICTED')" in waiting_sql
+    assert "provenance.hp_human_reviews" in waiting_sql
     assert "array_agg(DISTINCT c.id ORDER BY c.id)" in waiting_sql
     assert "JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in waiting_sql
     assert "h.fetch_status='OK'" in waiting_sql
