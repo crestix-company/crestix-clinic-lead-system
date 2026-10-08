@@ -146,6 +146,52 @@ def review_snapshot(result: dict | None) -> dict:
     return snapshot
 
 
+def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
+    """Re-run HP content analysis for a legacy REVIEW now covered by an auto-verify rule.
+
+    No Human Review row is created. The current research result and HP ledger are refreshed
+    exactly like a normal successful HP job, with an explicit identity source for audit/export.
+    """
+    from src.enrichment.researcher import research_human_verified_hp
+    from src.master.jobs import _hp_ledger_payload
+    from src.repository.write_backend import write_repositories_for
+
+    repositories = write_repositories_for(store)
+    if repositories.hp is None:
+        raise RuntimeError("HP research ledgerを利用できません。")
+
+    cid = int(clinic_id)
+    url = str(selected_url or "").strip()
+    if not url:
+        raise ValueError("自動再解析する候補URLがありません。")
+
+    record = store.get(cid)
+    saved = repositories.research.get_saved_research(cid)
+    record["marketing_signals"] = saved.get("marketing_signals", [])
+
+    result, pages = research_human_verified_hp(record, url)
+    result.update(
+        hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
+        hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
+        hp_content_note="新しい本人確認ルールによりHuman Review不要として自動再解析しました。",
+    )
+    repositories.research.save_research(cid, result, pages)
+    repositories.hp.upsert_result(
+        _hp_ledger_payload(cid, result, "SUCCESS", "Auto identity rule reanalysis")
+    )
+    categories = result.get("treatment_categories") or []
+    if not isinstance(categories, list):
+        categories = []
+    return {
+        "status": "DONE",
+        "clinic_id": cid,
+        "selected_url": url,
+        "treatment_categories": categories,
+        "treatment_count": len(categories),
+        "fetch_status": "OK",
+    }
+
+
 def reanalyze_human_verified_hp(store, *, human_review_id, clinic_id, selected_url):
     """Re-run normal HP content analysis after human identity verification.
 
