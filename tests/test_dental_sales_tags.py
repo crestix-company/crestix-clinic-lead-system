@@ -145,3 +145,35 @@ def test_page_json_string_is_supported_for_backfill():
     )
     assert _by_code(tags)["ROOT_CANAL"].auto_status == AUTO_CONFIRMED
     assert CLASSIFIER_VERSION.startswith("dental-sales-tags-")
+
+
+def test_dental_sales_schema_is_private_and_rls_guarded():
+    from pathlib import Path
+
+    sql = Path("scripts/supabase_migration/dental_sales_tags_schema.sql").read_text(encoding="utf-8").lower()
+    assert "alter table provenance.dental_sales_tags enable row level security" in sql
+    assert "alter table provenance.dental_sales_tag_reviews enable row level security" in sql
+    assert "grant select,insert,update on provenance.dental_sales_tags to clinic_runtime" in sql
+    assert "grant select,insert on provenance.dental_sales_tag_reviews to clinic_runtime" in sql
+    assert "revoke all on provenance.dental_sales_tags from anon,authenticated,public" in sql
+    assert "revoke all on provenance.dental_sales_tag_reviews from anon,authenticated,public" in sql
+
+
+def test_dental_sales_repository_is_wired_only_for_supabase_runtime():
+    from pathlib import Path
+
+    source = Path("src/repository/write_backend.py").read_text(encoding="utf-8")
+    contracts = Path("src/repository/write_contracts.py").read_text(encoding="utf-8")
+    assert "SupabaseDentalSalesTagRepository" in source
+    assert "dental_sales_tags=SupabaseDentalSalesTagRepository(conn)" in source
+    assert "dental_sales_tags: object | None = None" in contracts
+
+
+def test_hp_worker_refreshes_dental_tags_without_changing_hp_outcome_contract():
+    from pathlib import Path
+
+    source = Path("src/master/jobs.py").read_text(encoding="utf-8")
+    assert 'record.get("medical_type") == "歯科"' in source
+    assert "classify_dental_sales_tags(record, pages or ())" in source
+    assert "Dental sales tag refresh failed" in source
+    assert "except Exception:" in source
