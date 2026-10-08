@@ -17,6 +17,7 @@ from src.master.store import dumps, now
 
 TABLE_NAME = "provenance.hp_human_reviews"
 RUN_TABLE_NAME = "provenance.hp_human_review_research_runs"
+CLAIM_TABLE_NAME = "provenance.hp_human_review_claims"
 
 
 def _strip_nul(value):
@@ -59,6 +60,229 @@ class SupabaseHpHumanReviewRepository:
         except Exception:
             self._conn.rollback()
             raise
+
+    def claiming_available(self):
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT to_regclass(%s)", (CLAIM_TABLE_NAME,))
+                exists = cur.fetchone()[0] is not None
+            self._conn.commit()
+            return exists
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def active_claim_count(self):
+        if not self.claiming_available():
+            return 0
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM provenance.hp_human_review_claims "
+                    "WHERE lease_until > clock_timestamp()"
+                )
+                count = int(cur.fetchone()[0] or 0)
+            self._conn.commit()
+            return count
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def active_claim_for_owner(self, owner_token):
+        owner_token = str(owner_token or "").strip()
+        if not owner_token or not self.claiming_available():
+            return None
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT clinic_id,hp_checked_at,owner_label,claimed_at,lease_until
+                    FROM provenance.hp_human_review_claims
+                    WHERE owner_token=%s
+                      AND lease_until > clock_timestamp()
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (owner_token,),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if not row:
+            return None
+        return {
+            "clinic_id": int(row[0]),
+            "hp_checked_at": row[1],
+            "owner_label": row[2] or "",
+            "claimed_at": row[3],
+            "lease_until": row[4],
+        }
+
+    def claim(self, *, clinic_id, hp_checked_at, owner_token, owner_label="", lease_seconds=300):
+        """Atomically claim one clinic unless another live owner already holds it."""
+        owner_token = str(owner_token or "").strip()
+        if not owner_token:
+            raise ValueError("Human Review端末トークンがありません。")
+        hp_checked_at = str(hp_checked_at or "")
+        if not hp_checked_at:
+            raise ValueError("HP調査時刻がありません。")
+        lease_seconds = max(60, min(int(lease_seconds or 300), 1800))
+        if not self.claiming_available():
+            return None
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO provenance.hp_human_review_claims(
+                      clinic_id,hp_checked_at,owner_token,owner_label,
+                      claimed_at,lease_until,updated_at
+                    ) VALUES(
+                      %s,%s,%s,%s,
+                      clock_timestamp(),
+                      clock_timestamp() + (%s * interval '1 second'),
+                      clock_timestamp()
+                    )
+                    ON CONFLICT(clinic_id) DO UPDATE SET
+                      hp_checked_at=EXCLUDED.hp_checked_at,
+                      owner_token=EXCLUDED.owner_token,
+                      owner_label=EXCLUDED.owner_label,
+                      claimed_at=CASE
+                        WHEN provenance.hp_human_review_claims.owner_token=EXCLUDED.owner_token
+                          THEN provenance.hp_human_review_claims.claimed_at
+                        ELSE clock_timestamp()
+                      END,
+                      lease_until=clock_timestamp() + (%s * interval '1 second'),
+                      updated_at=clock_timestamp()
+                    WHERE provenance.hp_human_review_claims.lease_until <= clock_timestamp()
+                       OR provenance.hp_human_review_claims.owner_token=EXCLUDED.owner_token
+                       OR provenance.hp_human_review_claims.hp_checked_at<>EXCLUDED.hp_checked_at
+                    RETURNING clinic_id,hp_checked_at,owner_label,claimed_at,lease_until
+                    """,
+                    (
+                        int(clinic_id), hp_checked_at, owner_token, str(owner_label or ""),
+                        lease_seconds, lease_seconds,
+                    ),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if not row:
+            return None
+        return {
+            "clinic_id": int(row[0]),
+            "hp_checked_at": row[1],
+            "owner_label": row[2] or "",
+            "claimed_at": row[3],
+            "lease_until": row[4],
+        }
+
+    def renew_claim(self, *, clinic_id, hp_checked_at, owner_token, owner_label="", lease_seconds=300):
+        owner_token = str(owner_token or "").strip()
+        if not owner_token or not self.claiming_available():
+            return None
+        lease_seconds = max(60, min(int(lease_seconds or 300), 1800))
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE provenance.hp_human_review_claims
+                    SET owner_label=%s,
+                        lease_until=clock_timestamp() + (%s * interval '1 second'),
+                        updated_at=clock_timestamp()
+                    WHERE clinic_id=%s
+                      AND hp_checked_at=%s
+                      AND owner_token=%s
+                      AND lease_until > clock_timestamp()
+                    RETURNING clinic_id,hp_checked_at,owner_label,claimed_at,lease_until
+                    """,
+                    (
+                        str(owner_label or ""), lease_seconds, int(clinic_id),
+                        str(hp_checked_at or ""), owner_token,
+                    ),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        if not row:
+            return None
+        return {
+            "clinic_id": int(row[0]),
+            "hp_checked_at": row[1],
+            "owner_label": row[2] or "",
+            "claimed_at": row[3],
+            "lease_until": row[4],
+        }
+
+    def release_claim(self, *, clinic_id, owner_token, hp_checked_at=None):
+        owner_token = str(owner_token or "").strip()
+        if not owner_token or not self.claiming_available():
+            return False
+        params = [int(clinic_id), owner_token]
+        checked_sql = ""
+        if hp_checked_at is not None:
+            checked_sql = " AND hp_checked_at=%s"
+            params.append(str(hp_checked_at or ""))
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM provenance.hp_human_review_claims "
+                    "WHERE clinic_id=%s AND owner_token=%s" + checked_sql + " RETURNING clinic_id",
+                    tuple(params),
+                )
+                row = cur.fetchone()
+            self._conn.commit()
+            return bool(row)
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def claim_next(self, *, owner_token, owner_label="", priority="ALL", lease_seconds=300):
+        """Return the caller's current claim, otherwise atomically claim the next queue row."""
+        if not self.claiming_available():
+            return None
+
+        current = self.active_claim_for_owner(owner_token)
+        rows = self.queue(include_reviewed=False, priority=priority, limit=200)
+        if current:
+            for row in rows:
+                if (
+                    int(row["clinic_id"]) == int(current["clinic_id"])
+                    and str(row["snapshot"].get("hp_checked_at") or "") == str(current["hp_checked_at"] or "")
+                ):
+                    renewed = self.renew_claim(
+                        clinic_id=row["clinic_id"],
+                        hp_checked_at=row["snapshot"]["hp_checked_at"],
+                        owner_token=owner_token,
+                        owner_label=owner_label,
+                        lease_seconds=lease_seconds,
+                    )
+                    if renewed:
+                        row["claim"] = renewed
+                        return row
+            self.release_claim(
+                clinic_id=current["clinic_id"],
+                owner_token=owner_token,
+                hp_checked_at=current["hp_checked_at"],
+            )
+
+        for row in rows:
+            claimed = self.claim(
+                clinic_id=row["clinic_id"],
+                hp_checked_at=row["snapshot"]["hp_checked_at"],
+                owner_token=owner_token,
+                owner_label=owner_label,
+                lease_seconds=lease_seconds,
+            )
+            if claimed:
+                row["claim"] = claimed
+                return row
+        return None
 
     def _current_rows(self):
         """Return current HP REVIEW attempts plus the latest human label for that attempt."""
@@ -178,6 +402,7 @@ class SupabaseHpHumanReviewRepository:
             "HIGH": sum(row["snapshot"]["priority"] == "HIGH" for row in unreviewed),
             "MEDIUM": sum(row["snapshot"]["priority"] == "MEDIUM" for row in unreviewed),
             "LOW": sum(row["snapshot"]["priority"] == "LOW" for row in unreviewed),
+            "claimed": self.active_claim_count() if self.claiming_available() else 0,
         }
 
     def save_review(
@@ -191,6 +416,7 @@ class SupabaseHpHumanReviewRepository:
         review_note="",
         research_job_id="",
         auto_run_id="",
+        claim_owner_token="",
     ):
         if human_decision not in VALID_DECISIONS:
             raise ValueError("Human Reviewの判定値を確認してください。")
@@ -215,6 +441,26 @@ class SupabaseHpHumanReviewRepository:
                 current_checked_at = snapshot.get("hp_checked_at") or ""
                 if not current_checked_at or current_checked_at != str(hp_checked_at or ""):
                     raise ValueError("HP調査結果が更新されています。画面を更新して最新結果を確認してください。")
+
+                claim_owner_token = str(claim_owner_token or "").strip()
+                if claim_owner_token:
+                    cur.execute(
+                        """
+                        SELECT owner_token,hp_checked_at,(lease_until > clock_timestamp())
+                        FROM provenance.hp_human_review_claims
+                        WHERE clinic_id=%s
+                        FOR UPDATE
+                        """,
+                        (int(clinic_id),),
+                    )
+                    claim_row = cur.fetchone()
+                    if (
+                        not claim_row
+                        or claim_row[0] != claim_owner_token
+                        or str(claim_row[1] or "") != current_checked_at
+                        or not bool(claim_row[2])
+                    ):
+                        raise ValueError("この医院のレビューClaimが失効しました。次の医院を取得してください。")
 
                 allowed_urls = set(snapshot.get("candidate_urls") or [])
                 if human_decision in POSITIVE_DECISIONS:
@@ -282,6 +528,17 @@ class SupabaseHpHumanReviewRepository:
                     from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
                     SupabaseClinicWriteRepository._refresh_projection_tx(
                         cur, int(clinic_id), is_authoritative_official_source=False
+                    )
+
+                if claim_owner_token:
+                    cur.execute(
+                        """
+                        DELETE FROM provenance.hp_human_review_claims
+                        WHERE clinic_id=%s
+                          AND hp_checked_at=%s
+                          AND owner_token=%s
+                        """,
+                        (int(clinic_id), current_checked_at, claim_owner_token),
                     )
 
             self._conn.commit()
