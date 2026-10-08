@@ -102,24 +102,28 @@ def job_limit(store,jid,limit):
     write_repositories_for(store).jobs.job_limit(jid,limit)
 
 
-def run_job(store,jid,provider,fetcher=None):
+def run_job(store,jid,provider,fetcher=None,progress_callback=None):
     if getattr(store, "is_supabase_runtime", False):
         # Cross-PC exclusion is the PostgreSQL row-claim/lease contract (FOR UPDATE SKIP
         # LOCKED), not a machine-local lock file.
-        _run_locked(store,jid,provider,fetcher)
+        _run_locked(store,jid,provider,fetcher,progress_callback)
         return True
     try:
         with FileLock(str(store.path)+".research.lock",timeout=0):
-            _run_locked(store,jid,provider,fetcher)
+            _run_locked(store,jid,provider,fetcher,progress_callback)
     except Timeout:
         return False
     return True
 
 
-def _run_locked(store,jid,provider,fetcher):
+def _run_locked(store,jid,provider,fetcher,progress_callback=None):
     # Stage4-D Gate2: persistent WRITE goes through the Repository.
     from src.repository.write_backend import write_repositories_for
     repo = write_repositories_for(store).jobs
+    def progress():
+        if progress_callback is not None and progress_callback() is False:
+            raise Stopped("Auto Run controller leaseを失いました。")
+    progress()
     # ロック取得できた時点で旧プロセスの実行はない。未完了行だけを回復。
     job = repo.recover_job_for_run(jid)
     if job is None:
@@ -133,12 +137,15 @@ def _run_locked(store,jid,provider,fetcher):
     if job["kind"]!="hp" or fetcher is not None or PARALLEL_WORKERS<=1:
         researcher = new_researcher()
         while not stopped():
-            cid = repo.claim_next_pending_item(jid)
-            if cid is None:
+            progress()
+            claimed = repo.claim_next_pending_item_with_token(jid)
+            if claimed is None:
                 repo.mark_job_status(jid, "COMPLETED")
                 return
-            if not _research_one(store,jid,job,options,researcher,cid):
+            cid,claim_token = claimed
+            if not _research_one(store,jid,job,options,researcher,cid,claim_token):
                 return
+            progress()
         return
     while not stopped():
         lanes = _site_lanes(store,jid)
@@ -150,6 +157,7 @@ def _run_locked(store,jid,provider,fetcher):
             # 1つの処理は専用の通信部品（Researcher/SafeFetcher）を持ち、割り当てられたサイトの医院をclinic_id順に調べる。
             researcher = new_researcher()
             while not stopped():
+                progress()
                 with queue_lock:
                     if not queue:
                         return
@@ -158,9 +166,10 @@ def _run_locked(store,jid,provider,fetcher):
                     if stopped():
                         return
                     with _WRITE_LOCK:
-                        claimed = repo.claim_specific_item(jid, cid)
-                    if claimed and not _research_one(store,jid,job,options,researcher,cid):
+                        claim_token = repo.claim_specific_item_with_token(jid, cid)
+                    if claim_token and not _research_one(store,jid,job,options,researcher,cid,claim_token):
                         return
+                    progress()
         with ThreadPoolExecutor(max_workers=min(PARALLEL_WORKERS,len(lanes))) as pool:
             futures = [pool.submit(worker) for _ in range(min(PARALLEL_WORKERS,len(lanes)))]
         for f in futures:
@@ -186,7 +195,7 @@ def _site_lanes(store,jid):
     return list(lanes.values()) if lanes else ([alone] if alone else [])
 
 
-def _research_one(store,jid,job,options,researcher,cid):
+def _research_one(store,jid,job,options,researcher,cid,claim_token=None):
     """1医院の調査と確定。続行してよければTrue、一時停止・上限で止める場合はFalse。"""
     # Stage4-D Gate2: persistent WRITE goes through the Repository.
     from src.repository.write_backend import write_repositories_for
@@ -200,6 +209,8 @@ def _research_one(store,jid,job,options,researcher,cid):
         auto = research_repo.get_saved_research(cid)
         record["marketing_signals"] = auto.get("marketing_signals", [])
         result,pages = researcher.run(job["kind"],record,options.get("force",False))
+        if claim_token and not jobs_repo.item_claim_is_current(jid, cid, claim_token):
+            return True
         with _WRITE_LOCK:
             research_repo.save_research(cid,result,pages)
         status,note = result.get("research_status","SUCCESS"),""
@@ -208,11 +219,18 @@ def _research_one(store,jid,job,options,researcher,cid):
                 repositories.hp.upsert_result(_hp_ledger_payload(cid, result, status, note))
     except (BudgetReached,Stopped) as exc:
         with _WRITE_LOCK:
-            jobs_repo.requeue_item_for_budget_or_pause(
-                jid,cid,str(exc),"BUDGET" if isinstance(exc,BudgetReached) else "PAUSED"
-            )
+            if claim_token:
+                jobs_repo.requeue_claimed_item(
+                    jid,cid,claim_token,str(exc),"BUDGET" if isinstance(exc,BudgetReached) else "PAUSED"
+                )
+            else:
+                jobs_repo.requeue_item_for_budget_or_pause(
+                    jid,cid,str(exc),"BUDGET" if isinstance(exc,BudgetReached) else "PAUSED"
+                )
         return False
     except Exception as exc:
+        if claim_token and not jobs_repo.item_claim_is_current(jid, cid, claim_token):
+            return True
         # 接続の秘密や生Tracebackを画面/DBへ残さない。
         status = "ERROR"
         note = str(exc) if isinstance(exc,SearchError) else "この医院の調査でエラーが発生しました。再調査または手動確認を行ってください。"
@@ -227,7 +245,10 @@ def _research_one(store,jid,job,options,researcher,cid):
             with _WRITE_LOCK:
                 repositories.hp.upsert_result(_hp_ledger_payload(cid, safe_result, status, note))
     with _WRITE_LOCK:
-        jobs_repo.finish_item(jid,cid,status,note)
+        if claim_token:
+            jobs_repo.finish_claimed_item(jid,cid,claim_token,status,note)
+        else:
+            jobs_repo.finish_item(jid,cid,status,note)
     return True
 
 

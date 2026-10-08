@@ -287,7 +287,8 @@ def test_ui_web_research_six_metrics_displayed(tmp_path, monkeypatch):
     assert helps["WebサイトURL取得済み"] == "医院データにWebサイトURLが登録されている医院数です。"
     assert helps["Webサイト調査完了"] == "登録されたWebサイトの取得・解析を完了し、HP ABC判定と治療カテゴリ判定まで完了した医院数です。"
     assert helps["Webサイト調査失敗"] == "Webサイトの取得または解析を正常完了できなかった医院数です。"
-    assert helps["Webサイト未調査"] == "WebサイトURLは登録されていますが、まだ自動調査が完了していない医院数です。"
+    assert "非アクティブ医院も含む" in helps["Webサイト未調査"]
+    assert "HP調査可能・未調査" in helps["Webサイト未調査"]
     assert helps["治療カテゴリ検出あり"] == "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"
     assert helps["治療カテゴリ検出なし"] == "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"
 
