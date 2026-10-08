@@ -19,12 +19,27 @@ TABLE_NAME = "provenance.hp_human_reviews"
 RUN_TABLE_NAME = "provenance.hp_human_review_research_runs"
 
 
+def _strip_nul(value):
+    """Remove NUL data that PostgreSQL JSONB cannot represent, without rewriting source TEXT."""
+    if isinstance(value, str):
+        return value.replace("\\u0000", "").replace("\x00", "")
+    if isinstance(value, list):
+        return [_strip_nul(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _strip_nul(item) for key, item in value.items()}
+    return value
+
+
 def _as_dict(value):
     if isinstance(value, dict):
-        return value
+        return _strip_nul(value)
     if not value:
         return {}
-    return json.loads(value)
+    # research.research_results.result_json is intentionally TEXT for legacy compatibility.
+    # Some historical rows contain the JSON escape sequence \\u0000. PostgreSQL JSONB cannot
+    # materialize that code point, so normalize it only in-memory for Human Review.
+    cleaned = str(value).replace("\\u0000", "")
+    return _strip_nul(json.loads(cleaned))
 
 
 class SupabaseHpHumanReviewRepository:
@@ -79,7 +94,7 @@ class SupabaseHpHumanReviewRepository:
                       SELECT h.id,h.human_decision,h.selected_url,h.reviewer,h.review_note,h.reviewed_at
                       FROM provenance.hp_human_reviews h
                       WHERE h.clinic_id=c.id
-                        AND h.hp_checked_at=COALESCE(rr.result_json::jsonb->>'hp_checked_at','')
+                        AND h.hp_checked_at=COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_checked_at','')
                       ORDER BY h.reviewed_at DESC,h.id DESC
                       LIMIT 1
                     ) latest_review ON true
@@ -104,10 +119,10 @@ class SupabaseHpHumanReviewRepository:
                     WHERE c.merged_into IS NULL
                       AND c.merge_hold=false
                       AND c.active=true
-                      AND COALESCE(rr.result_json::jsonb->>'hp_checked_at','')<>''
+                      AND COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_checked_at','')<>''
                       AND (
-                        COALESCE(rr.result_json::jsonb->>'hp_status','')='REVIEW'
-                        OR COALESCE(rr.result_json::jsonb->>'hp_content_status','')='ACCESS_RESTRICTED'
+                        COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_status','')='REVIEW'
+                        OR COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_content_status','')='ACCESS_RESTRICTED'
                       )
                     """
                 )

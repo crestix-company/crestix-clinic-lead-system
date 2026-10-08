@@ -7,7 +7,7 @@ from src.master.hp_human_review import (
     reanalyze_human_verified_hp,
     review_snapshot,
 )
-from src.repository.hp_human_review_repository import SupabaseHpHumanReviewRepository
+from src.repository.hp_human_review_repository import SupabaseHpHumanReviewRepository, _as_dict
 
 
 def _result(*, checked_at="2026-10-08T06:00:00+00:00", score=80,
@@ -346,3 +346,22 @@ def test_human_verified_analyzer_bypasses_identity_but_keeps_normal_content_anal
     assert result["hp_identity_source"] == "HUMAN_REVIEW"
     assert result["treatment_categories"] == ["白内障"]
     assert pages[0]["url"] == "https://clinic.example/"
+
+
+def test_human_review_json_reader_strips_escaped_and_materialized_nul():
+    escaped = '{"url":"https://www.kandacli.com/開院' + chr(92) + 'u0000","note":"ok"}'
+    assert _as_dict(escaped)["url"] == "https://www.kandacli.com/開院"
+
+    materialized = {"url": "https://example.com/a\x00b", "nested": ["x\x00y"]}
+    cleaned = _as_dict(materialized)
+    assert cleaned["url"] == "https://example.com/ab"
+    assert cleaned["nested"] == ["xy"]
+
+
+def test_human_review_sql_sanitizes_text_before_jsonb_cast():
+    import inspect
+
+    source = inspect.getsource(SupabaseHpHumanReviewRepository._current_rows)
+    sanitizer = "replace(rr.result_json, chr(92) || 'u0000', '')::jsonb"
+    assert source.count(sanitizer) >= 4
+    assert "rr.result_json::jsonb" not in source
