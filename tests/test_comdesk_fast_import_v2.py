@@ -241,6 +241,22 @@ class _StatefulCursor:
             self._result = [self._clinic_tuple(row) for row in sorted(rows, key=lambda r: r["id"])]
             return
 
+        if q.startswith("SELECT * FROM public.clinics WHERE merged_into IS NULL AND name_prefix=%s"):
+            prefix, prefecture = params
+            rows = [
+                row for row in self.conn.clinics.values()
+                if row.get("name_prefix") == prefix
+                and row.get("prefecture") in {prefecture, ""}
+            ]
+            # _MatchingConnection expects cursor.description names for SELECT *.
+            self.description = [
+                type("Column", (), {"name": name}) for name in self.COLUMNS
+            ]
+            self._result = [
+                self._clinic_tuple(row) for row in sorted(rows, key=lambda r: r["id"])
+            ]
+            return
+
         if q.startswith("INSERT INTO public.clinics") and "RETURNING id" in q:
             cid = self.conn.next_clinic_id
             self.conn.next_clinic_id += 1
