@@ -349,7 +349,7 @@ def test_human_verified_analyzer_bypasses_identity_but_keeps_normal_content_anal
 
 
 def test_human_review_json_reader_strips_escaped_and_materialized_nul():
-    escaped = '{"url":"https://www.kandacli.com/開院\\\\u0000","note":"ok"}'
+    escaped = '{"url":"https://www.kandacli.com/開院' + chr(92) + 'u0000","note":"ok"}'
     assert _as_dict(escaped)["url"] == "https://www.kandacli.com/開院"
 
     materialized = {"url": "https://example.com/a\x00b", "nested": ["x\x00y"]}
