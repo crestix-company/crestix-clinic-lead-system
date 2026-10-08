@@ -115,15 +115,34 @@ def hp_human_review_dialog(store):
         st.success(flash)
 
     summary = repo.summary()
-    queue = repo.queue(include_reviewed=False, priority="ALL", limit=1)
-    if not queue:
-        st.success("未レビューのHP要確認はありません。")
+    if not repo.claiming_available():
+        st.warning("複数PC用のHuman Review Claimテーブルがまだ準備されていません。")
+        return
+
+    owner_token = _review_client_token()
+    reviewer_default = os.environ.get("CLINIC_REVIEWER_NAME", "")
+    owner_label = (
+        st.session_state.get("quick_hp_human_reviewer")
+        or reviewer_default
+        or f"端末-{owner_token[:6]}"
+    )
+    row = repo.claim_next(
+        owner_token=owner_token,
+        owner_label=owner_label,
+        priority="ALL",
+        lease_seconds=300,
+    )
+    if not row:
+        if summary["unreviewed"] > 0:
+            st.info("未レビューは残っていますが、現在ほかのPCがレビュー中です。少し待ってから再度開いてください。")
+        else:
+            st.success("未レビューのHP要確認はありません。")
         if st.button("閉じる", use_container_width=True, key="quick_review_close_empty"):
             st.rerun()
         return
 
-    row = queue[0]
     snapshot = row["snapshot"]
+    st.caption("🔒 この医院はこの端末が5分間レビュー中です。操作するとLeaseが延長されます。")
     priority = PRIORITY_LABELS.get(snapshot.get("priority"), snapshot.get("priority", ""))
     reviewed_count = int(summary.get("reviewed") or 0)
     total_count = int(summary.get("total") or 0)
@@ -211,13 +230,22 @@ def hp_human_review_dialog(store):
         placeholder="判断理由や補足があれば入力",
     )
 
-    reviewer_default = os.environ.get("CLINIC_REVIEWER_NAME", "")
     reviewer = st.text_input(
         "確認者",
         value=st.session_state.get("quick_hp_human_reviewer", reviewer_default),
         key="quick_hp_human_reviewer",
         placeholder="例：前川",
     )
+    renewed_claim = repo.renew_claim(
+        clinic_id=row["clinic_id"],
+        hp_checked_at=snapshot["hp_checked_at"],
+        owner_token=owner_token,
+        owner_label=reviewer or owner_label,
+        lease_seconds=300,
+    )
+    if not renewed_claim:
+        st.error("レビューClaimが失効しました。ポップアップを閉じて「次をレビュー」から取り直してください。")
+        return
 
     st.markdown("#### この医院をどう判定しますか？")
     first = st.columns(3)
@@ -240,7 +268,7 @@ def hp_human_review_dialog(store):
             try:
                 _save_decision(
                     store, repo, row, decision, selected_url, reviewer, note,
-                    rerun=False,
+                    rerun=False, claim_owner_token=owner_token,
                 )
                 # Keep the dialog open and immediately advance to the next queue item.
                 st.rerun(scope="fragment")
