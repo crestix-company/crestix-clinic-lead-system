@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-RULE_VERSION = "hp-identity-v1-name-and-(phone-or-address)"
+RULE_VERSION = "hp-identity-v2-name-or-(phone+address+manager)"
 
 DECISION_LABELS = {
     "OFFICIAL": "公式HPで間違いない",
@@ -41,8 +41,7 @@ def candidate_features(candidate: dict | None) -> dict:
         "name_match": _as_bool(candidate.get("name_match")),
         "phone_match": _as_bool(candidate.get("phone_match")),
         "address_match": _as_bool(candidate.get("address_match")),
-        # identity() currently exposes manager match through the reasons/score, not a dedicated key.
-        "manager_match": "院長名一致" in reasons,
+        "manager_match": _as_bool(candidate.get("manager_match")) or "院長名一致" in reasons,
         "reasons": [str(item) for item in reasons],
     }
 
@@ -63,6 +62,23 @@ def review_priority(snapshot: dict) -> str:
     if score >= 40:
         return "MEDIUM"
     return "LOW"
+
+
+def auto_accept_without_human(snapshot: dict) -> bool:
+    """User-approved precision exception for old REVIEW rows.
+
+    If clinic name is the only failed identity feature while phone, address and manager
+    all match, Human Review is unnecessary. ACCESS_RESTRICTED remains a separate case.
+    """
+    if str(snapshot.get("content_status") or "") == "ACCESS_RESTRICTED":
+        return False
+    return bool(
+        snapshot.get("best_candidate_url")
+        and not bool(snapshot.get("name_match"))
+        and bool(snapshot.get("phone_match"))
+        and bool(snapshot.get("address_match"))
+        and bool(snapshot.get("manager_match"))
+    )
 
 
 def review_bucket(snapshot: dict) -> str:
@@ -122,6 +138,11 @@ def review_snapshot(result: dict | None) -> dict:
     }
     snapshot["priority"] = review_priority(snapshot)
     snapshot["bucket"] = review_bucket(snapshot)
+    snapshot["auto_accept_without_human"] = auto_accept_without_human(snapshot)
+    snapshot["auto_accept_reason"] = (
+        "医院名のみ不一致・電話番号/住所/院長名一致"
+        if snapshot["auto_accept_without_human"] else ""
+    )
     return snapshot
 
 
