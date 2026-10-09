@@ -3,8 +3,7 @@ from pathlib import Path
 import pytest
 
 from src.io.input_loader import load_table
-from src.master.comdesk import COMDESK_HEADERS
-from src.master.fixed_export import fixed_row
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS
 from src.repository.runtime_store import SupabaseRuntimeStore
 
 
@@ -73,23 +72,16 @@ def _column_values(table, header):
 
 def _records():
     return [
-        {"id": 10, "uuid": "UUID-10", "clinic_name": "十番医院"},
-        {"id": 20, "uuid": "", "clinic_name": "二十番医院"},
+        {"id": 10, "uuid": "UUID-10", "clinic_name": "十番医院", "effective_hp_rank": "A"},
+        {"id": 20, "uuid": "", "clinic_name": "二十番医院", "effective_hp_rank": "b"},
     ]
 
 
 def test_formal_comdesk_export_has_rank_and_email_as_columns_29_and_30():
-    assert len(COMDESK_HEADERS) == 30
-    assert COMDESK_HEADERS[-2:] == ["HPランク", "メールアドレス"]
-
-    row = fixed_row({
-        "uuid": "UUID-1",
-        "clinic_name": "テスト医院",
-        "effective_hp_rank": "b",
-        "verified_email": "verified@example.jp",
-    })
-    assert row[COMDESK_HEADERS.index("HPランク")] == "B"
-    assert row[COMDESK_HEADERS.index("メールアドレス")] == "verified@example.jp"
+    assert len(COMDESK_HEADERS) == 28
+    assert len(COMDESK_EXPORT_HEADERS) == 30
+    assert COMDESK_EXPORT_HEADERS[:28] == COMDESK_HEADERS
+    assert COMDESK_EXPORT_HEADERS[-2:] == ["HPランク", "メールアドレス"]
 
 
 def test_empty_email_table_exports_blank_email_without_changing_rows():
@@ -97,7 +89,8 @@ def test_empty_email_table_exports_blank_email_without_changing_rows():
 
     output = _csv(store)
 
-    assert output.headers == COMDESK_HEADERS
+    assert output.headers == COMDESK_EXPORT_HEADERS
+    assert _column_values(output, "HPランク") == ["A", "B"]
     assert _column_values(output, "メールアドレス") == ["", ""]
     assert output.data.iloc[:, :len(COMDESK_HEADERS)].values.tolist() == original_rows
     assert _column_values(output, "UUID") == ["UUID-10", ""]
