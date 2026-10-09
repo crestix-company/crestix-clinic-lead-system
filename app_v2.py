@@ -1119,13 +1119,6 @@ def simple_sales_ui(store, demo=False):
                 use_container_width=True,
             )
 
-    st.divider()
-    st.subheader("UUID未付与のHP調査済み医院をComdeskへ追加")
-    st.caption(
-        "ここは上の営業対象出力とは別機能です。"
-        "HP調査成功済み・UUID未付与の累積waiting listだけをComdesk新規登録用に出力します。"
-    )
-    current_hp_job_export_ui(store, key_prefix="simple_sales")
 
 
 def advanced_ui(store, demo):
