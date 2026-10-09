@@ -5,12 +5,16 @@ import unicodedata
 from src.io.input_loader import ALIASES, infer_columns
 
 
-COMDESK_HEADERS = [
+COMDESK_BASE_HEADERS = [
     "UUID", "種別", "名前", "カナ", "郵便番号", "都道府県", "住所１", "住所２",
     "住所カナ", "Tel1", "Tel2", "Tel3", "Tel4", "FAX", "URL", "備考", "旧社名",
     "リードソース", "履歴", "記事名", "休診日", "診療日", "午前始", "午前終",
     "午後始", "午後終", "院長名", "開業日",
 ]
+
+# 2026-10-09以降の正式Comdesk出力フォーマット。
+# 既存28列の末尾に営業管理用のHPランクと、公式HPで検証済みのメールアドレスを追加する。
+COMDESK_HEADERS = [*COMDESK_BASE_HEADERS, "HPランク", "メールアドレス"]
 
 EXTRA_ALIASES = {
     "uuid": ["UUID", "案件ID", "管理ID", "リードID", "lead_id", "id"],
