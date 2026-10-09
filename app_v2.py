@@ -673,10 +673,13 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
         st.metric("Comdesk出力対象", "0件")
         st.info("今回のHP調査ジョブはSupabase実行時に表示されます。全期間の出力は詳細設定をご利用ください。")
         return
-    job = store.latest_completed_hp_job()
+    # A running Streamlit process can temporarily retain the pre-update runtime_store
+    # module after a git pull. Fall back to the legacy completed-only anchor until restart.
+    latest_exportable = getattr(store, "latest_exportable_hp_job", store.latest_completed_hp_job)
+    job = latest_exportable()
     if not job:
         st.metric("Comdesk出力対象", "0件")
-        st.info("完了したHP調査ジョブがありません。過去のHP確認済み医院を代わりに出力することはありません。")
+        st.info("一時停止または完了したHP調査ジョブがありません。過去のHP確認済み医院を代わりに出力することはありません。")
         return
     summary = store.hp_job_export_summary(job["id"])
     # A running Streamlit process may still hold the pre-PR42 runtime_store module
@@ -684,6 +687,8 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
     stale_runtime = "carryover_count" not in summary
     carryover_count = summary.get("carryover_count", 0)
     st.caption(f"今回のHP調査結果（ジョブ {job['id']}）")
+    if job.get("status") == "PAUSED":
+        st.info("一時停止時点までの調査完了分を出力できます。")
     if stale_runtime:
         st.warning(
             "HP調査の実行プロセスが更新前コードを保持しています。"

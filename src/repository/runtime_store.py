@@ -231,6 +231,32 @@ class SupabaseRuntimeStore:
         return {"id": row[0], "created_at": row[1], "updated_at": row[2],
                 "target_count": row[3], "done_count": row[4]}
 
+    def latest_exportable_hp_job(self):
+        """Return the latest PAUSED or fully COMPLETED HP job usable as the Step5 anchor.
+
+        A paused job may still contain PENDING/RUNNING items; hp_job_export_summary() only
+        counts/exports DONE items, so pausing creates a stable point where completed work can
+        be exported without waiting for the whole batch to finish. The historical
+        latest_completed_hp_job() contract intentionally remains unchanged.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT j.id,j.created_at,j.updated_at,j.status,count(i.clinic_id) AS target_count, "
+                "count(*) FILTER (WHERE i.state='DONE') AS done_count "
+                "FROM research.research_jobs j "
+                "JOIN research.research_job_items i ON i.job_id=j.id "
+                "WHERE j.kind='hp' AND j.status IN ('PAUSED','COMPLETED') "
+                "GROUP BY j.id,j.created_at,j.updated_at,j.status "
+                "HAVING count(i.clinic_id)>0 "
+                "AND (j.status='PAUSED' OR count(*) FILTER (WHERE i.state<>'DONE')=0) "
+                "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "created_at": row[1], "updated_at": row[2],
+                "status": row[3], "target_count": row[4], "done_count": row[5]}
+
     def hp_job_export_summary(self, job_id):
         """Current-job metrics plus cumulative UUID-empty HPs, including Human Review positives."""
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
@@ -268,7 +294,7 @@ class SupabaseRuntimeStore:
                 "AND COALESCE(BTRIM(h.final_url),'')<>'' AND COALESCE(BTRIM(c.uuid),'')='' "
                 "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion + "),'{}') "
                 "FROM research.research_job_items i "
-                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status='COMPLETED' "
+                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status IN ('PAUSED','COMPLETED') "
                 "LEFT JOIN public.clinics c ON c.id=i.clinic_id "
                 "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
                 "LEFT JOIN research.research_results rr ON rr.clinic_id=i.clinic_id "
