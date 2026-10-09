@@ -9,7 +9,7 @@ import streamlit as st
 from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
-from src.master.comdesk import COMDESK_HEADERS, infer_comdesk_columns
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns
 from src.master.fixed_export import fixed_row
 from src.enrichment.kouseikyoku_source import load_master
 from src.enrichment.doctor_license import DoctorLicenseCache,parse_license_html
@@ -561,7 +561,7 @@ def import_ui(store,demo):
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview,hide_index=True)
-            st.caption("出力プレビュー（A〜AB列・28項目）")
+            st.caption("照合プレビュー（基本28項目。HPランク・メールアドレスは照合キーに使用しません）")
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS),hide_index=True,width="stretch")
         if st.button("既存案件を登録",type="primary"):
             with st.spinner("既存案件を登録しています…"):
@@ -705,7 +705,7 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
         ),
     )
     signature = json.dumps(
-        [str(store.path), str(job["id"]), COMDESK_HEADERS, store.revision(),
+        [str(store.path), str(job["id"]), COMDESK_EXPORT_HEADERS, store.revision(),
          len(summary["export_ids"]), carryover_count],
         ensure_ascii=False,
         sort_keys=True,
@@ -963,7 +963,7 @@ def simple_workflow_ui(store, demo):
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview, hide_index=True)
-            st.caption("出力プレビュー（A〜AB列・28項目）")
+            st.caption("照合プレビュー（基本28項目。HPランク・メールアドレスは照合キーに使用しません）")
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
         if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
             with st.spinner("既存案件を登録しています…"):
@@ -1093,7 +1093,7 @@ def simple_sales_ui(store, demo=False):
         "HP ABC判定は営業対象のA/B条件を反映します。"
     )
     sales_export_signature = json.dumps(
-        [str(store.path), asdict(sales_filters), COMDESK_HEADERS, store.revision(), count],
+        [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS, store.revision(), count],
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -1228,10 +1228,15 @@ def sales_ui(store):
     listing(store,filters,"sales_results")
     st.subheader("全期間の営業対象を出力（詳細設定）")
     st.caption("かんたん操作のStep5とは別の全期間検索です。過去のHP確認済み医院も選択条件に応じて含まれます。")
-    st.caption("出力形式：A〜AB列の28項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。入力にない項目は確認できた情報を補い、不明な項目は空欄にします。")
-    with st.expander("毎回1行目に出力する28項目",expanded=True):
-        st.dataframe(pd.DataFrame({"列":[chr(65+i) if i<26 else "A"+chr(65+i-26) for i in range(28)],"1行目の項目名":COMDESK_HEADERS}),hide_index=True,width="stretch")
-    signature = json.dumps([str(store.path),asdict(filters),COMDESK_HEADERS,store.revision()],ensure_ascii=False,sort_keys=True)
+    export_headers = COMDESK_EXPORT_HEADERS if getattr(store, "is_supabase_runtime", False) else COMDESK_HEADERS
+    st.caption(
+        f"出力形式：{len(export_headers)}項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。"
+        "Supabase本番ではAC列「HPランク」・AD列「メールアドレス」も追加します。"
+    )
+    with st.expander(f"毎回1行目に出力する{len(export_headers)}項目", expanded=True):
+        labels = [chr(65+i) if i < 26 else "A" + chr(65+i-26) for i in range(len(export_headers))]
+        st.dataframe(pd.DataFrame({"列": labels, "1行目の項目名": export_headers}), hide_index=True, width="stretch")
+    signature = json.dumps([str(store.path),asdict(filters),export_headers,store.revision()],ensure_ascii=False,sort_keys=True)
     if st.button("この条件でExcel・CSVを作成",type="primary"):
         files = store.export(filters)
         st.session_state["export_v2"] = {"signature":signature,"files":files}

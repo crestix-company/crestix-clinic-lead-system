@@ -12,6 +12,11 @@ COMDESK_HEADERS = [
     "午後始", "午後終", "院長名", "開業日",
 ]
 
+# Formal outbound format from 2026-10-09 onward. Keep COMDESK_HEADERS at the
+# legacy 28-column contract because import/provenance history must continue to
+# accept and preserve existing Comdesk files byte-for-byte.
+COMDESK_EXPORT_HEADERS = [*COMDESK_HEADERS, "HPランク", "メールアドレス"]
+
 EXTRA_ALIASES = {
     "uuid": ["UUID", "案件ID", "管理ID", "リードID", "lead_id", "id"],
     "clinic_name": ["名前"],

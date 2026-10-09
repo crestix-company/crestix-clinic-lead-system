@@ -3,11 +3,13 @@ from pathlib import Path
 import pytest
 
 from src.io.input_loader import load_table
-from src.master.comdesk import COMDESK_HEADERS
-from src.repository.runtime_store import (
-    PROVISIONAL_COMDESK_EMAIL_HEADER,
-    SupabaseRuntimeStore,
+from src.master.comdesk import (
+    COMDESK_HEADERS,
+    COMDESK_EXPORT_HEADERS,
+    infer_comdesk_columns,
+    record_from_row,
 )
+from src.repository.runtime_store import SupabaseRuntimeStore
 
 
 class _EmailCursor:
@@ -75,9 +77,40 @@ def _column_values(table, header):
 
 def _records():
     return [
-        {"id": 10, "uuid": "UUID-10", "clinic_name": "十番医院"},
-        {"id": 20, "uuid": "", "clinic_name": "二十番医院"},
+        {"id": 10, "uuid": "UUID-10", "clinic_name": "十番医院", "effective_hp_rank": "A"},
+        {"id": 20, "uuid": "", "clinic_name": "二十番医院", "effective_hp_rank": "b"},
     ]
+
+
+def test_formal_comdesk_export_has_rank_and_email_as_columns_29_and_30():
+    assert len(COMDESK_HEADERS) == 28
+    assert len(COMDESK_EXPORT_HEADERS) == 30
+    assert COMDESK_EXPORT_HEADERS[:28] == COMDESK_HEADERS
+    assert COMDESK_EXPORT_HEADERS[-2:] == ["HPランク", "メールアドレス"]
+
+
+def test_30_column_return_file_keeps_legacy_matching_keys_unchanged():
+    row = [""] * len(COMDESK_EXPORT_HEADERS)
+    row[COMDESK_EXPORT_HEADERS.index("UUID")] = "uuid-30"
+    row[COMDESK_EXPORT_HEADERS.index("名前")] = "三十列クリニック"
+    row[COMDESK_EXPORT_HEADERS.index("都道府県")] = "東京都"
+    row[COMDESK_EXPORT_HEADERS.index("住所１")] = "千代田区1-1"
+    row[COMDESK_EXPORT_HEADERS.index("Tel1")] = "03-1234-5678"
+    row[COMDESK_EXPORT_HEADERS.index("HPランク")] = "A"
+    row[COMDESK_EXPORT_HEADERS.index("メールアドレス")] = "clinic@example.jp"
+
+    table = load_table(
+        ("\ufeff" + ",".join(COMDESK_EXPORT_HEADERS) + "\n" + ",".join(row) + "\n").encode("utf-8"),
+        "return.csv",
+    )
+    mapping = infer_comdesk_columns(table)
+    record = record_from_row(table.data.iloc[0].tolist(), mapping)
+
+    assert record["uuid"] == "uuid-30"
+    assert record["clinic_name"] == "三十列クリニック"
+    assert record["phone"] == "03-1234-5678"
+    assert record["address"] == "東京都千代田区1-1"
+    assert "HPランク" not in record and "メールアドレス" not in record
 
 
 def test_empty_email_table_exports_blank_email_without_changing_rows():
@@ -85,8 +118,9 @@ def test_empty_email_table_exports_blank_email_without_changing_rows():
 
     output = _csv(store)
 
-    assert output.headers == [*COMDESK_HEADERS, PROVISIONAL_COMDESK_EMAIL_HEADER]
-    assert _column_values(output, PROVISIONAL_COMDESK_EMAIL_HEADER) == ["", ""]
+    assert output.headers == COMDESK_EXPORT_HEADERS
+    assert _column_values(output, "HPランク") == ["A", "B"]
+    assert _column_values(output, "メールアドレス") == ["", ""]
     assert output.data.iloc[:, :len(COMDESK_HEADERS)].values.tolist() == original_rows
     assert _column_values(output, "UUID") == ["UUID-10", ""]
     assert len(output.data) == 2
@@ -109,7 +143,7 @@ def test_only_official_verified_email_is_exported(status, verified_on_official, 
 
     output = _csv(store)
 
-    assert output.value(0, output.headers.index(PROVISIONAL_COMDESK_EMAIL_HEADER)) == expected
+    assert output.value(0, output.headers.index("メールアドレス")) == expected
     assert "status='VERIFIED_EMAIL'" in store._conn.sql
     assert "verified_on_official=true" in store._conn.sql
 
@@ -127,7 +161,7 @@ def test_multiple_verified_emails_are_deduplicated_and_deterministic():
 
     first_output = _csv(first)
     second_output = _csv(second)
-    email_column = first_output.headers.index(PROVISIONAL_COMDESK_EMAIL_HEADER)
+    email_column = first_output.headers.index("メールアドレス")
     first_value = first_output.value(0, email_column)
     second_value = second_output.value(0, email_column)
 

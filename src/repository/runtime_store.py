@@ -9,20 +9,13 @@ from __future__ import annotations
 import json
 
 from src.io.output_writer import csv_bytes, xlsx_bytes
-from src.master.comdesk import COMDESK_HEADERS
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS
 from src.master.fixed_export import fixed_row
 from src.master.filters import Filters
 
 
 from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
 
-
-PROVISIONAL_COMDESK_EMAIL_HEADER = "メールアドレス"
-
-
-def _step5_comdesk_headers():
-    """Current Step 5 shape; deliberately separate from the future formal schema."""
-    return [*COMDESK_HEADERS, PROVISIONAL_COMDESK_EMAIL_HEADER]
 
 
 def _verified_email_map(rows):
@@ -183,6 +176,21 @@ class SupabaseRuntimeStore:
             output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
         return output
 
+    def _attach_export_metadata(self, records, rows):
+        """Append formal outbound-only HP rank and official-verified email columns.
+
+        The stored/imported Comdesk row remains the legacy 28-column source row.
+        These two values are derived from current system-of-record data at export time.
+        """
+        emails = self._verified_emails_for_ids([record["id"] for record in records])
+        output = []
+        for record, row in zip(records, rows):
+            rank = str(record.get("effective_hp_rank") or "").strip().upper()
+            if rank not in {"A", "B", "C", "D"}:
+                rank = ""
+            output.append([*row, rank, emails.get(int(record["id"]), "")])
+        return output
+
     def _verified_emails_for_ids(self, clinic_ids):
         """Read already-enriched, exportable emails; database errors must remain visible."""
         ids = [int(clinic_id) for clinic_id in clinic_ids]
@@ -308,27 +316,22 @@ class SupabaseRuntimeStore:
         summary = self.hp_job_export_summary(job_id)
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
-        rows = self._export_records(records)
-        emails = self._verified_emails_for_ids([record["id"] for record in records])
-        rows = [
-            [*row, emails.get(int(record["id"]), "")]
-            for record, row in zip(records, rows)
-        ]
-        headers = _step5_comdesk_headers()
+        rows = self._attach_export_metadata(records, self._export_records(records))
         import pandas as pd
-        frame = pd.DataFrame(rows, columns=headers)
+        frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
         return {
             "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
-            "final_comdesk_import.csv": csv_bytes(headers, rows),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
         }
 
     def export(self, filters, template_id=None, as_of=None):
-        rows = self._export_rows(filters, as_of)
+        records = self.query(filters, limit=100000, as_of=as_of)
+        rows = self._attach_export_metadata(records, self._export_records(records))
         import pandas as pd
-        frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
+        frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
         return {
             "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
-            "final_comdesk_import.csv": csv_bytes(COMDESK_HEADERS, rows),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
         }
 
     def export_management_csv(self):
