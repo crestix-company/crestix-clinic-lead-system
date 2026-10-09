@@ -4,10 +4,7 @@ import pytest
 
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_HEADERS
-from src.repository.runtime_store import (
-    PROVISIONAL_COMDESK_EMAIL_HEADER,
-    SupabaseRuntimeStore,
-)
+from src.repository.runtime_store import SupabaseRuntimeStore
 
 
 class _EmailCursor:
@@ -85,8 +82,8 @@ def test_empty_email_table_exports_blank_email_without_changing_rows():
 
     output = _csv(store)
 
-    assert output.headers == [*COMDESK_HEADERS, PROVISIONAL_COMDESK_EMAIL_HEADER]
-    assert _column_values(output, PROVISIONAL_COMDESK_EMAIL_HEADER) == ["", ""]
+    assert output.headers == COMDESK_HEADERS
+    assert _column_values(output, "メールアドレス") == ["", ""]
     assert output.data.iloc[:, :len(COMDESK_HEADERS)].values.tolist() == original_rows
     assert _column_values(output, "UUID") == ["UUID-10", ""]
     assert len(output.data) == 2
@@ -109,7 +106,7 @@ def test_only_official_verified_email_is_exported(status, verified_on_official, 
 
     output = _csv(store)
 
-    assert output.value(0, output.headers.index(PROVISIONAL_COMDESK_EMAIL_HEADER)) == expected
+    assert output.value(0, output.headers.index("メールアドレス")) == expected
     assert "status='VERIFIED_EMAIL'" in store._conn.sql
     assert "verified_on_official=true" in store._conn.sql
 
@@ -127,7 +124,7 @@ def test_multiple_verified_emails_are_deduplicated_and_deterministic():
 
     first_output = _csv(first)
     second_output = _csv(second)
-    email_column = first_output.headers.index(PROVISIONAL_COMDESK_EMAIL_HEADER)
+    email_column = first_output.headers.index("メールアドレス")
     first_value = first_output.value(0, email_column)
     second_value = second_output.value(0, email_column)
 
