@@ -17,13 +17,6 @@ from src.master.filters import Filters
 from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
 
 
-PROVISIONAL_COMDESK_EMAIL_HEADER = "メールアドレス"
-
-
-def _step5_comdesk_headers():
-    """Current Step 5 shape; deliberately separate from the future formal schema."""
-    return [*COMDESK_HEADERS, PROVISIONAL_COMDESK_EMAIL_HEADER]
-
 
 def _verified_email_map(rows):
     """Build deterministic, de-duplicated Step 5 email values by clinic_id."""
@@ -160,6 +153,7 @@ class SupabaseRuntimeStore:
     def _export_records(self, records):
         ids = [r["id"] for r in records]
         originals, templates = {}, {}
+        verified_emails = self._verified_emails_for_ids(ids)
         if ids:
             with self._conn.cursor() as cur:
                 cur.execute(
@@ -173,14 +167,15 @@ class SupabaseRuntimeStore:
                     templates[tid] = (_json(headers), _json(mapping))
         output = []
         for record in records:
+            enriched = {**record, "verified_email": verified_emails.get(int(record["id"]), "")}
             choices = originals.get(record["id"], [])
             if not choices:
-                output.append(fixed_row(record)); continue
+                output.append(fixed_row(enriched)); continue
             chosen = next((r for r in choices if not record.get("uuid") or r[2] == record["uuid"]), None)
             if chosen is None:
                 raise ValueError("既存UUIDに対応する元行を確認できません。元データを確認してください。")
             headers, mapping = templates[chosen[0]]
-            output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
+            output.append(fixed_row(enriched, headers, mapping, _json(chosen[1])))
         return output
 
     def _verified_emails_for_ids(self, clinic_ids):
@@ -309,17 +304,11 @@ class SupabaseRuntimeStore:
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
         rows = self._export_records(records)
-        emails = self._verified_emails_for_ids([record["id"] for record in records])
-        rows = [
-            [*row, emails.get(int(record["id"]), "")]
-            for record, row in zip(records, rows)
-        ]
-        headers = _step5_comdesk_headers()
         import pandas as pd
-        frame = pd.DataFrame(rows, columns=headers)
+        frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
         return {
             "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
-            "final_comdesk_import.csv": csv_bytes(headers, rows),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_HEADERS, rows),
         }
 
     def export(self, filters, template_id=None, as_of=None):
