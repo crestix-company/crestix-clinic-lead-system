@@ -254,6 +254,28 @@ def test_ui_sales_target_count_equals_comdesk_export_count(tmp_path, monkeypatch
     assert any("全期間の出力は詳細設定" in x.value for x in at.info)
 
 
+def test_ui_sales_filters_can_export_current_ab_targets_without_treatment_selection(tmp_path, monkeypatch):
+    store, _ = _setup_store(tmp_path, {
+        "青空内視鏡クリニック": ("A", "existing-uuid-1"),
+        "若葉眼科医院": ("B", ""),
+        "日向皮膚科": ("C", ""),
+        "月見内科": ("A", ""),
+    })
+    at = _app(tmp_path, monkeypatch, store.path)
+    next(s for s in at.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
+    assert not at.exception
+
+    # 治療カテゴリ未選択でも、営業対象A/Bをそのまま出力できる。
+    assert next(m.value for m in at.metric if m.label == "営業対象") == "3件"
+    next(b for b in at.button if b.label == "営業対象 3件をComdesk形式で出力").click().run()
+    assert not at.exception
+
+    files = at.session_state["simple_sales_filtered_export_files"]["files"]
+    exported = load_table(files["final_comdesk_import.csv"], "sales.csv")
+    assert len(exported.data) == 3
+    assert exported.headers == COMDESK_HEADERS
+
+
 def test_ui_web_research_six_metrics_displayed(tmp_path, monkeypatch):
     store, clinics = _setup_store(tmp_path, {
         "青空内視鏡クリニック": ("A", ""),
