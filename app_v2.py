@@ -561,7 +561,7 @@ def import_ui(store,demo):
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview,hide_index=True)
-            st.caption("出力プレビュー（A〜AB列・28項目）")
+            st.caption("出力プレビュー（A〜AD列・30項目）")
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS),hide_index=True,width="stretch")
         if st.button("既存案件を登録",type="primary"):
             with st.spinner("既存案件を登録しています…"):
@@ -963,7 +963,7 @@ def simple_workflow_ui(store, demo):
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview, hide_index=True)
-            st.caption("出力プレビュー（A〜AB列・28項目）")
+            st.caption("出力プレビュー（A〜AD列・30項目）")
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
         if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
             with st.spinner("既存案件を登録しています…"):
@@ -1228,8 +1228,8 @@ def sales_ui(store):
     listing(store,filters,"sales_results")
     st.subheader("全期間の営業対象を出力（詳細設定）")
     st.caption("かんたん操作のStep5とは別の全期間検索です。過去のHP確認済み医院も選択条件に応じて含まれます。")
-    st.caption("出力形式：A〜AB列の28項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。入力にない項目は確認できた情報を補い、不明な項目は空欄にします。")
-    with st.expander("毎回1行目に出力する28項目",expanded=True):
+    st.caption("出力形式：A〜AD列の30項目（固定）。C列「名前」にクリニック名、AA列「院長名」に先生のお名前を出力します。入力にない項目は確認できた情報を補い、不明な項目は空欄にします。")
+    with st.expander("毎回1行目に出力する30項目",expanded=True):
         st.dataframe(pd.DataFrame({"列":[chr(65+i) if i<26 else "A"+chr(65+i-26) for i in range(28)],"1行目の項目名":COMDESK_HEADERS}),hide_index=True,width="stretch")
     signature = json.dumps([str(store.path),asdict(filters),COMDESK_HEADERS,store.revision()],ensure_ascii=False,sort_keys=True)
     if st.button("この条件でExcel・CSVを作成",type="primary"):
