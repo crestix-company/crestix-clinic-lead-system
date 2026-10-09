@@ -140,9 +140,9 @@ def test_c_and_unknown_never_exported_even_if_selected(tmp_path, monkeypatch):
     for rank_label in ("C", "D"):
         next(s for s in at.selectbox if s.label == "HP ABC判定").set_value(rank_label).run()
         assert not at.exception
-        export_count = next(m.value for m in at.metric if m.label == "Comdesk出力対象")
-        assert export_count == "0件", f"{rank_label} must never be exported to Comdesk"
-        assert any("全期間の出力は詳細設定" in x.value for x in at.info)
+        assert next(m.value for m in at.metric if m.label == "営業対象") == "0件"
+        assert not any(m.label == "Comdesk出力対象" for m in at.metric)
+        assert any(b.label == "営業対象 0件をComdesk形式で出力" and b.disabled for b in at.button)
 
 
 # ---- Treatment調査状態: HP ABC判定・出力対象に影響しないこと ----
@@ -248,10 +248,9 @@ def test_ui_sales_target_count_equals_comdesk_export_count(tmp_path, monkeypatch
     assert not at.exception
 
     sales_target = next(m.value for m in at.metric if m.label == "営業対象")
-    export_target = next(m.value for m in at.metric if m.label == "Comdesk出力対象")
     assert sales_target == "3件"
-    assert export_target == "0件"  # no current HP job: never export historical accumulation
-    assert any("全期間の出力は詳細設定" in x.value for x in at.info)
+    assert not any(m.label == "Comdesk出力対象" for m in at.metric)
+    assert any(b.label == "営業対象 3件をComdesk形式で出力" for b in at.button)
 
 
 def test_ui_sales_filters_can_export_current_ab_targets_without_treatment_selection(tmp_path, monkeypatch):
@@ -344,6 +343,6 @@ def test_ui_site_type_filter_list_columns_and_export_alignment(tmp_path, monkeyp
     for label in ("公式HP確認済み", "ポータルサイト", "その他・未確認"):
         site_filter.set_value(label).run()
         assert next(m.value for m in at.metric if m.label == "営業対象") == "1件"
-        assert next(m.value for m in at.metric if m.label == "Comdesk出力対象") == "0件"
+        assert not any(m.label == "Comdesk出力対象" for m in at.metric)
     frames = [frame.value for frame in at.dataframe if hasattr(frame.value, "columns")]
     assert any({"医院名", "HP ABC", "サイト種別", "ポータル名", "治療カテゴリ", "UUID有無"} <= set(frame.columns) for frame in frames)
