@@ -41,8 +41,8 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
     next(r for r in app.radio if r.label == "メニュー").set_value("営業対象・出力").run()
     assert not app.exception and not app.error
-    assert any(m.label == "Comdesk出力対象" and m.value == "0件" for m in app.metric)
-    assert any("全期間の出力は詳細設定" in x.value for x in app.info)
+    assert not any(m.label == "Comdesk出力対象" for m in app.metric)
+    assert any(b.label.startswith("営業対象 ") and b.label.endswith("件をComdesk形式で出力") for b in app.button)
     next(r for r in app.radio if r.label == "メニュー").set_value("詳細設定").run()
     next(s for s in app.selectbox if s.label == "開く画面").set_value("営業対象フィルター（詳細）").run()
     next(s for s in app.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()

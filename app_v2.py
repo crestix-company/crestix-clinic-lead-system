@@ -1086,9 +1086,39 @@ def simple_sales_ui(store, demo=False):
     with st.expander("対象医院を確認", expanded=False):
         listing(store, filters, "simple_sales_results")
 
-    st.subheader("今回のHP調査結果をComdesk形式で出力")
-    st.caption("上の営業対象件数は全体の参考表示です。出力は最新完了HP調査ジョブ内の成功医院に限定します。")
-    current_hp_job_export_ui(store, key_prefix="simple_sales")
+    st.subheader("営業対象をComdesk形式で出力")
+    st.caption(
+        "上で選択した営業条件をそのまま反映して出力します。"
+        "治療カテゴリを選択していない場合は治療カテゴリでは絞り込みません。"
+        "HP ABC判定は営業対象のA/B条件を反映します。"
+    )
+    sales_export_signature = json.dumps(
+        [str(store.path), asdict(sales_filters), COMDESK_HEADERS, store.revision(), count],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    if st.button(
+        f"営業対象 {count:,}件をComdesk形式で出力",
+        type="primary",
+        key="simple_sales_filtered_export",
+        disabled=demo or count == 0,
+        use_container_width=True,
+    ):
+        st.session_state["simple_sales_filtered_export_files"] = {
+            "signature": sales_export_signature,
+            "files": store.export(sales_filters),
+        }
+    sales_output = st.session_state.get("simple_sales_filtered_export_files")
+    if sales_output and sales_output["signature"] == sales_export_signature:
+        for name, content in sales_output["files"].items():
+            st.download_button(
+                "営業対象Excelをダウンロード" if name.endswith("xlsx") else "営業対象CSVをダウンロード",
+                content,
+                name,
+                key="simple_sales_filtered_download_" + name,
+                use_container_width=True,
+            )
+
 
 
 def advanced_ui(store, demo):
