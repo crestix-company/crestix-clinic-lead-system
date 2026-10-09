@@ -153,7 +153,6 @@ class SupabaseRuntimeStore:
     def _export_records(self, records):
         ids = [r["id"] for r in records]
         originals, templates = {}, {}
-        verified_emails = self._verified_emails_for_ids(ids)
         if ids:
             with self._conn.cursor() as cur:
                 cur.execute(
@@ -167,15 +166,25 @@ class SupabaseRuntimeStore:
                     templates[tid] = (_json(headers), _json(mapping))
         output = []
         for record in records:
-            enriched = {**record, "verified_email": verified_emails.get(int(record["id"]), "")}
             choices = originals.get(record["id"], [])
             if not choices:
-                output.append(fixed_row(enriched)); continue
+                output.append(fixed_row(record)); continue
             chosen = next((r for r in choices if not record.get("uuid") or r[2] == record["uuid"]), None)
             if chosen is None:
                 raise ValueError("既存UUIDに対応する元行を確認できません。元データを確認してください。")
             headers, mapping = templates[chosen[0]]
-            output.append(fixed_row(enriched, headers, mapping, _json(chosen[1])))
+            output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
+        return output
+
+    def _attach_verified_emails(self, records, rows):
+        """Fill only official-verified emails into the formal Comdesk email column."""
+        emails = self._verified_emails_for_ids([record["id"] for record in records])
+        email_column = COMDESK_HEADERS.index("メールアドレス")
+        output = []
+        for record, row in zip(records, rows):
+            enriched = list(row)
+            enriched[email_column] = emails.get(int(record["id"]), "")
+            output.append(enriched)
         return output
 
     def _verified_emails_for_ids(self, clinic_ids):
@@ -303,7 +312,7 @@ class SupabaseRuntimeStore:
         summary = self.hp_job_export_summary(job_id)
         ids = summary["export_ids"]
         records = self.repositories.clinics._batch_get(ids) if ids else []
-        rows = self._export_records(records)
+        rows = self._attach_verified_emails(records, self._export_records(records))
         import pandas as pd
         frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
         return {
@@ -312,7 +321,8 @@ class SupabaseRuntimeStore:
         }
 
     def export(self, filters, template_id=None, as_of=None):
-        rows = self._export_rows(filters, as_of)
+        records = self.query(filters, limit=100000, as_of=as_of)
+        rows = self._attach_verified_emails(records, self._export_records(records))
         import pandas as pd
         frame = pd.DataFrame(rows, columns=COMDESK_HEADERS)
         return {
