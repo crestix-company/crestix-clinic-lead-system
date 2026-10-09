@@ -1,4 +1,4 @@
-"""営業対象を毎回コムデスクのA〜AB列へ出力する。保存済み元行は変更しない。"""
+"""営業対象を毎回コムデスクの正式30列（A〜AD）へ出力する。保存済み元行は変更しない。"""
 import json
 import re
 
@@ -70,6 +70,10 @@ def fixed_row(data, headers=(), mapping=None, raw=None):
         if field not in {"url", "uuid"}:
             values[heading] = data.get(field, "") or ""
     values["UUID"] = data.get("uuid", "") or ""
+    rank = str(data.get("effective_hp_rank") or data.get("hp_rank") or "").strip().upper()
+    values["HPランク"] = rank if rank in {"A", "B", "C", "D"} else ""
+    # verified_emailはRuntime側で公式HP確認済みメールだけを注入する。
+    values["メールアドレス"] = str(data.get("verified_email") or "").strip()
     maps_url = (data.get("maps_website_url", "") or "") if data.get("maps_presence_status") == "MAPS_MATCHED_WEBSITE" else ""
     values["URL"] = maps_url or ((data.get("hp_url", "") or "") if data.get("hp_status") == "VERIFIED" else "")
     # 新規（Comdesk元行なし）の医院は、Mapsで取得できた診療情報をComdesk列へ補完する。
@@ -112,6 +116,9 @@ def fixed_row(data, headers=(), mapping=None, raw=None):
         # 既存Comdesk行は原文を保持。URLが空欄のときだけ、本人確認済みMaps websiteで補完する。
         if not str(values.get("URL", "") or "").strip() and maps_url:
             values["URL"] = maps_url
+        # HPランク・メールアドレスはComdesk元行ではなく、現在の検証済み値を正とする。
+        values["HPランク"] = rank if rank in {"A", "B", "C", "D"} else ""
+        values["メールアドレス"] = str(data.get("verified_email") or "").strip()
     # Comdeskの診療時刻4列は、元値がExcel時刻小数でも最終出力ではHH:MMへ統一する。
     for heading in TIME_FIELDS:
         values[heading] = _format_comdesk_time(values.get(heading, ""))
