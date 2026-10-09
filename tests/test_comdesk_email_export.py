@@ -4,6 +4,7 @@ import pytest
 
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_HEADERS
+from src.master.fixed_export import fixed_row
 from src.repository.runtime_store import SupabaseRuntimeStore
 
 
@@ -75,6 +76,20 @@ def _records():
         {"id": 10, "uuid": "UUID-10", "clinic_name": "十番医院"},
         {"id": 20, "uuid": "", "clinic_name": "二十番医院"},
     ]
+
+
+def test_formal_comdesk_export_has_rank_and_email_as_columns_29_and_30():
+    assert len(COMDESK_HEADERS) == 30
+    assert COMDESK_HEADERS[-2:] == ["HPランク", "メールアドレス"]
+
+    row = fixed_row({
+        "uuid": "UUID-1",
+        "clinic_name": "テスト医院",
+        "effective_hp_rank": "b",
+        "verified_email": "verified@example.jp",
+    })
+    assert row[COMDESK_HEADERS.index("HPランク")] == "B"
+    assert row[COMDESK_HEADERS.index("メールアドレス")] == "verified@example.jp"
 
 
 def test_empty_email_table_exports_blank_email_without_changing_rows():
