@@ -63,3 +63,67 @@ def test_external_acceptance_markers_are_stable_distinct_integers():
     assert isinstance(first, int) and 1_500_000_000 <= first < 2_000_000_000
     assert first == _marker(token, "a_to_b")
     assert first != reverse
+
+
+class _RuntimeConn:
+    def __init__(self, *, closed=False, broken=False):
+        self.closed = closed
+        self.broken = broken
+
+    def close(self):
+        self.closed = True
+
+
+def _runtime_repositories(conn, metrics_fn):
+    clinics = SimpleNamespace(_conn=conn, metrics=metrics_fn)
+    return SimpleNamespace(
+        clinics=clinics,
+        hp_research=SimpleNamespace(),
+        treatment=SimpleNamespace(),
+        research=SimpleNamespace(),
+        provenance=SimpleNamespace(),
+        settings=SimpleNamespace(),
+    )
+
+
+def test_supabase_runtime_rebuilds_cached_read_connection_when_already_closed(monkeypatch):
+    from src.repository.runtime_store import SupabaseRuntimeStore
+
+    first = _runtime_repositories(
+        _RuntimeConn(closed=True),
+        lambda: (_ for _ in ()).throw(AssertionError("closed repository must not be used")),
+    )
+    second = _runtime_repositories(_RuntimeConn(), lambda: {"全マスター": 123})
+    bundles = iter([first, second])
+    monkeypatch.setattr(
+        "src.repository.backend.build_repositories",
+        lambda *_args, **_kwargs: next(bundles),
+    )
+
+    store = SupabaseRuntimeStore()
+
+    assert store.metrics() == {"全マスター": 123}
+    assert store.repositories is second
+
+
+def test_supabase_runtime_retries_one_read_after_operational_disconnect(monkeypatch):
+    import psycopg
+    from src.repository.runtime_store import SupabaseRuntimeStore
+
+    first_conn = _RuntimeConn()
+    first = _runtime_repositories(
+        first_conn,
+        lambda: (_ for _ in ()).throw(psycopg.OperationalError("the connection is closed")),
+    )
+    second = _runtime_repositories(_RuntimeConn(), lambda: {"全マスター": 456})
+    bundles = iter([first, second])
+    monkeypatch.setattr(
+        "src.repository.backend.build_repositories",
+        lambda *_args, **_kwargs: next(bundles),
+    )
+
+    store = SupabaseRuntimeStore()
+
+    assert store.metrics() == {"全マスター": 456}
+    assert first_conn.closed is True
+    assert store.repositories is second
