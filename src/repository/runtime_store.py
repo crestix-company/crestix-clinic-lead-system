@@ -7,6 +7,7 @@ repository factories, but production UI and workers receive this object.
 from __future__ import annotations
 
 import json
+from functools import wraps
 
 from src.io.output_writer import csv_bytes, xlsx_bytes
 from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS
@@ -40,31 +41,91 @@ def _verified_email_map(rows):
     }
 
 
+def _retry_closed_read_connection(method):
+    """Retry one read operation after rebuilding a stale runtime connection.
+
+    Streamlit caches SupabaseRuntimeStore for the process lifetime. A direct/session Postgres
+    connection can still be closed by the network or server while the app remains alive.
+    Reads are safe to retry once; write transactions deliberately use a separate repository
+    bundle and are never retried here.
+    """
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        self._ensure_read_connection()
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as exc:
+            if not self._is_retryable_connection_error(exc):
+                raise
+            self._reconnect_read()
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class SupabaseRuntimeStore:
     is_supabase_runtime = True
     runtime_identity = "supabase"
 
     def __init__(self, repositories=None):
+        self._owns_runtime_connection = repositories is None
         if repositories is None:
             from src.repository.backend import build_repositories
             repositories = build_repositories("supabase")
         self.repositories = repositories
         self._conn = repositories.clinics._conn
 
+    def _reconnect_read(self):
+        if not getattr(self, "_owns_runtime_connection", False):
+            return
+        old_conn = self._conn
+        from src.repository.backend import build_repositories
+        repositories = build_repositories("supabase")
+        self.repositories = repositories
+        self._conn = repositories.clinics._conn
+        try:
+            if old_conn is not None and not getattr(old_conn, "closed", False):
+                old_conn.close()
+        except Exception:
+            pass
+
+    def _ensure_read_connection(self):
+        if not getattr(self, "_owns_runtime_connection", False):
+            return
+        if getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False):
+            self._reconnect_read()
+
+    def _is_retryable_connection_error(self, exc):
+        if not getattr(self, "_owns_runtime_connection", False):
+            return False
+        try:
+            import psycopg
+        except ImportError:
+            return False
+        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+
     @property
     def path(self):
         """Compatibility identity only; never represents or opens a filesystem path."""
         return self.runtime_identity
 
+    @_retry_closed_read_connection
     def get(self, clinic_id): return self.repositories.clinics.get(clinic_id)
+    @_retry_closed_read_connection
     def get_by_uuid(self, value): return self.repositories.clinics.get_by_uuid(value)
+    @_retry_closed_read_connection
     def get_by_medical_key(self, value): return self.repositories.clinics.get_by_medical_key(value)
+    @_retry_closed_read_connection
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         return self.repositories.clinics.query(filters, limit, offset, as_of)
+    @_retry_closed_read_connection
     def count(self, filters=None, as_of=None): return self.repositories.clinics.count(filters, as_of)
+    @_retry_closed_read_connection
     def funnel(self, filters, as_of=None): return self.repositories.clinics.funnel(filters, as_of)
+    @_retry_closed_read_connection
     def metrics(self): return self.repositories.clinics.metrics()
+    @_retry_closed_read_connection
     def treatment_status_for_ids(self, ids): return self.repositories.treatment.status_for_ids(ids)
+    @_retry_closed_read_connection
     def treatment_category_options(self):
         with self._conn.cursor() as cur:
             cur.execute(
@@ -72,18 +133,25 @@ class SupabaseRuntimeStore:
                 "WHERE treatment_category_name<>'' ORDER BY treatment_category_name"
             )
             return [r[0] for r in cur.fetchall()]
+    @_retry_closed_read_connection
     def web_research_metrics(self): return self.repositories.hp_research.batch_metrics()
+    @_retry_closed_read_connection
     def history(self, clinic_id, limit=30):
         return self.repositories.provenance.history_for_clinic(clinic_id, limit)
+    @_retry_closed_read_connection
     def templates(self): return self.repositories.provenance.templates()
+    @_retry_closed_read_connection
     def reviews(self, limit=100): return self.repositories.provenance.reviews(limit)
+    @_retry_closed_read_connection
     def setting(self, key, default=None): return self.repositories.settings.get(key, default)
 
+    @_retry_closed_read_connection
     def prefectures(self):
         with self._conn.cursor() as cur:
             cur.execute("SELECT DISTINCT prefecture FROM public.clinics WHERE prefecture<>'' ORDER BY prefecture")
             return [r[0] for r in cur.fetchall()]
 
+    @_retry_closed_read_connection
     def municipalities(self):
         # Keep the canonical Python extraction used by the Supabase filter post-pass.
         from src.normalizer.address import extract_municipality
@@ -92,6 +160,7 @@ class SupabaseRuntimeStore:
             values = {extract_municipality(r[0]) for r in cur.fetchall()}
         return sorted(v for v in values if v)
 
+    @_retry_closed_read_connection
     def ad_count_max(self):
         from src.scoring.research_scoring import AD_SIGNAL_NAMES
         with self._conn.cursor() as cur:
@@ -102,11 +171,13 @@ class SupabaseRuntimeStore:
             )
             return cur.fetchone()[0]
 
+    @_retry_closed_read_connection
     def has_maps(self):
         with self._conn.cursor() as cur:
             cur.execute("SELECT EXISTS(SELECT 1 FROM public.clinics WHERE maps_presence_status<>'')")
             return bool(cur.fetchone()[0])
 
+    @_retry_closed_read_connection
     def maps_hp_candidate_ids(self, prefecture="", medical_types=None, force=False, limit=500):
         predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
         args.append(min(500, max(1, int(limit))))
@@ -117,6 +188,7 @@ class SupabaseRuntimeStore:
             )
             return [r[0] for r in cur.fetchall()]
 
+    @_retry_closed_read_connection
     def maps_hp_available_count(self, prefecture="", medical_types=None, force=False):
         predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
         with self._conn.cursor() as cur:
@@ -127,11 +199,13 @@ class SupabaseRuntimeStore:
         # The optional Navi sidecar never existed and was explicitly excluded from migration.
         return None
 
+    @_retry_closed_read_connection
     def revision(self):
         with self._conn.cursor() as cur:
             cur.execute("SELECT COALESCE(MAX(id),0) FROM provenance.change_history")
             return cur.fetchone()[0]
 
+    @_retry_closed_read_connection
     def google_maps_queue_csv(self):
         from src.master.google_maps import queue_csv
         with self._conn.cursor() as cur:
@@ -211,6 +285,7 @@ class SupabaseRuntimeStore:
         # misreported as clinics with no email.
         return _verified_email_map(rows)
 
+    @_retry_closed_read_connection
     def latest_completed_hp_job(self):
         """Return the latest fully completed HP job; never fall back to historical clinics."""
         with self._conn.cursor() as cur:
@@ -231,6 +306,7 @@ class SupabaseRuntimeStore:
         return {"id": row[0], "created_at": row[1], "updated_at": row[2],
                 "target_count": row[3], "done_count": row[4]}
 
+    @_retry_closed_read_connection
     def hp_job_export_summary(self, job_id):
         """Current-job metrics plus cumulative UUID-empty HPs, including Human Review positives."""
         exclusion = "(c.exclude_reason IN ('hospital','center') " \
@@ -311,6 +387,7 @@ class SupabaseRuntimeStore:
                 "uuid_existing_count": uuid_existing, "export_ids": waiting_ids,
                 "carryover_count": carryover_count}
 
+    @_retry_closed_read_connection
     def export_hp_job(self, job_id):
         """Render the cumulative successful UUID-empty Comdesk waiting list."""
         summary = self.hp_job_export_summary(job_id)
@@ -324,6 +401,7 @@ class SupabaseRuntimeStore:
             "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
         }
 
+    @_retry_closed_read_connection
     def export(self, filters, template_id=None, as_of=None):
         records = self.query(filters, limit=100000, as_of=as_of)
         rows = self._attach_export_metadata(records, self._export_records(records))
@@ -334,6 +412,7 @@ class SupabaseRuntimeStore:
             "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
         }
 
+    @_retry_closed_read_connection
     def export_management_csv(self):
         rows = self.query(Filters(active_only=False, hp_only=False), limit=100000)
         keys = sorted({k for row in rows for k in row})
