@@ -75,7 +75,7 @@ class SupabaseRuntimeStore:
         self._conn = repositories.clinics._conn
 
     def _reconnect_read(self):
-        if not self._owns_runtime_connection:
+        if not getattr(self, "_owns_runtime_connection", False):
             return
         old_conn = self._conn
         from src.repository.backend import build_repositories
@@ -89,13 +89,13 @@ class SupabaseRuntimeStore:
             pass
 
     def _ensure_read_connection(self):
-        if not self._owns_runtime_connection:
+        if not getattr(self, "_owns_runtime_connection", False):
             return
         if getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False):
             self._reconnect_read()
 
     def _is_retryable_connection_error(self, exc):
-        if not self._owns_runtime_connection:
+        if not getattr(self, "_owns_runtime_connection", False):
             return False
         try:
             import psycopg
