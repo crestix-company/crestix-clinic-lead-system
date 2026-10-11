@@ -1,0 +1,34 @@
+[
+  {
+    "candidate_id": "canary:56177:dc7656707878257ab482",
+    "clinic_id": 56177,
+    "email": "info@clinic-hosoi.jp",
+    "source_url": "https://www.iryou.teikyouseido.mhlw.go.jp/znk-web/juminkanja/S2430/initialize?kikanCd=2220212780&kikanKbn=2&prefCd=22",
+    "expected_auto_decision": "AUTO_TRUE",
+    "clinic": {"clinic_id": 56177, "clinic_name": "ほそい内科・脳神経内科クリニック"}
+  },
+  {
+    "candidate_id": "canary:98000:323ca9251ddfccfb24cf",
+    "clinic_id": 98000,
+    "email": "sapporoekimae@senjinkai.or.jp",
+    "source_url": "https://www.iryou.teikyouseido.mhlw.go.jp/znk-web/juminkanja/S2430/initialize?kikanCd=3010037900&kikanKbn=3&prefCd=01",
+    "expected_auto_decision": "REVIEW",
+    "clinic": {"clinic_id": 98000, "clinic_name": "医療法人社団 千仁会札幌駅前矯正歯科"}
+  },
+  {
+    "candidate_id": "canary:2684:ee67bd7a33f8ad0d1d8e",
+    "clinic_id": 2684,
+    "email": "jtamura@ichijunkai.jp",
+    "source_url": "https://www.iryou.teikyouseido.mhlw.go.jp/znk-web/juminkanja/S2430/initialize?kikanCd=2131323320&kikanKbn=2&prefCd=13",
+    "expected_auto_decision": "REVIEW",
+    "clinic": {"clinic_id": 2684, "clinic_name": "医療法人社団 一順会 田村胃腸科外科"}
+  },
+  {
+    "candidate_id": "canary:86859:a7e9e31ca3eb0d3d41a0",
+    "clinic_id": 86859,
+    "email": "sakaicjimu@gmail.com",
+    "source_url": "https://www.iryou.teikyouseido.mhlw.go.jp/znk-web/juminkanja/S2430/initialize?kikanCd=2400079660&kikanKbn=2&prefCd=40",
+    "expected_auto_decision": "AUTO_TRUE",
+    "clinic": {"clinic_id": 86859, "clinic_name": "ホームドクター さかいクリニック"}
+  }
+]

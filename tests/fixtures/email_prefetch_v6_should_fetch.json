@@ -1,0 +1,18 @@
+[
+  {
+    "clinic": "西宮協立脳神経外科病院",
+    "email": "info@nk-hospital.or.jp",
+    "source_url": "https://www.nk-hospital.or.jp/noge/contact.html",
+    "reject_reason": "Email Ownership Gateが西宮協立脳外科病院を異なる組織名と判定",
+    "should_fetch_reason": "脳神経外科と脳外科の限定的な略称差であり、公式domain上の医院窓口",
+    "clinic_location_evidence": "西宮協立脳神経外科病院 / 兵庫県西宮市今津山中町11-1 / 0798-33-2211"
+  },
+  {
+    "clinic": "いしせ脳神経外科クリニック",
+    "email": "dock@ishise.com",
+    "source_url": "https://www.ishise.com/brain-dock#how-to-reserve",
+    "reject_reason": "公式ページ近傍の学会語を第三者Email Ownershipと判定",
+    "should_fetch_reason": "対象医院名が同じ公式ページのメール近傍にあり、学会語は資格・説明文脈。メール用途はRESERVATIONとしてPrimary除外可能",
+    "clinic_location_evidence": "いしせ脳神経外科クリニック / 東京都中央区湊1-8-15 / 03-3553-3031"
+  }
+]

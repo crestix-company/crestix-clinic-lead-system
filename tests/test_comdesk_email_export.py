@@ -191,3 +191,18 @@ def test_email_migration_is_select_only_and_preserves_existing_rls_configuration
     assert "to public" not in sql
     assert "drop policy" not in sql
     assert "alter table" not in sql
+
+
+def test_email_research_primary_does_not_leak_into_comdesk_export():
+    """PR #68 (Email Research UI integration) must not implicitly couple its Primary
+    Email into Comdesk export. The 30-column contract's メールアドレス column is, and
+    stays, sourced exclusively from public.clinic_email_enrichment (legacy pipeline);
+    a migration to email_research.clinic_email_status.primary_email_candidate_id is a
+    separate, explicitly-approved PR, not an accidental side effect of this one."""
+    store, _ = _runtime([_records()[0]], [])
+    output = _csv(store)
+    assert output.value(0, output.headers.index("メールアドレス")) == ""
+    sql = store._conn.sql
+    assert "clinic_email_enrichment" in sql
+    assert "email_research" not in sql
+    assert "primary_email_candidate_id" not in sql

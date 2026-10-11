@@ -1,0 +1,6 @@
+[
+  {"name": "official strong identity", "clinic_name_match": true, "prefecture_match": true, "city_match": true, "discovery_source": "OFFICIAL_HP", "role": "GENERAL", "ownership": "CLINIC_OWNED", "expected": "HIGH"},
+  {"name": "search strong identity", "clinic_name_match": true, "prefecture_match": true, "city_match": true, "discovery_source": "SEARCH_QUERY", "role": "OFFICE", "ownership": "CLINIC_OWNED", "expected": "MEDIUM"},
+  {"name": "ambiguous ownership", "clinic_name_match": true, "prefecture_match": true, "city_match": true, "discovery_source": "SEARCH_QUERY", "role": "GENERAL", "ownership": "OWNERSHIP_UNKNOWN", "expected": "MEDIUM"},
+  {"name": "identity mismatch", "clinic_name_match": false, "prefecture_match": true, "city_match": true, "discovery_source": "OFFICIAL_HP", "role": "GENERAL", "ownership": "CLINIC_OWNED", "expected": "LOW"}
+]

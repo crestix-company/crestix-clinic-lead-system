@@ -4,6 +4,7 @@ __pycache__/
 .env
 .env.*
 .supabase-runtime.env.local
+config/email_research.env.local
 !.env.example
 *.sqlite3*
 *.db*

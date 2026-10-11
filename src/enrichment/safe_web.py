@@ -131,6 +131,7 @@ class SafeFetcher:
         self.transport = transport or PinnedTransport()
         self.timeout,self.max_bytes,self.interval,self.sleep = timeout,max_bytes,interval,sleeper
         self.last,self.robots,self.blocked,self.delays = {},{},set(),{}
+        self.metrics = {"rate_limit_retry_count": 0}
 
     def _get(self,url,allowed_host=None,max_cross_domain_hops=0):
         """max_cross_domain_hops is 0 for every existing caller (support-link
@@ -175,6 +176,7 @@ class SafeFetcher:
                 retry_after = _parse_retry_after(response.headers.get("retry-after"))
                 if retry_after is not None and retry_after <= MAX_RETRY_AFTER_SECONDS:
                     retried_rate_limit = True
+                    self.metrics["rate_limit_retry_count"] += 1
                     self.sleep(retry_after)
                     continue
             if response.status in {401,403,429}:
