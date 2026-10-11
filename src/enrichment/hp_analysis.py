@@ -31,6 +31,7 @@ PHONE_ADDRESS_AUTO_VERIFY_NON_OWNED = {
     "sogo-medical-guide.jp",
     "nihonbashi-med.com",
     "tanba-med.jp",
+    "kamochan.jp",
 }
 
 
