@@ -313,8 +313,8 @@ class SupabaseRuntimeStore:
             "OR COALESCE(substring(c.effective_json from %s),'')='病院' " \
             "OR c.clinic_name LIKE '%%病院%%' OR c.clinic_name LIKE '%%センター%%')"
         auto_reverified = (
-            "COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_identity_source','')="
-            "'AUTO_NAME_ONLY_MISMATCH'"
+            "COALESCE(replace(rr.result_json, chr(92) || 'u0000', '')::jsonb->>'hp_identity_source','') "
+            "IN ('AUTO_NAME_ONLY_MISMATCH','AUTO_PHONE_ADDRESS_MATCH')"
         )
         eligible = (
             "(i.result='SUCCESS' OR (i.result='REVIEW' AND ("
