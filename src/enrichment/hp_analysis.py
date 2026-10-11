@@ -21,6 +21,18 @@ NON_OFFICIAL = {"doctorsfile.jp","medicaldoc.jp","epark.jp","caloo.jp","caloo.co
 # ward/city association individually.
 NON_OFFICIAL_SUFFIXES = ("med.or.jp",)
 
+# Stricter denylist used only for the phone+address exception. These hosts may contain
+# the exact clinic phone/address while still being a third-party directory or booking
+# surface, so identity evidence alone must not promote them to an official HP.
+PHONE_ADDRESS_AUTO_VERIFY_NON_OWNED = {
+    "doctorqube.com",
+    "helios489.com",
+    "minnanokaigo.com",
+    "sogo-medical-guide.jp",
+    "nihonbashi-med.com",
+    "tanba-med.jp",
+}
+
 
 def host(url):
     try:
@@ -47,6 +59,13 @@ def is_official_candidate(url):
         return True
     except (ValueError, UnicodeError):
         return False
+
+
+def is_phone_address_auto_verify_candidate(url):
+    """Stricter URL ownership gate for the phone+address-only identity exception."""
+    if not is_official_candidate(url):
+        return False
+    return not any(domain_is(url, domain) for domain in PHONE_ADDRESS_AUTO_VERIFY_NON_OWNED)
 
 
 def canonical_page(url):
@@ -161,7 +180,9 @@ def identity(record, page, official=True):
     # - user-approved exception: when clinic name does not match, exact phone + address
     #   together are sufficient to establish the clinic identity. Manager-name match is
     #   supportive evidence only and is not required for this exception.
-    phone_address_auto_verified = bool((not name_ok) and phone_ok and addr_ok)
+    phone_address_auto_verified = bool(
+        (not name_ok) and phone_ok and addr_ok and is_phone_address_auto_verify_candidate(page.url)
+    )
     verified = bool((name_ok and (phone_ok or addr_ok)) or phone_address_auto_verified)
     if phone_address_auto_verified:
         reasons.append("医院名不一致でも電話番号/住所一致で自動本人確認")
