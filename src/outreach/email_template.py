@@ -83,8 +83,8 @@ def render_draft(data: DraftInput) -> DraftContent:
     listed = _mynavi_url(data.listing_url)
     if not example.startswith("https://clinic.mynavi.jp/article/"):
         raise DraftValidationError("記事例はarticle URLのみ指定できます")
-    if data.listing_kind not in {"VERIFIED_ARTICLE", "VERIFIED_PROFILE"} or not data.listing_verified:
-        raise DraftValidationError("掲載記事・医院プロフィールの確認が必要です")
+    if data.listing_kind != "VERIFIED_ARTICLE" or not data.listing_verified:
+        raise DraftValidationError("現在の固定文面は記事掲載確認済みの場合のみ使用できます。プロフィールのみなら要確認です")
     expected = "/article/" if data.listing_kind == "VERIFIED_ARTICLE" else "/clinic/"
     if not urlsplit(listed).path.startswith(expected):
         raise DraftValidationError("掲載種別とURLが一致しません")
