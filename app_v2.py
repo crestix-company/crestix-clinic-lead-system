@@ -39,7 +39,7 @@ from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvaria
 from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
 from src.master.data_paths import production_db_path
 
-NAV = ["かんたん操作","営業対象・出力","詳細設定"]
+NAV = ["かんたん操作","営業対象・出力","営業メール","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
@@ -1324,6 +1324,9 @@ def main():
         simple_workflow_ui(store, demo)
     elif nav == "営業対象・出力":
         simple_sales_ui(store, demo)
+    elif nav == "営業メール":
+        from src.outreach_ui import outreach_preview_page
+        outreach_preview_page()
     else:
         advanced_ui(store, demo)
 
