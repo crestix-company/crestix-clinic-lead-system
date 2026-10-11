@@ -174,7 +174,7 @@ class Researcher:
                     except Stopped:
                         raise
                     except Exception as exc:
-                        if check.get("identity_rule") != "NAME_ONLY_MISMATCH_AUTO_VERIFY":
+                        if check.get("identity_rule") not in {"NAME_ONLY_MISMATCH_AUTO_VERIFY", "PHONE_ADDRESS_AUTO_VERIFY"}:
                             raise
                         note = str(exc) if isinstance(exc, WebError) else "HP内容解析でエラーが発生しました。"
                         signals = retained_media_signals(record)
@@ -188,8 +188,8 @@ class Researcher:
                             hp_match_reason=check["reasons"],
                             hp_checked_at=now(),
                             hp_identity_pages=[page.url]+[p.url for p in support],
-                            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
-                            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+                            hp_identity_source="AUTO_PHONE_ADDRESS_MATCH",
+                            hp_identity_rule="PHONE_ADDRESS_AUTO_VERIFY",
                             hp_candidates=reviews,
                             crawl_errors=[{"url": page.url, "reason": note}],
                             hp_content_status="FETCH_FAILED",
@@ -206,7 +206,11 @@ class Researcher:
                     result.update(hp_url=page.url,hp_status="VERIFIED",hp_verified=True,hp_match_score=check["score"],
                                   hp_match_reason=check["reasons"],hp_checked_at=now(),hp_identity_pages=[page.url]+[p.url for p in support],
                                   crawl_errors=errors,research_status="SUCCESS",research_error="",hp_candidates=reviews)
-                    if check.get("identity_rule") == "NAME_ONLY_MISMATCH_AUTO_VERIFY":
+                    if check.get("identity_rule") == "PHONE_ADDRESS_AUTO_VERIFY":
+                        result["hp_identity_source"] = "AUTO_PHONE_ADDRESS_MATCH"
+                        result["hp_identity_rule"] = "PHONE_ADDRESS_AUTO_VERIFY"
+                    elif check.get("identity_rule") == "NAME_ONLY_MISMATCH_AUTO_VERIFY":
+                        # Backward compatibility for results created before v3.
                         result["hp_identity_source"] = "AUTO_NAME_ONLY_MISMATCH"
                         result["hp_identity_rule"] = "NAME_ONLY_MISMATCH_AUTO_VERIFY"
                     return result,[p.evidence() for p in pages]
