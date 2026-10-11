@@ -10,10 +10,21 @@ import sys
 
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
 PRODUCTION_ENV_FILE = "config/production_runtime.env"
+EMAIL_ENV_FILE = "config/email_research.env.local"
 RUNTIME_ENV_KEYS = {"SUPABASE_RUNTIME_DB_URL", "CLINIC_WRITE_BACKEND", "CLINIC_DATA_BACKEND"}
+EMAIL_ENV_KEYS = {
+    "EMAIL_RESEARCH_DB_URL",
+    "CLINIC_READONLY_DB_URL",
+    "EMAIL_AUTO_RUN_ENABLED",
+    "SERPAPI_API_KEY",
+    "EMAIL_SEARCH_PROVIDER",
+    "EMAIL_RESEARCH_DB_MODE",
+    "EMAIL_RESEARCH_COHORT_FILE",
+    "EMAIL_RESEARCH_WORKERS",
+}
 
 
-def _parse_env_file(path, *, require_private=False):
+def _parse_env_file(path, *, require_private=False, allowed_keys=None):
     if not path.exists():
         return {}
     if require_private and os.name != "nt" and path.stat().st_mode & 0o077:
@@ -29,7 +40,7 @@ def _parse_env_file(path, *, require_private=False):
         if len(parts) != 1 or "=" not in parts[0]:
             raise RuntimeError(f"{path}:{number} の形式を確認してください。")
         key, value = parts[0].split("=", 1)
-        if key not in RUNTIME_ENV_KEYS:
+        if key not in (RUNTIME_ENV_KEYS if allowed_keys is None else allowed_keys):
             raise RuntimeError(f"{path}:{number} に許可されていない設定があります。")
         parsed[key] = value
     return parsed
@@ -39,12 +50,24 @@ def load_runtime_env(root):
     """Load tracked production routing, then the ignored credential, without printing values."""
     parsed = _parse_env_file(root / PRODUCTION_ENV_FILE)
     parsed.update(_parse_env_file(root / RUNTIME_ENV_FILE, require_private=True))
+    email_db_config = _parse_env_file(root / EMAIL_ENV_FILE, require_private=True,
+                                      allowed_keys=EMAIL_ENV_KEYS)
+    if "EMAIL_AUTO_RUN_ENABLED" in email_db_config:
+        auto_run_value = email_db_config["EMAIL_AUTO_RUN_ENABLED"].strip().lower()
+        if auto_run_value not in {"true", "false"}:
+            raise RuntimeError("EMAIL_AUTO_RUN_ENABLEDはtrueまたはfalseで指定してください。")
+        email_db_config["EMAIL_AUTO_RUN_ENABLED"] = auto_run_value
+    parsed.update(email_db_config)
     selected_write = os.environ.get("CLINIC_WRITE_BACKEND", parsed.get("CLINIC_WRITE_BACKEND", "sqlite"))
     runtime_url = os.environ.get("SUPABASE_RUNTIME_DB_URL", parsed.get("SUPABASE_RUNTIME_DB_URL", ""))
     if selected_write.strip().lower() == "supabase" and not runtime_url:
         raise RuntimeError("Supabase WRITEにはSUPABASE_RUNTIME_DB_URLが必要です。admin URLへのfallbackは行いません。")
     for key, value in parsed.items():
-        os.environ.setdefault(key, value)
+        if key == "EMAIL_AUTO_RUN_ENABLED":
+            # The private local config is the explicit fail-closed switch.
+            os.environ[key] = value
+        else:
+            os.environ.setdefault(key, value)
     return bool(parsed)
 
 

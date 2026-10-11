@@ -39,7 +39,8 @@ def hp_human_review_card(store):
     summary = repo.summary()
     st.markdown("#### 🔍 HP要確認")
     cols = st.columns(4)
-    cols[0].metric("未レビュー", f"{summary['unreviewed']:,}件")
+    cols[0].metric("HP確認待ち", f"{summary['unreviewed']:,}件",
+                   help="HPの公式性や内容を人が確認する必要がある案件数です。候補が複数あるClinicは複数件として数えます。")
     cols[1].metric("高確度", f"{summary['HIGH']:,}件")
     cols[2].metric("中確度", f"{summary['MEDIUM']:,}件")
     cols[3].metric("低確度", f"{summary['LOW']:,}件")

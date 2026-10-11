@@ -25,6 +25,11 @@ from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.repository.write_backend import write_repositories_for
 from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
+from src.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
+from src.email_research_ui import (
+    email_research_page, email_clinic_status_panel, email_auto_research_card,
+    email_research_sidebar_status,
+)
 from src.dental_sales_tags_ui import dental_sales_tags_page
 from src.master.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
@@ -39,7 +44,7 @@ from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvaria
 from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
 from src.master.data_paths import production_db_path
 
-NAV = ["かんたん操作","営業対象・出力","詳細設定"]
+NAV = ["かんたん操作","営業対象・出力","Email調査","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
@@ -105,7 +110,7 @@ def show_web_research_metrics(store):
         return
     definitions = [
         ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
-        ("Webサイト調査完了", "researched", "登録されたWebサイトの取得・解析を完了し、HP ABC判定と治療カテゴリ判定まで完了した医院数です。"),
+        ("Webサイト調査完了", "researched", "公式HPの内容確認まで完了したクリニック数です。"),
         ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
         ("Webサイト未調査", "not_researched", "非アクティブ医院も含む、WebサイトURL登録済み・自動調査未完了の参考件数です。Step 4の「HP調査可能・未調査」とは分母が異なります。"),
         ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
@@ -115,6 +120,38 @@ def show_web_research_metrics(store):
         columns = st.columns(3)
         for column, (label, key, help_text) in zip(columns, definitions[start:start + 3]):
             column.metric(label, f"{counts[key]:,}件", help=help_text)
+
+
+def show_email_research_metrics(store):
+    """Compact operational Email KPIs; values are intentionally distinct from raw candidates."""
+    from src.repository.email_database import email_repositories_for_ui, email_database_status
+
+    repositories = email_repositories_for_ui()
+    labels = [
+        ("Email取得済み", "email_obtained", "営業利用できるメールアドレスが確認できたクリニック数です。採用専用・予約専用などのメールは含みません。"),
+        ("Email確認待ち", "review_clinics", "AIだけでは利用可否を確定できなかったメールがあります。メール確認画面から判定してください。Clinic単位の件数です。"),
+        ("Email未調査", "not_researched", "まだメールアドレスの自動調査を行っていないクリニック数です。HP確認済み・公式URLありの対象だけを数えます。"),
+        ("Email調査済み", "email_researched", "Email調査が完了し、Emailあり・確認待ち・Emailなしのいずれかになったクリニック数です。エラーは含みません。"),
+    ]
+    repo = repositories.email_research if repositories is not None else None
+    human_repo = repositories.email_human_review if repositories is not None else None
+    if repo is None or not repo.available():
+        columns = st.columns(4)
+        for column, (label, _, definition) in zip(columns, labels):
+            column.metric(label, "未接続", help=definition)
+        st.caption(email_database_status().message)
+        return
+    summary = repo.summary()
+    human_summary = human_repo.summary() if human_repo is not None and human_repo.available() else {}
+    values = {
+        "email_obtained": summary.get("email_obtained", summary.get("primary", 0)),
+        "review_clinics": human_summary.get("unreviewed_clinics", human_summary.get("unreviewed", 0)),
+        "not_researched": summary.get("not_researched", summary.get("remaining", 0)),
+        "email_researched": summary.get("email_researched", 0),
+    }
+    columns = st.columns(4)
+    for column, (label, key, definition) in zip(columns, labels):
+        column.metric(label, f"{values[key]:,}件", help=definition)
 
 
 AUTO_HP_PROGRESS_REFRESH_SECONDS = 5
@@ -409,6 +446,19 @@ def show_funnel(store,filters):
     st.dataframe(frame,hide_index=True,width="stretch")
 
 
+def _email_status_label(email_status):
+    if not email_status:
+        return "未調査"
+    if email_status.get("has_primary"):
+        return "Primary"
+    status = email_status.get("research_status")
+    if status == "REVIEW":
+        return "要確認"
+    if status in {"NO_EMAIL_FOUND", "ERROR"}:
+        return "取得なし"
+    return "未調査"
+
+
 def display_rows(records):
     rows = []
     for r in records:
@@ -428,7 +478,8 @@ def display_rows(records):
             "治療カテゴリ":" / ".join(r.get("website_treatment_categories") or r.get("treatment_categories",[])),
             "治療カテゴリ状態":TREATMENT_STATUS_DISPLAY_LABELS.get(r.get("treatment_status"),"不明"),
             "集客投資シグナル数":r.get("marketing_signal_count",0),
-            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))})
+            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[])),
+            "Email Status":_email_status_label(r.get("email_status"))})
     return pd.DataFrame(rows)
 
 
@@ -443,6 +494,7 @@ def details(store,cid):
         st.link_button("公式HPを開く",r["hp_url"])
     if r.get("epark_url"):
         st.link_button("EPARKを開く",r["epark_url"])
+    email_clinic_status_panel(store, cid)
     st.write("HP確認："+" / ".join(r.get("hp_match_reason",[]) or [HP_LABELS.get(r.get("hp_status"),"未調査")]))
     st.write(f"HP ABC：{r.get('effective_hp_rank','D')}（{r.get('effective_rank_reason','')}）")
     reasons = r.get("hp_rank_reasons",[])
@@ -529,6 +581,12 @@ def listing(store,filters,prefix="list"):
         statuses = store.treatment_status_for_ids([r["id"] for r in records])
         for r in records:
             r["treatment_status"] = statuses.get(r["id"])
+        from src.repository.email_database import email_repositories_for_ui
+        email_repos = email_repositories_for_ui()
+        email_repo = email_repos.email_research if email_repos is not None else None
+        email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
+        for r in records:
+            r["email_status"] = email_statuses.get(r["id"])
         st.dataframe(display_rows(records),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
         choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
         if choice:
@@ -744,6 +802,7 @@ def simple_workflow_ui(store, demo):
     cols[0].metric("厚生局データ", f"{metrics.get('厚生局取込レコード',0):,}件")
     cols[1].metric("既存UUIDあり", f"{metrics.get('既存UUIDあり',0):,}件", help="既存Comdeskデータと紐付いている医院数です。")
     show_web_research_metrics(store)
+    show_email_research_metrics(store)
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
@@ -898,6 +957,8 @@ def simple_workflow_ui(store, demo):
             st.rerun()
 
     hp_human_review_card(store)
+    email_human_review_card(store)
+    email_auto_research_card(store, demo=demo)
 
     if current:
         st.write("現在の調査")
@@ -1126,7 +1187,7 @@ def advanced_ui(store, demo):
     st.caption("普段は使わない設定・確認機能です。")
     section = st.selectbox(
         "開く画面",
-        ["マスター管理", "自動情報収集（詳細）", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "歯科営業タグ", "ダッシュボード"],
+        ["マスター管理", "自動情報収集（詳細）", "メール調査", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "Email Human Review", "歯科営業タグ", "ダッシュボード"],
         key="advanced_section",
     )
 
@@ -1134,12 +1195,16 @@ def advanced_ui(store, demo):
         import_ui(store, demo)
     elif section == "自動情報収集（詳細）":
         research_ui(store, demo)
+    elif section == "メール調査":
+        email_research_page(store)
     elif section == "営業対象フィルター（詳細）":
         sales_ui(store)
     elif section == "要確認・設定":
         settings_ui(store)
     elif section == "HP Human Review":
         hp_human_review_page(store)
+    elif section == "Email Human Review":
+        email_human_review_page(store)
     elif section == "歯科営業タグ":
         dental_sales_tags_page(store)
     else:
@@ -1313,8 +1378,12 @@ def main():
     write_repositories_for(store).clinics.refresh_age_model()
 
     hp_human_review_sidebar(store)
+    email_research_sidebar_status(store)
+    email_human_review_sidebar(store)
     if st.session_state.pop("_open_hp_human_review_dialog", False):
         hp_human_review_dialog(store)
+    if st.session_state.pop("_open_email_human_review_dialog", False):
+        email_human_review_dialog(store)
 
     if demo:
         load_demo(store)
@@ -1324,6 +1393,8 @@ def main():
         simple_workflow_ui(store, demo)
     elif nav == "営業対象・出力":
         simple_sales_ui(store, demo)
+    elif nav == "Email調査":
+        email_research_page(store)
     else:
         advanced_ui(store, demo)
 
