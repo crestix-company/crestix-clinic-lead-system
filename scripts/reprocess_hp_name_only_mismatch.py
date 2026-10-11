@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One-time backfill for legacy HP REVIEW rows covered by the new identity rule.
+"""One-time backfill for legacy HP REVIEW rows covered by phone+address identity verification.
 
 Default is DRY RUN. This does not create Human Review labels.
 Use --apply to fetch/crawl the saved candidate URL and replace the legacy canonical result.
@@ -26,7 +26,7 @@ def main(argv=None):
     if repo is None or not repo.available():
         raise RuntimeError("HP Human Review repository is unavailable")
 
-    rows = repo.legacy_name_only_mismatch_candidates(limit=max(1, int(args.limit)))
+    rows = repo.legacy_phone_address_match_candidates(limit=max(1, int(args.limit)))
     preview = [
         {
             "clinic_id": row["clinic_id"],

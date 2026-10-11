@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-RULE_VERSION = "hp-identity-v2-name-or-(phone+address+manager)"
+RULE_VERSION = "hp-identity-v3-name-or-(phone+address)"
 
 DECISION_LABELS = {
     "OFFICIAL": "公式HPで間違いない",
@@ -68,8 +68,9 @@ def review_priority(snapshot: dict) -> str:
 def auto_accept_without_human(snapshot: dict) -> bool:
     """User-approved precision exception for old REVIEW rows.
 
-    If clinic name is the only failed identity feature while phone, address and manager
-    all match, Human Review is unnecessary. ACCESS_RESTRICTED remains a separate case.
+    If clinic name does not match but phone and address both match, Human Review is
+    unnecessary. Manager-name match is supportive evidence only. ACCESS_RESTRICTED
+    remains a separate case.
     """
     if str(snapshot.get("content_status") or "") == "ACCESS_RESTRICTED":
         return False
@@ -78,7 +79,6 @@ def auto_accept_without_human(snapshot: dict) -> bool:
         and not bool(snapshot.get("name_match"))
         and bool(snapshot.get("phone_match"))
         and bool(snapshot.get("address_match"))
-        and bool(snapshot.get("manager_match"))
     )
 
 
@@ -141,7 +141,7 @@ def review_snapshot(result: dict | None) -> dict:
     snapshot["bucket"] = review_bucket(snapshot)
     snapshot["auto_accept_without_human"] = auto_accept_without_human(snapshot)
     snapshot["auto_accept_reason"] = (
-        "医院名のみ不一致・電話番号/住所/院長名一致"
+        "医院名不一致でも電話番号/住所一致"
         if snapshot["auto_accept_without_human"] else ""
     )
     return snapshot
@@ -151,7 +151,7 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
     """One-time backfill of a legacy REVIEW covered by the new identity rule.
 
     No Human Review row or user-facing workflow category is created. Identity was already
-    established by the saved phone/address/manager evidence. A later content-fetch failure
+    established by the saved phone/address evidence. A later content-fetch failure
     therefore remains AUTO VERIFIED and is persisted as a content failure, not REVIEW.
     """
     from src.enrichment.hp_analysis import is_official_candidate
@@ -182,10 +182,10 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
         # explicitly automatic, so remove that caller-specific marker before persistence.
         result.pop("human_verified_source_url", None)
         result.update(
-            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
-            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+            hp_identity_source="AUTO_PHONE_ADDRESS_MATCH",
+            hp_identity_rule="PHONE_ADDRESS_AUTO_VERIFY",
             auto_verified_source_url=url,
-            hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
+            hp_match_reason=["医院名不一致でも電話番号/住所一致で自動本人確認"],
             hp_content_note="新しい本人確認ルールによりHuman Review不要としてHP内容を解析しました。",
         )
         status = "SUCCESS"
@@ -201,10 +201,10 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
             final_url=url,
             hp_checked_at=now(),
             hp_identity_pages=[url],
-            hp_identity_source="AUTO_NAME_ONLY_MISMATCH",
-            hp_identity_rule="NAME_ONLY_MISMATCH_AUTO_VERIFY",
+            hp_identity_source="AUTO_PHONE_ADDRESS_MATCH",
+            hp_identity_rule="PHONE_ADDRESS_AUTO_VERIFY",
             auto_verified_source_url=url,
-            hp_match_reason=["医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認"],
+            hp_match_reason=["医院名不一致でも電話番号/住所一致で自動本人確認"],
             hp_candidates=[],
             hp_content_status="FETCH_FAILED",
             hp_content_note="本人確認済みですが、HP本文の取得または解析に失敗しました。",

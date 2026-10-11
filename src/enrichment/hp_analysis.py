@@ -158,17 +158,18 @@ def identity(record, page, official=True):
     reasons = [s for ok,s in [(phone_ok,"電話番号一致"),(name_ok,"医院名がページ見出しに一致"),(addr_ok,"住所一致"),(person_ok,"院長名一致")] if ok]
     # Precision-first identity rule:
     # - canonical path: clinic name + (phone OR address)
-    # - user-approved exception: clinic name is the ONLY mismatch, while phone + address +
-    #   manager name all match. This pattern is strong enough to skip Human Review.
-    name_only_mismatch_auto_verified = bool((not name_ok) and phone_ok and addr_ok and person_ok)
-    verified = bool((name_ok and (phone_ok or addr_ok)) or name_only_mismatch_auto_verified)
-    if name_only_mismatch_auto_verified:
-        reasons.append("医院名のみ不一致・電話番号/住所/院長名一致で自動本人確認")
+    # - user-approved exception: when clinic name does not match, exact phone + address
+    #   together are sufficient to establish the clinic identity. Manager-name match is
+    #   supportive evidence only and is not required for this exception.
+    phone_address_auto_verified = bool((not name_ok) and phone_ok and addr_ok)
+    verified = bool((name_ok and (phone_ok or addr_ok)) or phone_address_auto_verified)
+    if phone_address_auto_verified:
+        reasons.append("医院名不一致でも電話番号/住所一致で自動本人確認")
     return {"verified":verified,"score":50*phone_ok+40*name_ok+30*addr_ok+20*person_ok,
             "reasons":reasons or ["医院の本人確認情報が不足"],
             "phone_match":phone_ok,"name_match":name_ok,"address_match":addr_ok,
             "manager_match":person_ok,
-            "identity_rule":"NAME_ONLY_MISMATCH_AUTO_VERIFY" if name_only_mismatch_auto_verified else "STANDARD"}
+            "identity_rule":"PHONE_ADDRESS_AUTO_VERIFY" if phone_address_auto_verified else "STANDARD"}
 
 
 def keyword_match(keyword, text):
