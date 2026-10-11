@@ -73,6 +73,21 @@ def test_external_listing_is_never_auto_verified():
     )
     assert check["verified"] is False
 
+def test_phone_address_exception_rejects_booking_or_directory_surfaces():
+    for url in (
+        "https://ssc10.doctorqube.com/clinic/",
+        "https://helios489.com/sitekj/facility/0001",
+        "https://www.minnanokaigo.com/facility/024-123/",
+        "https://sogo-medical-guide.jp/archives/123",
+        "https://www.nihonbashi-med.com/cgi-bin/cl_disp_clinic.cgi?clinic=58",
+    ):
+        check = identity(_record(), _page(manager=False, url=url))
+        assert check["phone_match"] is True
+        assert check["address_match"] is True
+        assert check["verified"] is False
+        assert check["identity_rule"] == "STANDARD"
+
+
 
 def test_legacy_review_snapshot_marks_name_only_mismatch_auto_accept():
     result = {
@@ -112,6 +127,25 @@ def test_legacy_phone_address_without_manager_auto_accepts():
     }
     snapshot = review_snapshot(result)
     assert snapshot["auto_accept_without_human"] is True
+
+
+def test_legacy_phone_address_directory_candidate_stays_human_review():
+    result = {
+        "research_status": "REVIEW",
+        "hp_status": "REVIEW",
+        "hp_checked_at": "2026-10-08T10:00:00+00:00",
+        "hp_candidates": [{
+            "url": "https://www.minnanokaigo.com/facility/024-123/",
+            "score": 80,
+            "reasons": ["電話番号一致", "住所一致"],
+            "verified": False,
+            "name_match": False,
+            "phone_match": True,
+            "address_match": True,
+        }],
+    }
+    snapshot = review_snapshot(result)
+    assert snapshot["auto_accept_without_human"] is False
 
 
 def test_legacy_reprocessing_is_not_human_review():
@@ -322,7 +356,7 @@ def test_legacy_backfill_rejects_non_official_candidate_before_writes(monkeypatc
     })()
     monkeypatch.setattr(backend, "write_repositories_for", lambda _store: repos)
 
-    with pytest.raises(ValueError, match="公式HP候補"):
+    with pytest.raises(ValueError, match="自動確認用URL安全条件"):
         reanalyze_auto_verified_hp(
             _Store(), clinic_id=123, selected_url="https://job-medley.com/facility/1234/"
         )
