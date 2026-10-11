@@ -74,8 +74,11 @@ def auto_accept_without_human(snapshot: dict) -> bool:
     """
     if str(snapshot.get("content_status") or "") == "ACCESS_RESTRICTED":
         return False
+    from src.enrichment.hp_analysis import is_phone_address_auto_verify_candidate
+    url = str(snapshot.get("best_candidate_url") or "")
     return bool(
-        snapshot.get("best_candidate_url")
+        url
+        and is_phone_address_auto_verify_candidate(url)
         and not bool(snapshot.get("name_match"))
         and bool(snapshot.get("phone_match"))
         and bool(snapshot.get("address_match"))
@@ -154,7 +157,7 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
     established by the saved phone/address evidence. A later content-fetch failure
     therefore remains AUTO VERIFIED and is persisted as a content failure, not REVIEW.
     """
-    from src.enrichment.hp_analysis import is_official_candidate
+    from src.enrichment.hp_analysis import is_phone_address_auto_verify_candidate
     from src.enrichment.researcher import empty_hp_result, research_human_verified_hp
     from src.enrichment.safe_web import WebError
     from src.master.jobs import _hp_ledger_payload
@@ -169,8 +172,8 @@ def reanalyze_auto_verified_hp(store, *, clinic_id, selected_url):
     url = str(selected_url or "").strip()
     if not url:
         raise ValueError("自動再解析する候補URLがありません。")
-    if not is_official_candidate(url):
-        raise ValueError("候補URLが公式HP候補の安全条件を満たしていません。")
+    if not is_phone_address_auto_verify_candidate(url):
+        raise ValueError("候補URLが電話＋住所一致の自動確認用URL安全条件を満たしていません。")
 
     record = store.get(cid)
     saved = repositories.research.get_saved_research(cid)
