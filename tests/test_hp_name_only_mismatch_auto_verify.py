@@ -123,7 +123,7 @@ def test_legacy_reprocessing_is_not_human_review():
 
 def test_comdesk_export_accepts_auto_reverified_review_history():
     source = Path("src/repository/runtime_store.py").read_text(encoding="utf-8")
-    assert "AUTO_PHONE_ADDRESS_MATCH" in source
+    assert "AUTO_NAME_ONLY_MISMATCH" in source
     assert "AUTO_PHONE_ADDRESS_MATCH" in source
     assert "research.research_results rr" in source
 
@@ -162,6 +162,7 @@ def test_legacy_candidate_is_not_hidden_from_review_queue_before_backfill(monkey
     monkeypatch.setattr(repo, "available", lambda: True)
     monkeypatch.setattr(repo, "_current_rows", lambda: [row])
 
+    assert repo.legacy_phone_address_match_candidates(limit=None)[0]["clinic_id"] == 123
     assert repo.legacy_name_only_mismatch_candidates(limit=None)[0]["clinic_id"] == 123
     assert repo.queue(limit=None)[0]["clinic_id"] == 123
 
@@ -183,7 +184,7 @@ class _Fetcher:
 def test_new_research_auto_verifies_and_continues_normal_content_analysis(monkeypatch):
     import src.enrichment.researcher as researcher_module
 
-    page = _page()
+    page = _page(manager=False)
     monkeypatch.setattr(researcher_module, "crawl", lambda *_args: ([page], []))
     monkeypatch.setattr(
         researcher_module,
@@ -208,7 +209,7 @@ def test_new_research_content_failure_keeps_auto_verified_identity(monkeypatch):
     import src.enrichment.researcher as researcher_module
     from src.enrichment.safe_web import WebError
 
-    page = _page()
+    page = _page(manager=False)
 
     def fail_crawl(*_args):
         raise WebError("HTTP 503")
