@@ -80,6 +80,7 @@ def test_phone_address_exception_rejects_booking_or_directory_surfaces():
         "https://www.minnanokaigo.com/facility/024-123/",
         "https://sogo-medical-guide.jp/archives/123",
         "https://www.nihonbashi-med.com/cgi-bin/cl_disp_clinic.cgi?clinic=58",
+        "https://www.kamochan.jp/shop/detail/0013/",
     ):
         check = identity(_record(), _page(manager=False, url=url))
         assert check["phone_match"] is True
