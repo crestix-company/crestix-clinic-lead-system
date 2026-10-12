@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from psycopg.types.json import Jsonb
 
 from src.master.email_sales_eligibility import evaluate_sales_eligibility
+from src.repository.email_research_repository import _retry_closed_read_connection
 
 
 TABLE_NAME = "provenance.email_human_reviews"
@@ -21,20 +23,87 @@ def _as_dict(value):
 
 
 class SupabaseEmailHumanReviewRepository:
-    def __init__(self, conn):
+    def __init__(self, conn, *, connect_fn=None):
         self._conn = conn
+        # This repository is handed the same physical connection as
+        # SupabaseEmailResearchRepository (see email_database._bundle_for_connection),
+        # but each reconnects independently -- a rebuild here does not need to coordinate
+        # with the sibling repository, it only needs its own self._conn to stay usable.
+        self._connect_fn = connect_fn
+        self._reconnect_lock = threading.Lock()
+
+    def _connection_is_dead(self) -> bool:
+        return bool(getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False))
+
+    def _is_retryable_connection_error(self, exc) -> bool:
+        try:
+            import psycopg
+        except ImportError:
+            return False
+        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+
+    def _safe_rollback(self) -> None:
+        try:
+            if not getattr(self._conn, "closed", False):
+                self._conn.rollback()
+        except Exception:
+            pass
+
+    def _reconnect_read(self) -> None:
+        with self._reconnect_lock:
+            if not self._connection_is_dead():
+                return
+            # Deliberately never call old_conn.close() here: another thread may still
+            # hold its own local reference to this same object mid-query (Streamlit
+            # fragments on independent run_every timers share this repository). Closing
+            # it out from under that thread would turn a transient disconnect into a
+            # second, self-inflicted one. It is already dead/unusable either way, so it
+            # is simply dropped and left for garbage collection once nothing references it.
+            import os
+            from src.repository.email_database import EMAIL_RESEARCH_DB_URL_ENV_VAR
+            url = (os.environ.get(EMAIL_RESEARCH_DB_URL_ENV_VAR) or "").strip()
+            if not url:
+                raise RuntimeError("Email Research DB接続情報(環境変数)が見つからないため再接続できません。")
+            connect_fn = self._connect_fn
+            if connect_fn is None:
+                from src.repository.supabase_adapter import connect as connect_fn
+            new_conn = connect_fn(url, autocommit=False)
+            with new_conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            new_conn.commit()
+            self._conn = new_conn
+
+    def _ensure_read_connection(self) -> None:
+        if self._connection_is_dead():
+            self._reconnect_read()
 
     def available(self):
+        self._ensure_read_connection()
         try:
             with self._conn.cursor() as cur:
                 cur.execute("SELECT to_regclass(%s)", (TABLE_NAME,))
                 exists = cur.fetchone()[0] is not None
             self._conn.commit()
             return exists
-        except Exception:
-            self._conn.rollback()
-            raise
+        except Exception as exc:
+            self._safe_rollback()
+            if not self._is_retryable_connection_error(exc):
+                raise
+            try:
+                self._reconnect_read()
+            except Exception:
+                return False
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT to_regclass(%s)", (TABLE_NAME,))
+                    exists = cur.fetchone()[0] is not None
+                self._conn.commit()
+                return exists
+            except Exception:
+                self._safe_rollback()
+                return False
 
+    @_retry_closed_read_connection
     def queue(self, *, include_reviewed=False, limit=200, clinic_id=None):
         if not self.available():
             return []
@@ -80,9 +149,10 @@ class SupabaseEmailHumanReviewRepository:
                 row["reviewed"] = bool(row.get("human_review_id"))
             return rows
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def summary(self):
         if not self.available():
             return {"available": False, "unreviewed": 0, "reviewed": 0}
@@ -110,7 +180,7 @@ class SupabaseEmailHumanReviewRepository:
                 "unreviewed_clinics": row[2],
             }
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def save_review(self, *, candidate_id, human_decision, reviewer, review_note="") -> int:
@@ -195,9 +265,10 @@ class SupabaseEmailHumanReviewRepository:
             self._conn.commit()
             return review_id
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def training_rows(self):
         if not self.available():
             return []
@@ -221,5 +292,5 @@ class SupabaseEmailHumanReviewRepository:
             self._conn.commit()
             return rows
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise

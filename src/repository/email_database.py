@@ -143,18 +143,20 @@ def build_email_repositories(*, environ=None, connect_fn=None):
     # construction entirely, never silently resolve to the unrestricted Production pool.
     from src.repository.email_cohort import load_cohort_from_env
     cohort = load_cohort_from_env(env)
-    return _bundle_for_connection(conn, same_database=same_database, cohort=cohort), status
+    return _bundle_for_connection(conn, same_database=same_database, cohort=cohort,
+                                   connect_fn=connect_fn), status
 
 
-def _bundle_for_connection(conn, *, same_database: bool = False, cohort=None):
+def _bundle_for_connection(conn, *, same_database: bool = False, cohort=None, connect_fn=None):
     from src.repository.email_research_repository import SupabaseEmailResearchRepository
     from src.repository.email_human_review_repository import SupabaseEmailHumanReviewRepository
     from src.repository.write_contracts import WriteRepositories
 
     return WriteRepositories(
         clinics=None, research=None, provenance=None, settings=None, jobs=None, search=None,
-        email_research=SupabaseEmailResearchRepository(conn, same_database=same_database, cohort=cohort),
-        email_human_review=SupabaseEmailHumanReviewRepository(conn),
+        email_research=SupabaseEmailResearchRepository(conn, same_database=same_database, cohort=cohort,
+                                                        connect_fn=connect_fn),
+        email_human_review=SupabaseEmailHumanReviewRepository(conn, connect_fn=connect_fn),
     )
 
 
