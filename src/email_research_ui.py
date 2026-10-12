@@ -1,6 +1,7 @@
 """Read/control panel for the Email Auto Research subsystem."""
 from __future__ import annotations
 
+from functools import wraps
 import streamlit as st
 import os
 from pathlib import Path
@@ -17,6 +18,29 @@ EMAIL_RUN_LABELS = {
     "RUNNING": "実行中", "PAUSED": "一時停止", "STOPPED": "停止",
     "COMPLETED": "完了", "ERROR": "エラー", "STOPPING": "停止中",
 }
+
+DB_CONNECTION_LOST_MESSAGE = "Email Research DBとの接続が一時的に切れました。自動再接続を試行します。"
+
+
+def _fail_soft_on_db_loss(func):
+    """Last line of defense: a fragment must never show a raw traceback for a transient
+    DB disconnect. The repository layer already retries reads once internally; this only
+    catches the rare case where that retry also failed (or a non-Email-Research call, such
+    as the Human Review repository sharing the same connection, hit the same error)."""
+    @wraps(func)
+    def wrapped(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as exc:
+            try:
+                import psycopg
+            except ImportError:
+                raise
+            if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+                st.warning(DB_CONNECTION_LOST_MESSAGE)
+                return None
+            raise
+    return wrapped
 
 
 @st.cache_resource
@@ -42,6 +66,7 @@ def _read_email_targets():
         reader._conn.close()
 
 
+@_fail_soft_on_db_loss
 def _email_auto_research_controls(store, *, demo=False):
     """Compact live controls for Email's independent HP-verified-URL consumer."""
     repositories = email_repositories_for_ui()
@@ -125,6 +150,7 @@ def email_auto_research_card(store, *, demo=False):
 
 
 @st.fragment(run_every="10s")
+@_fail_soft_on_db_loss
 def email_research_sidebar_status(store):
     """Compact always-visible sidebar status, mirroring hp/email human review sidebar widgets."""
     repositories = email_repositories_for_ui()
@@ -208,6 +234,7 @@ def _primary_listing_table(repo):
 
 
 @st.fragment(run_every="5s")
+@_fail_soft_on_db_loss
 def email_research_page(store):
     st.header("メール調査")
     st.caption("ホームページ自動調査とは独立して動き、HP確認済み・公式URLありのClinicを後から処理します。")
@@ -269,6 +296,7 @@ def email_research_page(store):
     _primary_listing_table(repo)
 
 
+@_fail_soft_on_db_loss
 def email_clinic_status_panel(store, clinic_id):
     repositories = email_repositories_for_ui()
     if repositories is None:

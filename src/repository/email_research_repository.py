@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from functools import wraps
 import json
 import re
+import threading
 import time
 import unicodedata
 import uuid
@@ -29,6 +31,28 @@ VALID_RESEARCH_STATUSES = frozenset({
 })
 
 
+def _retry_closed_read_connection(method):
+    """Retry one read operation after rebuilding a stale Email Research connection.
+
+    Mirrors ``src.repository.runtime_store._retry_closed_read_connection``: the UI caches
+    this repository for the process lifetime (``email_repositories_for_ui()``), so a direct
+    Postgres connection can be closed by the network or server while the app stays alive.
+    Reads are safe to retry once; write methods never use this decorator -- a write must
+    not be silently replayed against a connection whose previous outcome is unknown.
+    """
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        self._ensure_read_connection()
+        try:
+            return method(self, *args, **kwargs)
+        except Exception as exc:
+            if not self._is_retryable_connection_error(exc):
+                raise
+            self._reconnect_read()
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 def utc_now():
     return datetime.now(timezone.utc)
 
@@ -49,7 +73,8 @@ TERMINAL_RESEARCH_STATUSES = frozenset({"FOUND", "REVIEW", "NO_EMAIL_FOUND", "ER
 
 
 class SupabaseEmailResearchRepository:
-    def __init__(self, conn, *, same_database: bool = False, cohort: frozenset[int] | None = None):
+    def __init__(self, conn, *, same_database: bool = False, cohort: frozenset[int] | None = None,
+                 connect_fn=None):
         self._conn = conn
         # same_database=True: email_research.clinic_targets is a live view over the
         # Clinic/HP source tables (see email_research_schema.sql's same_database block),
@@ -63,12 +88,70 @@ class SupabaseEmailResearchRepository:
         # (the default) is the normal, continuous Auto Run path -- every cohort check
         # below is skipped entirely and behavior is unchanged from before this existed.
         self._cohort = frozenset(cohort) if cohort is not None else None
+        # Injectable only for tests; production always lazily imports the real connector
+        # so a fake connection factory never leaks into the default code path.
+        self._connect_fn = connect_fn
+        # Multiple Streamlit sessions can share this process-cached repository and trigger
+        # concurrent fragment reruns; only one of them may rebuild self._conn at a time.
+        self._reconnect_lock = threading.Lock()
 
     def _check_cohort(self, clinic_id: int) -> None:
         if self._cohort is not None and int(clinic_id) not in self._cohort:
             raise ValueError(f"Canary cohort外のclinic_id({clinic_id})への書き込みを拒否しました。")
 
+    def _connection_is_dead(self) -> bool:
+        return bool(getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False))
+
+    def _is_retryable_connection_error(self, exc) -> bool:
+        try:
+            import psycopg
+        except ImportError:
+            return False
+        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+
+    def _safe_rollback(self) -> None:
+        """Never let a rollback on an already-dead connection mask the real error."""
+        try:
+            if not getattr(self._conn, "closed", False):
+                self._conn.rollback()
+        except Exception:
+            pass
+
+    def _reconnect_read(self) -> None:
+        """Rebuild self._conn from the configured Email Research DB URL.
+
+        Secrets are never logged: the URL is read once from the environment, handed
+        straight to the connector, and never captured in an exception message or log line.
+        """
+        with self._reconnect_lock:
+            if not self._connection_is_dead():
+                return
+            # Deliberately never call old_conn.close() here: another thread may still
+            # hold its own local reference to this same object mid-query (Streamlit
+            # fragments on independent run_every timers share this repository). Closing
+            # it out from under that thread would turn a transient disconnect into a
+            # second, self-inflicted one. It is already dead/unusable either way, so it
+            # is simply dropped and left for garbage collection once nothing references it.
+            import os
+            from src.repository.email_database import EMAIL_RESEARCH_DB_URL_ENV_VAR
+            url = (os.environ.get(EMAIL_RESEARCH_DB_URL_ENV_VAR) or "").strip()
+            if not url:
+                raise RuntimeError("Email Research DB接続情報(環境変数)が見つからないため再接続できません。")
+            connect_fn = self._connect_fn
+            if connect_fn is None:
+                from src.repository.supabase_adapter import connect as connect_fn
+            new_conn = connect_fn(url, autocommit=False)
+            with new_conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            new_conn.commit()
+            self._conn = new_conn
+
+    def _ensure_read_connection(self) -> None:
+        if self._connection_is_dead():
+            self._reconnect_read()
+
     def available(self) -> bool:
+        self._ensure_read_connection()
         try:
             with self._conn.cursor() as cur:
                 cur.execute(
@@ -78,9 +161,26 @@ class SupabaseEmailResearchRepository:
                 row = cur.fetchone()
             self._conn.commit()
             return bool(row and all(value is not None for value in row))
-        except Exception:
-            self._conn.rollback()
-            raise
+        except Exception as exc:
+            self._safe_rollback()
+            if not self._is_retryable_connection_error(exc):
+                raise
+            try:
+                self._reconnect_read()
+            except Exception:
+                return False
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT to_regclass(%s),to_regclass(%s),to_regclass(%s)",
+                        (CANDIDATE_TABLE, STATUS_TABLE, AUTO_RUN_TABLE),
+                    )
+                    row = cur.fetchone()
+                self._conn.commit()
+                return bool(row and all(value is not None for value in row))
+            except Exception:
+                self._safe_rollback()
+                return False
 
     @staticmethod
     def _candidate_payload(candidate: dict, *, research_run_id: str = "") -> dict:
@@ -203,9 +303,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return candidate_id
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def candidate(self, candidate_id: int) -> dict | None:
         try:
             with self._conn.cursor() as cur:
@@ -222,7 +323,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return result
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def sync_targets(self, targets, *, limit: int | None = None) -> int:
@@ -310,7 +411,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return int(count or 0)
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def _sync_targets_same_database(self) -> int:
@@ -341,7 +442,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return int(count or 0)
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def claim_next(self, *, worker_id: str, run_id: str, lease_seconds: int = 300) -> dict | None:
@@ -432,7 +533,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return result
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def renew_claim(self, *, clinic_id: int, claim_token: str, lease_seconds: int = 300) -> bool:
@@ -450,7 +551,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return updated
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def complete_claim(
@@ -528,7 +629,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return {"candidate_ids": ids, "primary_email_candidate_id": primary_id}
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def fail_claim(self, *, clinic_id: int, claim_token: str, error: str, metrics: dict | None = None):
@@ -537,6 +638,7 @@ class SupabaseEmailResearchRepository:
             error=error, metrics=metrics,
         )
 
+    @_retry_closed_read_connection
     def cohort_pending_count(self) -> int | None:
         """None outside Canary mode (self._cohort is None) -- EmailAutoRunner uses that
         to distinguish "not a Canary run" from "Canary run, 0 remaining". Otherwise the
@@ -558,9 +660,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return len(self._cohort) - terminal_count
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def cohort_batch_summary(self) -> dict | None:
         """Cohort-scoped terminal breakdown for the Email Research UI's batch progress
         card. None outside Canary mode (self._cohort is None), distinct from summary()
@@ -591,9 +694,10 @@ class SupabaseEmailResearchRepository:
                 "no_email_found": int(no_email or 0), "error": int(error or 0),
             }
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def status_for_ids(self, clinic_ids: list[int]) -> dict[int, dict]:
         """One bulk lookup for a Clinic listing page's Email Status column -- never
         call per-row; mirrors the existing treatment_status_for_ids bulk pattern."""
@@ -613,9 +717,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return {int(row[0]): {"research_status": row[1], "has_primary": bool(row[2])} for row in rows}
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def primary_listing(self, *, limit: int = 500) -> list[dict]:
         """Clinic-unit listing of usable Primary Emails only (1 row per Clinic, the
         guard-selected primary_email_candidate_id -- never a raw Candidate count)."""
@@ -643,7 +748,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return [dict(zip(columns, row)) for row in rows]
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def set_primary_candidate(self, *, clinic_id: int, candidate_id: int | None) -> None:
@@ -672,9 +777,10 @@ class SupabaseEmailResearchRepository:
                     raise ValueError("Clinic Email Statusが見つかりません。")
             self._conn.commit()
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def summary(self) -> dict:
         if not self.available():
             return {"available": False, "total": 0, "processed": 0, "remaining": 0}
@@ -784,9 +890,10 @@ class SupabaseEmailResearchRepository:
                 "query2_candidates": query_values[4],
             }
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def clinic_status(self, clinic_id: int) -> dict | None:
         """Read the independent Email status and selected Primary for a Clinic detail view."""
         try:
@@ -826,9 +933,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return result
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def researched_clinic_ids(self) -> set[int]:
         """Historical/active work exclusions, sourced only from the Email sidecar."""
         try:
@@ -849,9 +957,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return values
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def latest_auto_run(self) -> dict | None:
         try:
             with self._conn.cursor() as cur:
@@ -861,7 +970,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return result
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def create_auto_run(self, *, workers=12, timeout=20, retries=1, search_limit=2) -> str:
@@ -880,9 +989,10 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return run_id
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
     def auto_run(self, run_id: str) -> dict | None:
         try:
             with self._conn.cursor() as cur:
@@ -892,7 +1002,7 @@ class SupabaseEmailResearchRepository:
             self._conn.commit()
             return result
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def update_auto_run(self, run_id: str, *, status=None, metrics=None, error="", stop_requested=None):
@@ -914,7 +1024,7 @@ class SupabaseEmailResearchRepository:
                 cur.execute("UPDATE email_research.email_auto_runs SET " + ",".join(fields) + " WHERE run_id=%s", params)
             self._conn.commit()
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def record_auto_run_result(self, run_id: str, *, metrics=None, research_status="ERROR"):
@@ -984,7 +1094,7 @@ class SupabaseEmailResearchRepository:
                 )
             self._conn.commit()
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
 
     def record_target_sync(self, run_id: str, *, elapsed_ms: float):
@@ -1001,5 +1111,5 @@ class SupabaseEmailResearchRepository:
                 )
             self._conn.commit()
         except Exception:
-            self._conn.rollback()
+            self._safe_rollback()
             raise
