@@ -25,7 +25,7 @@ from src.outreach.generation import (
     summarize, to_csv_bytes,
 )
 from src.outreach.staff import load_staff
-from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, select_targets
+from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, LIMIT_OPTIONS, select_targets
 from src.utils.date_utils import today_japan
 
 ARTICLE_MASTER_ENV = "OUTREACH_ARTICLE_MASTER_CSV"
@@ -33,7 +33,7 @@ ARTICLE_JOIN_ENV = "OUTREACH_ARTICLE_JOIN_CSV"
 ARTICLE_COLUMNS = {"clinic_uuid", "listing_status", "example_article_url", "listing_url",
                    "listing_kind", "source_row", "article_id", "verified"}
 HP_RANK_OPTIONS = {"指定なし": [], "A+B": ["A", "B"], "A": ["A"], "B": ["B"], "C": ["C"], "D": ["D"]}
-SCAN_POOL = 300
+SCAN_POOL = 300  # 上限医院数ぶんの走査余地（重複・フィルタ除外を見込んで最低4倍は確保する）
 K = "outreach_"  # session_state key prefix (既存画面のキーと衝突させない)
 
 
@@ -145,7 +145,8 @@ def _tab_targets(store, demo):
     article_filter = c2.multiselect(
         "記事", [ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED],
         format_func=ARTICLE_STATUS_LABELS.get, key=K + "article_filter")
-    limit = st.number_input("上限医院数", min_value=1, max_value=DEFAULT_LIMIT, value=DEFAULT_LIMIT, key=K + "limit")
+    limit = st.selectbox("生成件数（上限医院数）", LIMIT_OPTIONS,
+                         index=LIMIT_OPTIONS.index(DEFAULT_LIMIT), key=K + "limit")
 
     if st.button("対象医院を抽出", type="primary", key=K + "select"):
         from src.master.filters import Filters
@@ -155,8 +156,10 @@ def _tab_targets(store, demo):
             municipalities=[x.strip() for x in city_text.replace("、", ",").split(",") if x.strip()],
             departments=deps, effective_ranks=HP_RANK_OPTIONS[rank_label], scope=SCOPE_ALL,
         )
+        # 重複・フィルタ除外を見込み、選んだ件数ぶんの余地を持って走査する（最低SCAN_POOL件）。
+        scan_pool = max(SCAN_POOL, int(limit) * 4)
         try:
-            records = store.query(filters, limit=SCAN_POOL)  # READ ONLY
+            records = store.query(filters, limit=scan_pool)  # READ ONLY
         except Exception as exc:
             st.error(f"Clinic Masterの取得に失敗しました: {exc}")
             return
@@ -164,15 +167,19 @@ def _tab_targets(store, demo):
                                    email_filter=email_filter, article_filter=tuple(article_filter),
                                    limit=int(limit))
         st.session_state[K + "selection"] = selection
+        st.session_state[K + "requested_limit"] = int(limit)
         st.session_state.pop(K + "results", None)
 
     selection = st.session_state.get(K + "selection")
     if selection is None:
         return
+    requested = st.session_state.get(K + "requested_limit", DEFAULT_LIMIT)
     if st.session_state.get(K + "email_error"):
         st.caption("Email調査DBに接続できないため、メールは全件「未取得」扱いです。")
     st.success(f"対象 {len(selection.targets)}医院（走査 {selection.scanned}件／UUIDなし除外 {selection.skipped_no_uuid}件"
                f"／UUID重複除外 {selection.skipped_duplicate}件{'／上限で打ち切り' if selection.truncated else ''}）")
+    if not selection.truncated and len(selection.targets) < requested:
+        st.caption(f"指定件数{requested}件に対し、条件に一致する医院は実際には{len(selection.targets)}件でした。")
     st.dataframe(pd.DataFrame([{
         "医院名": t.clinic_name, "Clinic UUID": t.clinic_uuid, "都道府県": t.prefecture, "市区町村": t.municipality,
         "標榜科": "、".join(t.departments), "HPランク": t.hp_rank,
@@ -222,7 +229,15 @@ def _tab_generate():
                  disabled=not (staff or "").strip() or not dates):
         settings = GenerationSettings(staff=staff.strip(), dates=tuple(sorted(dates)), start_time=start_time,
                                       end_time=end_time, called_uuids=frozenset(called))
-        st.session_state[K + "results"] = (settings, generate_batch(selection.targets, articles, settings))
+        total = len(selection.targets)
+        progress = st.progress(0, text=f"生成中… 0/{total}件")
+
+        def _on_progress(done, total_count):
+            progress.progress(done / total_count if total_count else 1.0, text=f"生成中… {done}/{total_count}件")
+
+        results = generate_batch(selection.targets, articles, settings, on_progress=_on_progress)
+        progress.empty()
+        st.session_state[K + "results"] = (settings, results)
         st.success("生成しました。「③ プレビュー」「④ 生成結果」で確認してください。")
     if not (staff or "").strip():
         st.caption("IS担当者を指定すると生成できます。")
@@ -298,9 +313,11 @@ def _tab_results():
             "判定": r.status, "医院名": r.target.clinic_name, "Clinic UUID": r.target.clinic_uuid,
             "理由": " / ".join(r.reasons),
         } for r in issues]), hide_index=True, use_container_width=True)
-    st.download_button("CSVダウンロード（医院・記事・宛先・件名・本文・判定）", to_csv_bytes(results, settings.staff),
-                       f"mail_send_text_{today_japan():%Y%m%d}.csv", mime="text/csv",
-                       key=K + "download", use_container_width=True)
+    st.download_button(
+        "CSVダウンロード（医院・記事・宛先・件名・本文・判定）",
+        to_csv_bytes(results, settings.staff, settings.generation_batch_id),
+        f"mail_send_text_{today_japan():%Y%m%d}.csv", mime="text/csv",
+        key=K + "download", use_container_width=True)
     st.caption("CSV出力のみです。Gmail下書き作成・メール送信は行いません。")
 
 

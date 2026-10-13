@@ -24,6 +24,11 @@ ARTICLE_STATUS_LABELS = {
 TEMPLATE_LISTED = "LISTED_FIXED_V1"
 TEMPLATE_RECOMMEND = "RECOMMEND_PROVISIONAL_V1"
 
+# A/Bテスト・送信トラッキングは未実装（今回のスコープ外）。将来の集計をCSV単位で可能にするため、
+# テンプレート名を id/version に分解した対応表のみ用意しておく。新テンプレート追加時はここに追記する。
+TEMPLATE_IDS = {TEMPLATE_LISTED: "LISTED_FIXED", TEMPLATE_RECOMMEND: "RECOMMEND_PROVISIONAL"}
+TEMPLATE_VERSIONS = {TEMPLATE_LISTED: "v1", TEMPLATE_RECOMMEND: "v1"}
+
 CALLED_LINE = "本日、貴院へお電話させていただき、ご対応いただいた方よりメールにてお送りするよう伺いましたので、ご連絡いたしました。"
 NOT_CALLED_LINE = "突然のご連絡にて失礼いたします。"
 

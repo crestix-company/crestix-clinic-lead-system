@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import csv
 import io
+import uuid
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Callable
 
 from .article_recommender import Article, Recommendation, recommend
 from .compose import (
     ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_STATUS_LABELS, ARTICLE_UNCONFIRMED,
-    TEMPLATE_LISTED, TEMPLATE_RECOMMEND, Recipient, format_schedule, render_listed,
-    render_recommend, subject_for,
+    TEMPLATE_IDS, TEMPLATE_LISTED, TEMPLATE_RECOMMEND, TEMPLATE_VERSIONS, Recipient, format_schedule,
+    render_listed, render_recommend, subject_for,
 )
 from .email_template import DraftValidationError
 from .targets import EMAIL_FOUND, ClinicTarget
@@ -29,6 +31,9 @@ class GenerationSettings:
     start_time: str = "9:00"
     end_time: str = "21:00"
     called_uuids: frozenset[str] = frozenset()  # 本日電話・メール案内を確認済みの医院のみ
+    # 将来のA/Bテスト・送信トラッキング集計を見据えた識別子。今回はA/B選択ロジックや送信記録は実装しない。
+    # 同一の一括生成（ボタン1クリック）内の全件で共通のIDになる。
+    generation_batch_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
 
 @dataclass(frozen=True)
@@ -112,18 +117,22 @@ def generate_one(target: ClinicTarget, articles: list[Article], settings: Genera
                               reasons=tuple(reasons + [str(exc)]))
 
 
-def generate_batch(targets: list[ClinicTarget], articles: list[Article],
-                   settings: GenerationSettings) -> list[OutreachResult]:
+def generate_batch(targets: list[ClinicTarget], articles: list[Article], settings: GenerationSettings,
+                   *, on_progress: Callable[[int, int], None] | None = None) -> list[OutreachResult]:
+    """``on_progress(done, total)`` is called after each target, for UI progress bars. Optional."""
     urls = frozenset(a.url for a in articles)
     counts: dict[str, int] = {}
     for t in targets:
         counts[t.clinic_uuid.casefold()] = counts.get(t.clinic_uuid.casefold(), 0) + 1
+    total = len(targets)
     output = []
-    for target in targets:
+    for index, target in enumerate(targets, start=1):
         if target.clinic_uuid and counts[target.clinic_uuid.casefold()] > 1:
             output.append(OutreachResult(target, FAILED, reasons=("Clinic UUID重複",)))
-            continue
-        output.append(generate_one(target, articles, settings, master_urls=urls))
+        else:
+            output.append(generate_one(target, articles, settings, master_urls=urls))
+        if on_progress is not None:
+            on_progress(index, total)
     return output
 
 
@@ -136,10 +145,15 @@ CSV_COLUMNS = [
     "to_email", "recipient", "is_staff", "phone_called", "article_status", "template",
     "listed_article_url", "example_article_url", "recommended_title", "recommended_url",
     "recommend_reason", "candidate_2_url", "candidate_3_url", "subject", "body", "status", "review_reasons",
+    "template_id", "template_version", "generation_batch_id",
 ]
 
 
-def to_csv_bytes(results: list[OutreachResult], staff: str) -> bytes:
+def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id: str = "") -> bytes:
+    """``generation_batch_id`` is optional metadata only (see GenerationSettings) -- no A/B
+    selection or send-tracking is implemented; this only lets a future analysis group rows
+    that came from the same 一括生成 run.
+    """
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, lineterminator="\n")
     writer.writeheader()
@@ -159,6 +173,8 @@ def to_csv_bytes(results: list[OutreachResult], staff: str) -> bytes:
             "candidate_2_url": recs[1].article.url if len(recs) > 1 else "",
             "candidate_3_url": recs[2].article.url if len(recs) > 2 else "",
             "subject": r.subject, "body": r.body, "status": r.status, "review_reasons": " / ".join(r.reasons),
+            "template_id": TEMPLATE_IDS.get(r.template, ""), "template_version": TEMPLATE_VERSIONS.get(r.template, ""),
+            "generation_batch_id": generation_batch_id,
         })
     return buffer.getvalue().encode("utf-8-sig")
 

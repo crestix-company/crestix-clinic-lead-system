@@ -13,6 +13,8 @@ from .article_adapter import ArticleLink, lookup_article
 from .compose import ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED
 
 DEFAULT_LIMIT = 50
+LIMIT_OPTIONS = (10, 50, 100, 200, 500)  # UI選択肢。CLIやテストの既定値(DEFAULT_LIMIT)は変更しない。
+MAX_LIMIT = max(LIMIT_OPTIONS)
 EMAIL_FOUND = "FOUND"
 EMAIL_MISSING = "MISSING"
 _EMAIL = re.compile(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$")
