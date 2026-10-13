@@ -18,7 +18,6 @@ from src.master.filters import Filters
 from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
 
 
-
 def _verified_email_map(rows):
     """Build deterministic, de-duplicated Step 5 email values by clinic_id."""
     buckets = {}

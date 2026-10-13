@@ -306,7 +306,7 @@ def test_ui_web_research_six_metrics_displayed(tmp_path, monkeypatch):
     assert not ({"Treatment該当あり", "Treatment該当なし", "Treatment未調査", "HP取得失敗"} & set(metrics))
     helps = {m.label: m.help for m in at.metric}
     assert helps["WebサイトURL取得済み"] == "医院データにWebサイトURLが登録されている医院数です。"
-    assert helps["Webサイト調査完了"] == "登録されたWebサイトの取得・解析を完了し、HP ABC判定と治療カテゴリ判定まで完了した医院数です。"
+    assert helps["Webサイト調査完了"] == "公式HPの内容確認まで完了したクリニック数です。"
     assert helps["Webサイト調査失敗"] == "Webサイトの取得または解析を正常完了できなかった医院数です。"
     assert "非アクティブ医院も含む" in helps["Webサイト未調査"]
     assert "HP調査可能・未調査" in helps["Webサイト未調査"]

@@ -1,0 +1,38 @@
+[
+  {
+    "clinic": "医療法人社団 健元会 東京デイサージェリークリニック",
+    "email": "clinic@tokyo-dsc.jp",
+    "source_url": "https://tokyo-dsc.jp/",
+    "original_role": "GENERAL",
+    "human_role": "RESERVATION",
+    "nearby_context": "診察・手術は予約制です。お電話またはメールでご予約ください。オンライン相談をご希望の方はメールかお電話にてご連絡ください。clinic@tokyo-dsc.jp",
+    "root_cause": "お問い合わせ語を先にGENERALとして扱い、診察・手術予約とオンライン相談の具体用途を十分に拾えていなかった"
+  },
+  {
+    "clinic": "銀座リハビリ整形外科",
+    "email": "info@ginzareha.com",
+    "source_url": "https://ginzareha.com/",
+    "original_role": "GENERAL",
+    "human_role": "OFFICE",
+    "nearby_context": "マスコミ・広告関係お問合せ info@ginzareha.com",
+    "root_cause": "メディア・広告関係をOFFICE用途として認識する語彙がなかった"
+  },
+  {
+    "clinic": "芝大門クリニック",
+    "email": "shibadaimon@tokyo.email.ne.jp",
+    "source_url": "https://www.ne.jp/asahi/shiba-daimon-clinic/kubi-kata/",
+    "original_role": "RESERVATION",
+    "human_role": "GENERAL",
+    "nearby_context": "E-mail shibadaimon@tokyo.email.ne.jp ※メールでの受診予約や診療相談は原則として受け付けておりません。予約はお電話、診療相談は掲示板にてお願いいたします。",
+    "root_cause": "予約・診療相談の否定文を肯定的なRESERVATIONシグナルとして扱っていた"
+  },
+  {
+    "clinic": "日本橋Fレーザークリニック",
+    "email": "business@nihonbashi-f-laser.com",
+    "source_url": "https://www.nihonbashi-f-laser.com/access/",
+    "original_role": "GENERAL",
+    "human_role": "OFFICE",
+    "nearby_context": "メディア、取材、業者の方々は business@nihonbashi-f-laser.com にお問い合わせください。",
+    "root_cause": "メディア・取材・業者向け窓口をOFFICEとして認識する語彙がなかった"
+  }
+]
