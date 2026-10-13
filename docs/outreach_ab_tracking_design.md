@@ -313,6 +313,105 @@ JSONに`clinic_uuid` / `generation_batch_id` / `template_id` / `template_version
 - Gmail操作・下書き作成・送信は一切行わない（ダッシュボードは表示専用）。
 - 既存パイプライン（案件管理シートを更新しているジョブ）への操作・停止・再実行は行わない。
 
+### 6.5 実装済み（PR #75、Draft）
+
+§6.1〜6.4は**実装済み**。合成データでの動作確認・単体テスト済み。実データ接続は未実施（§6.6〜6.7）。
+
+- `src/outreach_effect_dashboard/models.py` / `metrics.py` / `synthetic_source.py` / `sheets_source.py`
+- `src/outreach_effect_dashboard_ui.py`（独立ページ、`scripts/launch_effect_dashboard.py`で単独起動）
+- テスト27件（評価期間の境界値、READ ONLYゲートのfail-closed、合成データの再現性・整合性）
+- 監査により、`sheets_source.fetch_raw_rows()`が設定不足以外の失敗（依存ライブラリ未インストール・
+  認証情報不正・権限不足・ネットワーク断）でも**必ず`SheetsAccessError`に包んでから呼び出し元へ返す**
+  よう修正済み（生の例外やスタックトレースを画面に出さない。認証情報のパス自体もエラーメッセージに
+  含めない）。
+
+### 6.6 整合性確認（PR #75に実装済み）
+
+実データ接続後、**ダッシュボードの数値を信用する前に必ず最初に確認する**仕組みを実装済み
+（`src/outreach_effect_dashboard/reconciliation.py`）。
+
+- 既存「集計」シート自身の値（テンプレート別、全期間・無制限ウィンドウ）と、このダッシュボードが
+  同じ条件で計算した値を比較する。
+- 送信数が完全一致し、開封推定率・返信率・クリック率・アポ率の差がいずれも1ポイント未満であれば
+  「一致」と判定する。
+- **「高信頼開封率」は既存「集計」シートに対応する列が無いため、比較できない**（ダッシュボード独自の
+  指標であることを画面上にも明記する）。
+- 実データ接続時、ダッシュボード本体の数値表示の**前**にこの比較結果を表示し、不一致があれば
+  警告を出す（§2.2の列マッピングを見直す必要がある、という扱い）。
+
+### 6.7 Macでの設定手順（ユーザー操作、コピペ用）
+
+**前提**: Google Cloudプロジェクトへのアクセス権、および対象シート（第一営業部_メール日程調整管理）の
+共有権限を持つ方（Workspace管理者またはシート所有者`info@crestix-inc.com`）の操作が必要な手順を含む。
+以下はすべて**ユーザー自身が**実行する（私が代行することはない）。
+
+**1. Google Cloud側: Sheets APIを有効化し、READ ONLY専用サービスアカウントを作成**
+
+```bash
+# gcloud CLI が未インストールなら: brew install google-cloud-sdk
+gcloud auth login
+
+# 対象プロジェクトを指定（既存のGoogle CloudプロジェクトIDに置き換える）
+export GCP_PROJECT_ID="your-project-id"
+gcloud config set project "$GCP_PROJECT_ID"
+
+# Google Sheets APIを有効化
+gcloud services enable sheets.googleapis.com
+
+# READ ONLY専用のサービスアカウントを新規作成（他の用途と共用しない）
+gcloud iam service-accounts create outreach-sheets-readonly \
+  --display-name="Outreach Effect Dashboard (READ ONLY)"
+
+# 鍵（JSON）を発行し、ローカルの安全な場所に保存する
+# ~/.config 配下などリポジトリの外に置く。リポジトリ内には絶対に置かない。
+mkdir -p ~/.config/outreach-dashboard
+gcloud iam service-accounts keys create \
+  ~/.config/outreach-dashboard/outreach-sheets-readonly-key.json \
+  --iam-account="outreach-sheets-readonly@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+
+# 発行したサービスアカウントのメールアドレスを確認（次の手順でシート共有に使う）
+echo "outreach-sheets-readonly@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+```
+
+**2. Google Sheets側: サービスアカウントを閲覧者として共有**
+
+ブラウザで対象シートを開く:
+`https://docs.google.com/spreadsheets/d/1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s/edit`
+
+右上の「共有」ボタン →
+上記で表示されたサービスアカウントのメールアドレス（`outreach-sheets-readonly@<プロジェクトID>.iam.gserviceaccount.com`）を追加 →
+権限は**「閲覧者」**を選択（「編集者」にはしない）→ 送信。
+
+**3. ローカル環境変数の設定**
+
+```bash
+# 鍵ファイルのパーミッションを絞る（自分だけ読めるように）
+chmod 600 ~/.config/outreach-dashboard/outreach-sheets-readonly-key.json
+
+# シェルの設定ファイル（~/.zshrc 等）に追記、または実行前に都度 export する
+export OUTREACH_SHEETS_READONLY_CREDENTIALS="$HOME/.config/outreach-dashboard/outreach-sheets-readonly-key.json"
+export OUTREACH_SHEETS_ID="1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s"
+```
+
+**4. 依存ライブラリのインストール（ダッシュボード実行環境に）**
+
+```bash
+pip install google-api-python-client google-auth
+```
+
+**5. 起動して整合性確認パネルを確認**
+
+```bash
+python scripts/launch_effect_dashboard.py
+```
+
+ブラウザで開き、「🔒 既存Google Sheetsの実データを表示しています」と表示されること、§6.6の整合性
+確認パネルで対象テンプレートがすべて「✅」になることを確認する。**不一致（⚠️）があれば、本番として
+使う前に列マッピング（§2.2・`sheets_source.py`の列名）を見直すこと。**
+
+**注意**: 鍵ファイル（`*.json`）はリポジトリにコミットしない（`.gitignore`に該当パターンを追加済み）。
+環境変数の値をチャット・ログ・コミットメッセージに貼り付けない。
+
 ## 7. スコープ外（今回も将来PRでも、Gmail操作・トラッキング実装はしない）
 
 - 本ドキュメントの作成にあたり、Gmail操作・スプレッドシートへの書き込み・GAS実行は一切行っていない。
