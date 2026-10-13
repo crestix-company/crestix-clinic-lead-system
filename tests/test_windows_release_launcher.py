@@ -36,8 +36,8 @@ def test_start_bat_uses_update_launcher_and_launch_v2_is_single_runtime():
     start = _text("start_v2_windows.bat")
     update = _text("scripts/update_and_launch_windows.ps1")
     assert "update_and_launch_windows.ps1" in start
-    assert "git switch main" in update
-    assert "git pull --ff-only origin main" in update
+    assert "Invoke-Git switch main" in update
+    assert "Invoke-Git pull --ff-only origin main" in update
     assert update.count('Join-Path $RepoRoot "scripts\\launch_v2_windows.ps1"') == 1
 
 

@@ -84,13 +84,14 @@ def test_no_credentials_in_shortcut_or_windows_scripts():
 
 def test_update_launcher_keeps_ff_only_and_no_destructive_git():
     update = _text("scripts/update_and_launch_windows.ps1")
-    assert "git switch main" in update
-    assert "git fetch origin main" in update
-    assert "git pull --ff-only origin main" in update
-    assert "git status --porcelain" in update
+    assert "Invoke-Git status --porcelain" in update
+    assert "Invoke-Git switch main" in update
+    assert "Invoke-Git fetch origin main" in update
+    assert "Invoke-Git pull --ff-only origin main" in update
     assert "Get-Command git.exe" in update
-    assert update.index("git status --porcelain") < update.index("git switch main")
-    assert update.index("git fetch origin main") < update.index("git pull --ff-only origin main")
+    assert update.index("Invoke-Git status --porcelain") < update.index("Invoke-Git switch main")
+    assert update.index("Invoke-Git switch main") < update.index("Invoke-Git fetch origin main")
+    assert update.index("Invoke-Git fetch origin main") < update.index("Invoke-Git pull --ff-only origin main")
     for relative in WINDOWS_SCRIPTS:
         text = _text(relative).lower()
         for command in DESTRUCTIVE_GIT:
@@ -168,3 +169,56 @@ def test_shortcut_creation_is_idempotent_on_onedrive_style_unicode_path(tmp_path
     assert os.path.normcase(info["target"]) == os.path.normcase(str(ROOT / "start_v2_windows.bat"))
     assert os.path.normcase(info["cwd"].rstrip("\\")) == os.path.normcase(str(ROOT))
     assert info["args"] == ""
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _updater_sandbox(tmp_path):
+    """Clone of a local origin containing the real updater and a stub launcher that only reports."""
+    origin = tmp_path / "origin.git"
+    seed = tmp_path / "seed"
+    _git(tmp_path, "init", "--bare", "-b", "main", str(origin))
+    _git(tmp_path, "init", "-b", "main", str(seed))
+    (seed / "scripts").mkdir()
+    shutil.copy(ROOT / "scripts/update_and_launch_windows.ps1", seed / "scripts")
+    (seed / "scripts/launch_v2_windows.ps1").write_text('Write-Host "STUB_LAUNCHED"; exit 0\n', encoding="ascii")
+    for args in (("config", "user.email", "t@example.com"), ("config", "user.name", "t"), ("add", "."),
+                 ("commit", "-m", "seed"), ("remote", "add", "origin", str(origin)), ("push", "origin", "main")):
+        _git(seed, *args)
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", str(origin), str(clone))
+    return seed, clone
+
+
+def _run_updater(clone):
+    return subprocess.run(
+        [POWERSHELL, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(clone / "scripts/update_and_launch_windows.ps1")],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+    )
+
+
+@windows_only
+def test_updater_survives_git_stderr_on_powershell_51_and_fast_forwards(tmp_path):
+    seed, clone = _updater_sandbox(tmp_path)
+    (seed / "NEW.txt").write_text("x", encoding="ascii")
+    _git(seed, "add", ".")
+    _git(seed, "commit", "-m", "new")
+    _git(seed, "push", "origin", "main")
+    result = _run_updater(clone)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    assert "NativeCommandError" not in result.stdout + result.stderr
+    assert "STUB_LAUNCHED" in result.stdout
+    assert (clone / "NEW.txt").exists()
+
+
+@windows_only
+def test_updater_stops_without_touching_uncommitted_changes(tmp_path):
+    _, clone = _updater_sandbox(tmp_path)
+    (clone / "local_note.txt").write_text("keep me", encoding="ascii")
+    result = _run_updater(clone)
+    assert result.returncode == 1
+    assert "Uncommitted changes" in result.stdout
+    assert "STUB_LAUNCHED" not in result.stdout
+    assert (clone / "local_note.txt").read_text(encoding="ascii") == "keep me"
