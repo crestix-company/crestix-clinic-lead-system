@@ -33,7 +33,7 @@ def read_master(path: str | Path) -> list[Article]:
         output = []
         seen = set()
         for row in reader:
-            title, url, keyword = (row[k] or "").strip() for k in ("タイトル", "URL", "KW")
+            title, url, keyword = ((row[k] or "").strip() for k in ("タイトル", "URL", "KW"))
             parsed = urlsplit(url)
             if not title or not url or url in seen:
                 continue
