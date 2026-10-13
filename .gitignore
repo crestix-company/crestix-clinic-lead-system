@@ -7,10 +7,14 @@ __pycache__/
 config/email_research.env.local
 !.env.example
 
-# 効果測定ダッシュボード: Google Sheets READ ONLYサービスアカウントの鍵。絶対にコミットしない。
+# 効果測定ダッシュボード: Google Sheets READ ONLY認証情報。絶対にコミットしない。
 *service-account*.json
 *-sheets-readonly*.json
 outreach-sheets-readonly*.json
+# カスタムOAuthクライアント（Desktop app）の鍵・ADCトークン類
+client_secret*.json
+*oauth-client*.json
+application_default_credentials.json
 *.sqlite3*
 *.db*
 *.bak
