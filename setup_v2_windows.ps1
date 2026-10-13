@@ -1,4 +1,4 @@
-<# 
+<#
 Clinic Lead System - Windows first-time setup (PowerShell 5.1+)
 
 Run from the repository root:
@@ -7,7 +7,11 @@ Run from the repository root:
 Optional:
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\setup_v2_windows.ps1 -Launch
 
+On success it creates the Desktop shortcut "Clinic Lead System", so later launches
+need only a double-click (no PowerShell / Git operation by the user).
+
 This script never prints credential values and never writes Production data.
+This file is ASCII-only on purpose (Windows PowerShell 5.1 encoding safety).
 #>
 [CmdletBinding()]
 param(
@@ -35,22 +39,22 @@ function Write-Step {
 }
 
 if ($env:OS -ne "Windows_NT") {
-    Stop-WithError "このセットアップはWindows用です。"
+    Stop-WithError "This setup is for Windows only."
 }
 
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $RepoRoot
 
-Write-Step "Repository確認"
+Write-Step "Repository check"
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot ".git") -PathType Container)) {
-    Stop-WithError "このファイルをGit clone済みのclinic-lead-systemルートで実行してください。"
+    Stop-WithError "Run this file from the root of the git-cloned clinic-lead-system repository."
 }
 if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-    Stop-WithError "Gitが見つかりません。先にGit for Windowsをインストールしてください。"
+    Stop-WithError "Git was not found. Install Git for Windows first."
 }
 git --version | Out-Host
 
-Write-Step "Python 3.12確認"
+Write-Step "Python 3.12 check"
 $PythonCommand = $null
 $PythonArgs = @()
 
@@ -69,10 +73,10 @@ if (-not $PythonCommand -and (Get-Command python.exe -ErrorAction SilentlyContin
     }
 }
 if (-not $PythonCommand) {
-    Stop-WithError "Python 3.12以上が見つかりません。Python 3.12をインストールしてから再実行してください。"
+    Stop-WithError "Python 3.12 or later was not found. Install Python 3.12 and run this again."
 }
 
-Write-Step "仮想環境作成"
+Write-Step "Create virtual environment"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
     if ($PythonArgs.Count -gt 0) {
@@ -81,77 +85,84 @@ if (-not (Test-Path -LiteralPath $VenvPython -PathType Leaf)) {
         & $PythonCommand -m venv .venv
     }
     if ($LASTEXITCODE -ne 0) {
-        Stop-WithError ".venvの作成に失敗しました。"
+        Stop-WithError "Failed to create .venv."
     }
 } else {
-    Write-Host ".venvは既に存在します。再利用します。"
+    Write-Host ".venv already exists. Reusing it."
 }
 
 & $VenvPython -c "import sys; print('Python:', sys.version.split()[0])"
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError ".venvのPythonを起動できません。"
+    Stop-WithError "Python in .venv cannot be started."
 }
 
-Write-Step "依存関係インストール"
+Write-Step "Install dependencies"
 $LockFile = Join-Path $RepoRoot "requirements-lock.txt"
 if (-not (Test-Path -LiteralPath $LockFile -PathType Leaf)) {
-    Stop-WithError "requirements-lock.txtが見つかりません。"
+    Stop-WithError "requirements-lock.txt was not found."
 }
 & $VenvPython -m pip install -r $LockFile
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError "Python依存関係のインストールに失敗しました。"
+    Stop-WithError "Failed to install Python dependencies."
 }
 
-Write-Step "依存関係確認"
+Write-Step "Dependency check"
 & $VenvPython -c "import streamlit,pandas,openpyxl,yaml,requests,bs4,rapidfuzz,filelock,tzdata,psycopg; print('Dependencies: OK')"
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError "必要なPython依存関係が不足しています。"
+    Stop-WithError "Required Python dependencies are missing."
 }
 
-Write-Step "Supabase Runtime設定確認"
+Write-Step "Supabase Runtime config check"
 $CredentialFile = Join-Path $RepoRoot ".supabase-runtime.env.local"
 if (-not (Test-Path -LiteralPath $CredentialFile -PathType Leaf)) {
     Write-Host ""
-    Write-Host "Supabase credentialファイルがありません。" -ForegroundColor Yellow
-    Write-Host "既存PCから次のファイルを安全な方法でコピーしてください:"
+    Write-Host "Supabase credential file is missing." -ForegroundColor Yellow
+    Write-Host "Copy this file from an existing PC by a secure method:"
     Write-Host "  .supabase-runtime.env.local"
     Write-Host ""
-    Write-Host "コピー先:"
+    Write-Host "Destination:"
     Write-Host "  $CredentialFile"
     Write-Host ""
-    Stop-WithError "credential配置後にこのスクリプトを再実行してください。"
+    Stop-WithError "Place the credential file and run this script again."
 }
 
 # Validate tracked routing + private credential + optional email config without echoing secrets.
 & $VenvPython -c "from pathlib import Path; from scripts.launch_v2 import load_runtime_env; load_runtime_env(Path.cwd()); print('Runtime config: OK')"
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError "Runtime設定を読み込めません。.supabase-runtime.env.local / config\production_runtime.envを確認してください。"
+    Stop-WithError "Runtime config cannot be loaded. Check .supabase-runtime.env.local / config\production_runtime.env."
 }
 
 $EmailFile = Join-Path $RepoRoot "config\email_research.env.local"
 if (Test-Path -LiteralPath $EmailFile -PathType Leaf) {
     Write-Host "Email Research config: detected"
 } else {
-    Write-Host "Email Research config: not found (基本機能は起動できます)" -ForegroundColor Yellow
-    Write-Host "Email ResearchもこのPCで使う場合は、既存PCから次を安全にコピーしてください:"
+    Write-Host "Email Research config: not found (the main app still starts; Email Research is unavailable)" -ForegroundColor Yellow
+    Write-Host "To use Email Research on this PC, securely copy this file from an existing PC:"
     Write-Host "  config\email_research.env.local"
 }
 
-Write-Step "セットアップ確認"
+Write-Step "Setup verification"
 & $VenvPython -c "from pathlib import Path; from scripts.launch_v2 import load_runtime_env; assert load_runtime_env(Path.cwd()); print('Clinic Lead System setup: OK')"
 if ($LASTEXITCODE -ne 0) {
-    Stop-WithError "最終設定確認に失敗しました。"
+    Stop-WithError "Final setup verification failed."
+}
+
+Write-Step "Desktop shortcut"
+$ShortcutScript = Join-Path $RepoRoot "scripts\create_windows_desktop_shortcut.ps1"
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ShortcutScript
+if ($LASTEXITCODE -ne 0) {
+    Stop-WithError "Setup finished, but the Desktop shortcut could not be created. Re-run: scripts\create_windows_desktop_shortcut.ps1"
 }
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Green
-Write-Host " Windows初回セットアップ完了" -ForegroundColor Green
+Write-Host " Windows first-time setup complete" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
-Write-Host "次回以降は start_v2_windows.bat をダブルクリックしてください。"
-Write-Host "起動時に main -> git pull --ff-only -> 最新版起動 が自動実行されます。"
+Write-Host "From now on, double-click 'Clinic Lead System' on the Desktop."
+Write-Host "Each launch runs: git switch main -> git pull --ff-only -> start the latest version."
 
 if ($Launch) {
-    Write-Step "最新版へ更新して起動"
+    Write-Step "Update to latest and launch"
     $Updater = Join-Path $RepoRoot "scripts\update_and_launch_windows.ps1"
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $Updater
     exit $LASTEXITCODE
