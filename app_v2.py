@@ -172,13 +172,23 @@ def _auto_hp_progress_snapshot(store, auto_repo):
     current_pending = auto_current["counts"].get("PENDING", 0) if auto_current else 0
     current_running = auto_current["counts"].get("RUNNING", 0) if auto_current else 0
     current_total = auto_current["total"] if auto_current else 0
-    current_remaining = current_pending + current_running
 
-    future_remaining = auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
-    total_remaining = current_remaining + future_remaining
-    initial_count = int(state.get("initial_count", 0) or 0)
-    processed = max(0, initial_count - total_remaining)
     cumulative = auto_repo.cumulative_results(state.get("run_id", "")) if auto_repo is not None and state.get("run_id") else {}
+    initial_count = int(state.get("initial_count", 0) or 0)
+    # 「処理済み」はこのRunに紐づくDONE(terminal result)の直接集計のみを根拠にする。
+    # 開始時対象からの引き算にすると、開始後に新たにeligibleになった医院が
+    # remaining_count()経由で混入して処理済みが0にクランプされてしまう。
+    processed = sum(cumulative.values())
+    # 「残り」はこのRunの固定母集団(initial_count)に対する差分のみ。
+    # remaining_count()のライブ値は母集団外の新規候補を含み得るため、ここでは使わない。
+    total_remaining = max(0, initial_count - processed)
+
+    # DB全体で現在eligibleな候補数（このRunの母集団に含まれない新規分を含む）。
+    # 「残り」には混ぜず、参考情報としてのみ保持する。
+    new_eligible_count = (
+        auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
+    )
+
     batch_size = max(1, int(state.get("batch_size", 500) or 500))
     estimated_total = (initial_count + batch_size - 1) // batch_size if initial_count else 0
 
@@ -194,6 +204,7 @@ def _auto_hp_progress_snapshot(store, auto_repo):
         "current_total": current_total,
         "cumulative": cumulative,
         "estimated_total": estimated_total,
+        "new_eligible_count": new_eligible_count,
         "last_updated": (
             (auto_current or {}).get("updated_at")
             or state.get("last_progress_at")
@@ -266,6 +277,12 @@ def _render_auto_hp_progress(snapshot, *, live=False):
     result_cols[1].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件")
     result_cols[2].metric("要確認", f"{cumulative.get('REVIEW', 0):,}件")
     result_cols[3].metric("エラー", f"{cumulative.get('ERROR', 0):,}件")
+
+    new_eligible = snapshot.get("new_eligible_count", 0)
+    st.caption(
+        f"参考：現在DB全体の新規調査候補 {new_eligible:,}件"
+        "（今回Runの開始時対象には含まれず、「残り」にも混ぜていません）"
+    )
 
     network = "WAITING" if state.get("status") == "WAITING_NETWORK" else "ONLINE"
     updated = snapshot.get("last_updated") or "未取得"
