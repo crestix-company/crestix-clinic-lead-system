@@ -20,9 +20,11 @@ def _rate(numerator: int, denominator: int) -> float:
     return numerator / denominator if denominator else 0.0
 
 
-def _within_window(sent_at: datetime | None, event_at: datetime | None, window_days: int) -> bool:
+def _within_window(sent_at: datetime | None, event_at: datetime | None, window_days: int | None) -> bool:
     if sent_at is None or event_at is None:
         return False
+    if window_days is None:  # 無制限（整合性確認専用。ダッシュボードのUI上は選べない）
+        return event_at >= sent_at
     delta_days = (event_at - sent_at).days
     return 0 <= delta_days <= window_days
 
@@ -57,10 +59,14 @@ def _in_population(record: SendRecord, *, date_from: date, date_to: date,
 
 
 def aggregate(records: list[SendRecord], *, date_from: date, date_to: date,
-             evaluation_window_days: int, is_staff: str | None = None,
+             evaluation_window_days: int | None, is_staff: str | None = None,
              template_number: str | None = None, label: str = "全体") -> MetricsResult:
-    if evaluation_window_days not in EVALUATION_WINDOW_OPTIONS:
-        raise ValueError(f"evaluation_window_days は {EVALUATION_WINDOW_OPTIONS} のいずれかにしてください")
+    """``evaluation_window_days=None`` means unbounded (no cutoff). The dashboard UI never
+    offers this; it exists only for reconciliation.py, to match the existing 集計 sheet's
+    own all-time semantics when sanity-checking this module's math against it.
+    """
+    if evaluation_window_days is not None and evaluation_window_days not in EVALUATION_WINDOW_OPTIONS:
+        raise ValueError(f"evaluation_window_days は {EVALUATION_WINDOW_OPTIONS} または None のいずれかにしてください")
     population = [r for r in records
                  if _in_population(r, date_from=date_from, date_to=date_to,
                                    is_staff=is_staff, template_number=template_number)]
@@ -99,7 +105,7 @@ def breakdown_by_is_staff(records: list[SendRecord], *, date_from: date, date_to
 
 
 def breakdown_by_template(records: list[SendRecord], *, date_from: date, date_to: date,
-                          evaluation_window_days: int) -> list[MetricsResult]:
+                          evaluation_window_days: int | None) -> list[MetricsResult]:
     templates = sorted({r.template_number for r in records if r.template_number}, key=lambda x: (len(x), x))
     return [
         aggregate(records, date_from=date_from, date_to=date_to,

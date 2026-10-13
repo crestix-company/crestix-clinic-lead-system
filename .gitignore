@@ -6,6 +6,11 @@ __pycache__/
 .supabase-runtime.env.local
 config/email_research.env.local
 !.env.example
+
+# 効果測定ダッシュボード: Google Sheets READ ONLYサービスアカウントの鍵。絶対にコミットしない。
+*service-account*.json
+*-sheets-readonly*.json
+outreach-sheets-readonly*.json
 *.sqlite3*
 *.db*
 *.bak

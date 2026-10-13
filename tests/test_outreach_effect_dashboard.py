@@ -10,7 +10,10 @@ from src.outreach_effect_dashboard.metrics import (
     EVALUATION_WINDOW_OPTIONS, aggregate, breakdown_by_is_staff, breakdown_by_template,
 )
 from src.outreach_effect_dashboard.models import SendRecord
-from src.outreach_effect_dashboard.sheets_source import SheetsAccessError, _require_config, parse_rows_to_records
+from src.outreach_effect_dashboard.reconciliation import parse_summary_sheet_template_breakdown, reconcile
+from src.outreach_effect_dashboard.sheets_source import (
+    SheetsAccessError, _require_config, fetch_raw_rows, parse_rows_to_records,
+)
 from src.outreach_effect_dashboard.synthetic_source import generate_synthetic_records
 
 SENT = datetime(2026, 9, 1, 10, 0, 0)
@@ -177,3 +180,85 @@ def test_synthetic_records_feed_metrics_without_error():
         assert result.sent_count == 300
         assert 0.0 <= result.reply_rate <= 1.0
         assert 0.0 <= result.open_high_confidence_rate <= result.open_estimated_rate + 1e-9
+
+
+# --- fail-closed / 接続失敗時の安全な挙動（監査対応） ---
+def test_fetch_raw_rows_without_config_raises_before_any_network_or_import():
+    with pytest.raises(SheetsAccessError, match="OUTREACH_SHEETS_READONLY_CREDENTIALS"):
+        fetch_raw_rows({})
+
+
+def test_fetch_raw_rows_wraps_any_failure_as_sheets_access_error_not_raw_exception():
+    # google-api-python-client / google-auth は本テスト環境に意図的に未インストール
+    # （実データ許可が無い限りダッシュボードが依存しないことの裏付け）。
+    # 設定だけ揃っていて実際の接続・依存関係が無い状態でも、ここで素の例外が漏れずSheetsAccessErrorに
+    # 包まれることを確認する＝「権限不足・接続失敗時の安全な挙動」の監査項目に対応。
+    env = {"OUTREACH_SHEETS_READONLY_CREDENTIALS": "/nonexistent/credentials.json",
+          "OUTREACH_SHEETS_ID": "dummy-sheet-id"}
+    with pytest.raises(SheetsAccessError):
+        fetch_raw_rows(env)
+
+
+def test_sheets_access_error_message_never_contains_the_credentials_path():
+    # 認証情報漏えい防止: エラーメッセージに設定値（パスの中身）そのものを含めない。
+    secret_looking_path = "/Users/someone/.secret/my-service-account-key.json"
+    env = {"OUTREACH_SHEETS_READONLY_CREDENTIALS": secret_looking_path, "OUTREACH_SHEETS_ID": "dummy"}
+    try:
+        fetch_raw_rows(env)
+        pytest.fail("expected SheetsAccessError")
+    except SheetsAccessError as exc:
+        assert secret_looking_path not in str(exc)
+
+
+# --- 整合性確認（既存「集計」シートとの比較） ---
+def summary_rows_for(template: str, *, sent: int, open_rate: str, reply_rate: str,
+                     click_rate: str, appt_rate: str):
+    return [
+        ["KPI", "数値", "", "テンプレート", "送信", "開封推定率", "返信率", "クリック率", "アポ率"],
+        ["フォーム受付数", "1", "", template, str(sent), open_rate, reply_rate, click_rate, appt_rate],
+    ]
+
+
+def test_parse_summary_sheet_template_breakdown():
+    rows = summary_rows_for("1", sent=10, open_rate="50.0%", reply_rate="10.0%",
+                            click_rate="20.0%", appt_rate="5.0%")
+    parsed = parse_summary_sheet_template_breakdown(rows)
+    assert parsed["1"] == {"sent": 10, "open_estimated_rate": 0.5, "reply_rate": 0.1,
+                           "click_rate": 0.2, "appointment_rate": 0.05}
+
+
+def test_parse_summary_sheet_returns_empty_dict_on_unexpected_layout():
+    assert parse_summary_sheet_template_breakdown([["違う", "ヘッダー"]]) == {}
+    assert parse_summary_sheet_template_breakdown([]) == {}
+
+
+def test_reconcile_detects_exact_match():
+    # 1件送信・返信あり・開封推定あり・クリックなし・アポなし のレコードに対応する集計シートの数値。
+    records = [record(replied=True, reply_at=SENT + timedelta(hours=1),
+                      open_estimated=True, open_estimated_at=SENT + timedelta(hours=1))]
+    summary = summary_rows_for("1", sent=1, open_rate="100.0%", reply_rate="100.0%",
+                               click_rate="0.0%", appt_rate="0.0%")
+    rows = reconcile(records, summary)
+    assert len(rows) == 1 and rows[0].matches is True
+
+
+def test_reconcile_detects_mismatch():
+    records = [record(replied=True, reply_at=SENT + timedelta(hours=1))]
+    summary = summary_rows_for("1", sent=1, open_rate="100.0%", reply_rate="0.0%",  # 既存シートと食い違う
+                               click_rate="0.0%", appt_rate="0.0%")
+    rows = reconcile(records, summary)
+    assert len(rows) == 1 and rows[0].matches is False
+
+
+def test_reconcile_unbounded_window_ignores_dashboard_default_cutoff():
+    # 通常のダッシュボード(14/30日)では範囲外になる返信も、整合性確認(無制限)では計上される。
+    records = [record(replied=True, reply_at=SENT + timedelta(days=90))]
+    summary = summary_rows_for("1", sent=1, open_rate="0.0%", reply_rate="100.0%",
+                               click_rate="0.0%", appt_rate="0.0%")
+    rows = reconcile(records, summary)
+    assert rows[0].matches is True
+
+
+def test_reconcile_empty_records_returns_empty():
+    assert reconcile([], summary_rows_for("1", sent=1, open_rate="0%", reply_rate="0%",
+                                          click_rate="0%", appt_rate="0%")) == []

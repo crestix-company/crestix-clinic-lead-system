@@ -40,22 +40,36 @@ def _require_config(environ=None) -> tuple[str, str]:
     return credentials_path, sheet_id
 
 
-def fetch_raw_rows(environ=None):
-    """Returns raw sheet rows for 案件管理. Raises SheetsAccessError if not configured.
+def fetch_raw_rows(environ=None, *, range_name: str = REQUIRED_RANGE):
+    """Returns raw sheet rows. Raises SheetsAccessError if not configured, or if the read
+    itself fails for any reason (missing dependency, bad credentials file, insufficient
+    permission, network error, etc.) -- the caller must be able to treat every failure mode
+    the same way (fall back to synthetic data), never crash the page with a raw traceback.
 
     Never requests a write scope. Google API client is imported lazily so this module can be
     imported (and its fail-closed config check exercised) without the dependency installed.
     """
     credentials_path, sheet_id = _require_config(environ)
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
 
-    credentials = service_account.Credentials.from_service_account_file(
-        credentials_path, scopes=[READONLY_SCOPE])
-    service = build("sheets", "v4", credentials=credentials)
-    result = service.spreadsheets().values().get(
-        spreadsheetId=sheet_id, range=REQUIRED_RANGE).execute()
-    return result.get("values", [])
+        credentials = service_account.Credentials.from_service_account_file(
+            credentials_path, scopes=[READONLY_SCOPE])
+        service = build("sheets", "v4", credentials=credentials)
+        result = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id, range=range_name).execute()
+        return result.get("values", [])
+    except SheetsAccessError:
+        raise
+    except Exception as exc:
+        # 例外メッセージ自体に認証情報やファイル内容が含まれないことはライブラリ側の実装に依存するため
+        # 信頼しすぎない。ここでは例外の型名のみを安全な情報として伝え、詳細はUIに出さない。
+        raise SheetsAccessError(
+            f"Google Sheetsの読み取りに失敗しました（{type(exc).__name__}）。"
+            "認証情報・共有権限・ネットワークを確認してください。許可が整うまたは復旧するまでは"
+            "synthetic_sourceの合成データを使用します。"
+        ) from exc
 
 
 _DATETIME_FORMATS = ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d")
