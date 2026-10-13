@@ -1001,36 +1001,10 @@ def simple_workflow_ui(store, demo):
                 auto_repo.cancel()
                 st.rerun()
 
-    st.subheader("5. Comdesk形式で出力")
-    current_hp_job_export_ui(store, key_prefix="simple_step5")
-
-    st.subheader("6. 5.で出したデータを手動でComdeskに入れる（＝UUIDを付与）")
-
-    st.subheader("7. 6.でUUIDが付与されたデータをこのアプリに取り込む")
-
-    step7_upload = st.file_uploader("コムデスクCSV・Excel", type=["csv", "xlsx", "xls"], key="simple_comdesk_upload", disabled=demo)
-    if step7_upload:
-        table = upload_table(step7_upload, "simple_comdesk")
-        inferred = infer_comdesk_columns(table)
-        mapping = {}
-        labels = {"uuid":"UUID・案件ID","clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
-                  "address":"住所・住所１","address2":"住所２・建物名","postal_code":"郵便番号",
-                  "manager_name":"院長名","url":"HP URL","epark_url":"EPARK URL"}
-        with st.expander("列の対応を確認", expanded=True):
-            st.caption("28列形式の「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
-            for field, label in labels.items():
-                choices = [None] + list(range(len(table.headers)))
-                mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(inferred.get(field)), format_func=lambda i:"未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key="simple_comdesk_map_"+field)
-            preview = table.data.head(5).copy()
-            preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
-            st.dataframe(preview, hide_index=True)
-            st.caption("照合プレビュー（基本28項目。HPランク・メールアドレスは照合キーに使用しません）")
-            st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS), hide_index=True, width="stretch")
-        if st.button("既存案件を登録", type="primary", key="simple_comdesk_import"):
-            with st.spinner("既存案件を登録しています…"):
-                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
-            report_import(result)
-
+    st.caption(
+        "営業対象の確認・Comdesk出力は「営業対象・出力」、"
+        "UUID付きComdeskデータの取込は「詳細設定」から行えます。"
+    )
 
 def simple_sales_ui(store, demo=False):
     st.header("営業対象・Comdesk出力")
