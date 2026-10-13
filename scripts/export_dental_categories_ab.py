@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 
 from scripts.launch_v2 import load_runtime_env
+from src.master.comdesk import COMDESK_EXPORT_HEADERS
+from src.repository.runtime_store import SupabaseRuntimeStore
 from src.repository.supabase_adapter import connect
 
 CATEGORY_FILES = {
@@ -218,28 +220,30 @@ def main():
     output_dir = root / "exports" / f"dental_categories_{stamp}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    headers = [
-        "営業カテゴリ","カテゴリ根拠タグ","管理番号","UUID","医院名","電話番号",
-        "住所","都道府県","HP URL","HP ABC判定","最優先タグ","最優先タグコード",
-        "全歯科営業タグ","全タグコード","確度","判定ソース","判定ルール",
-    ]
+    # Formal Comdesk output: preserve the existing 28-column source row when a
+    # clinic already has Comdesk provenance, then append HP rank + official verified email.
+    # Category information stays in the filename so no non-Comdesk columns are introduced.
+    store = SupabaseRuntimeStore()
+    by_id = {int(row["id"]): row for row in records}
 
     summary_rows = []
     for key, filename in CATEGORY_FILES.items():
         path = output_dir / filename
         items = grouped[key]
         summary_rows.append((CATEGORY_LABELS[key], len(items)))
+
+        ids = [int(row["id"]) for row in items]
+        master_records = store.repositories.clinics._batch_get(ids) if ids else []
+        master_by_id = {int(row["id"]): row for row in master_records}
+        ordered_records = [master_by_id[clinic_id] for clinic_id in ids if clinic_id in master_by_id]
+
+        rows28 = store._export_records(ordered_records)
+        rows30 = store._attach_export_metadata(ordered_records, rows28)
+
         with path.open("w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(headers)
-            for row in items:
-                writer.writerow([
-                    CATEGORY_LABELS[key], row["_category_evidence"], row["id"], row["uuid"] or "",
-                    row["clinic_name"] or "", row["phone"] or "", row["address"] or "",
-                    row["prefecture"] or "", row["hp_url"] or "", row["effective_hp_rank"] or "",
-                    row["tag_label"] or "", row["tag_code"] or "", row["labels"] or "",
-                    row["codes"] or "", row["confidence"] or "", row["source"] or "", row["rule_id"] or "",
-                ])
+            writer.writerow(COMDESK_EXPORT_HEADERS)
+            writer.writerows(rows30)
 
     summary_path = output_dir / "00_カテゴリ件数.csv"
     with summary_path.open("w", encoding="utf-8-sig", newline="") as f:
