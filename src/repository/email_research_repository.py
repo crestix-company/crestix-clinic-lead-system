@@ -751,6 +751,106 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
+    PRIMARY_LISTING_FILTER_VALUES = {
+        "research_status": ("NOT_RESEARCHED", "RUNNING", "FOUND", "NO_EMAIL_FOUND", "REVIEW", "ERROR"),
+        "auto_decision": ("AUTO_TRUE", "AUTO_FALSE", "REVIEW"),
+        "confidence": ("HIGH", "MEDIUM", "LOW"),
+        "role": ("GENERAL", "OFFICE", "RESERVATION", "RECRUIT", "RECRUITING",
+                 "MEDICAL_COOPERATION", "PERSONAL", "UNKNOWN"),
+        "ownership": ("CLINIC_OWNED", "SAME_MEDICAL_CORPORATION", "THIRD_PARTY_OWNED", "OWNERSHIP_UNKNOWN"),
+    }
+
+    @classmethod
+    def _primary_listing_where(cls, filters: dict | None) -> tuple[str, list]:
+        """SQL WHERE for the Clinic-unit Email listing. Every filter runs in PostgreSQL with bound
+        parameters; list filters accept only the schema CHECK values (anything else is dropped)."""
+        filters = dict(filters or {})
+        clauses, args = [], []
+        has_email = filters.get("has_email", "yes")
+        if has_email == "yes":
+            clauses.append("s.primary_email_candidate_id IS NOT NULL")
+        elif has_email == "no":
+            clauses.append("s.primary_email_candidate_id IS NULL")
+        prefecture = str(filters.get("prefecture") or "").strip()
+        if prefecture:
+            clauses.append("t.prefecture=%s"); args.append(prefecture)
+        clinic_name = str(filters.get("clinic_name") or "").strip()
+        if clinic_name:
+            escaped = clinic_name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            clauses.append("t.clinic_name ILIKE %s"); args.append(f"%{escaped}%")
+        for key, column in (("research_status", "s.research_status"), ("confidence", "p.confidence"),
+                            ("role", "p.role"), ("ownership", "p.ownership")):
+            values = [v for v in (filters.get(key) or []) if v in cls.PRIMARY_LISTING_FILTER_VALUES[key]]
+            if values:
+                clauses.append(f"{column}=ANY(%s::text[])"); args.append(values)
+        decisions = [v for v in (filters.get("auto_decision") or [])
+                     if v in cls.PRIMARY_LISTING_FILTER_VALUES["auto_decision"]]
+        if decisions:
+            # Clinic has at least one Candidate with that AI decision (Primary or not).
+            clauses.append(
+                "EXISTS (SELECT 1 FROM email_research.email_candidates d "
+                "WHERE d.clinic_id=s.clinic_id AND d.auto_decision=ANY(%s::text[]))"
+            )
+            args.append(decisions)
+        return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
+
+    def primary_listing_page(self, *, filters: dict | None = None, page: int = 1,
+                             page_size: int = 100) -> dict:
+        """One server-side page of the Clinic-unit Email listing: filtered COUNT plus
+        LIMIT/OFFSET rows. Never loads the whole listing into Python."""
+        page_size = max(1, min(int(page_size), 500))
+        empty = {"rows": [], "total": 0, "page": 1, "page_size": page_size, "pages": 1}
+        if not self.available():
+            return empty
+        where, args = self._primary_listing_where(filters)
+        base = (
+            " FROM email_research.clinic_email_status s"
+            " LEFT JOIN email_research.email_candidates p"
+            "   ON p.clinic_id=s.clinic_id AND p.candidate_id=s.primary_email_candidate_id"
+            " LEFT JOIN email_research.clinic_targets t ON t.clinic_id=s.clinic_id"
+            + where
+        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT count(*)" + base, args)
+                total = int(cur.fetchone()[0] or 0)
+                pages = max(1, -(-total // page_size))
+                page = max(1, min(int(page), pages))
+                cur.execute(
+                    "SELECT s.clinic_id, t.clinic_name, t.prefecture, t.city, s.research_status,"
+                    " p.email, p.role, p.ownership, p.email_ownership, p.discovery_source,"
+                    " p.source_owner_type, p.source_url, p.confidence, p.auto_decision,"
+                    " p.hard_block_codes, p.final_sales_eligible, s.updated_at"
+                    + base + " ORDER BY s.updated_at DESC, s.clinic_id DESC LIMIT %s OFFSET %s",
+                    [*args, page_size, (page - 1) * page_size],
+                )
+                rows = cur.fetchall()
+                columns = [item.name for item in cur.description]
+            self._conn.commit()
+            return {"rows": [dict(zip(columns, row)) for row in rows], "total": total,
+                    "page": page, "page_size": page_size, "pages": pages}
+        except Exception:
+            self._safe_rollback()
+            raise
+
+    def listing_prefectures(self) -> list[str]:
+        """Distinct prefectures of Email-tracked Clinics, for the listing filter."""
+        if not self.available():
+            return []
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT DISTINCT t.prefecture FROM email_research.clinic_targets t"
+                    " JOIN email_research.clinic_email_status s ON s.clinic_id=t.clinic_id"
+                    " WHERE COALESCE(t.prefecture,'')<>'' ORDER BY t.prefecture"
+                )
+                values = [row[0] for row in cur.fetchall()]
+            self._conn.commit()
+            return values
+        except Exception:
+            self._safe_rollback()
+            raise
+
     def set_primary_candidate(self, *, clinic_id: int, candidate_id: int | None) -> None:
         self._check_cohort(clinic_id)
         try:

@@ -206,17 +206,61 @@ def _system_status_card():
         cols[2].metric("Runtime", "Ready" if runtime_ready else "未接続")
 
 
+EMAIL_LISTING_PAGE_SIZE = 100
+_HAS_EMAIL_OPTIONS = {"Emailあり": "yes", "Emailなし": "no", "すべて": "all"}
+
+
+def _email_listing_filters(repo):
+    """Filter widgets for the Email listing. Values are passed to SQL; nothing is filtered in Python."""
+    values = repo.PRIMARY_LISTING_FILTER_VALUES
+    with st.expander("絞り込み", expanded=False):
+        first = st.columns(3)
+        prefecture = first[0].selectbox("都道府県", [""] + repo.listing_prefectures(),
+                                        format_func=lambda v: v or "すべて", key="email_list_prefecture")
+        clinic_name = first[1].text_input("医院名（部分一致）", key="email_list_clinic_name")
+        has_email = first[2].radio("Email", list(_HAS_EMAIL_OPTIONS), horizontal=True, key="email_list_has_email")
+        second = st.columns(3)
+        research_status = second[0].multiselect("Research Status", values["research_status"], key="email_list_status")
+        auto_decision = second[1].multiselect("AI判定（AUTO_TRUE / AUTO_FALSE / REVIEW）", values["auto_decision"],
+                                              key="email_list_decision")
+        confidence = second[2].multiselect("Confidence", values["confidence"], key="email_list_confidence")
+        third = st.columns(2)
+        role = third[0].multiselect("Role", values["role"], key="email_list_role")
+        ownership = third[1].multiselect("Ownership", values["ownership"], key="email_list_ownership")
+    return {"prefecture": prefecture, "clinic_name": clinic_name, "has_email": _HAS_EMAIL_OPTIONS[has_email],
+            "research_status": research_status, "auto_decision": auto_decision, "confidence": confidence,
+            "role": role, "ownership": ownership}
+
+
 def _primary_listing_table(repo):
-    rows = repo.primary_listing(limit=500)
-    st.markdown(f"### Primary Email一覧（{len(rows):,}件、最大500件表示）")
+    st.markdown("### Primary Email一覧")
+    filters = _email_listing_filters(repo)
+    signature = repr(sorted(filters.items()))
+    if st.session_state.get("_email_list_signature") != signature:
+        st.session_state["_email_list_signature"] = signature
+        st.session_state["email_list_page"] = 1
+    result = repo.primary_listing_page(filters=filters, page=st.session_state.get("email_list_page", 1),
+                                       page_size=EMAIL_LISTING_PAGE_SIZE)
+    st.session_state["email_list_page"] = result["page"]
+    nav = st.columns([1, 2, 1])
+    if nav[0].button("前へ", key="email_list_prev", disabled=result["page"] <= 1, use_container_width=True):
+        st.session_state["email_list_page"] = result["page"] - 1
+        st.rerun(scope="fragment")
+    nav[1].markdown(f"<div style='text-align:center'>対象: {result['total']:,}件　{result['page']:,} / {result['pages']:,}</div>",
+                    unsafe_allow_html=True)
+    if nav[2].button("次へ", key="email_list_next", disabled=result["page"] >= result["pages"], use_container_width=True):
+        st.session_state["email_list_page"] = result["page"] + 1
+        st.rerun(scope="fragment")
+    rows = result["rows"]
     if not rows:
-        st.caption("Primary Emailはまだありません。")
+        st.caption("条件に一致するClinicはありません。")
         return
     import pandas as pd
     frame = pd.DataFrame([{
         "clinic_id": r["clinic_id"], "医院名": r.get("clinic_name") or "",
         "都道府県": r.get("prefecture") or "", "市区町村": r.get("city") or "",
-        "Primary Email": r["email"], "role": r.get("role") or "",
+        "research_status": r.get("research_status") or "",
+        "Primary Email": r.get("email") or "", "role": r.get("role") or "",
         "ownership": r.get("ownership") or "", "source_type": r.get("discovery_source") or "",
         "source_url": r.get("source_url") or "", "confidence": r.get("confidence") or "",
         "updated_at": r.get("updated_at") or "",
