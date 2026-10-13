@@ -8,6 +8,7 @@ function Stop-WithError { param([string]$Message); Write-Host "[ERROR] $Message"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 Set-Location $RepoRoot
 if (-not (Test-Path (Join-Path $RepoRoot ".git"))) { Stop-WithError "gitリポジトリではありません。" }
+if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) { Stop-WithError "Git was not found. Install Git for Windows first." }
 $Dirty = git status --porcelain 2>&1
 if ($LASTEXITCODE -ne 0 -or $Dirty) { Stop-WithError "未コミット変更があるかgit statusに失敗しました。" }
 git switch main 2>&1 | Out-Host
