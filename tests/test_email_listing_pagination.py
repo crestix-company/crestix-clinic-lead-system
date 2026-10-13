@@ -114,3 +114,14 @@ def test_email_page_render_never_starts_workers_or_touches_hp():
     assert start_button < ui.index("runner.start(") < ui.index('"一時停止", key="simple_email_auto_pause"')
     assert "auto_hp" not in ui and "hp_auto_run" not in ui
     assert "primary_listing(limit=500)" not in ui
+
+
+def test_auto_false_filter_includes_rejection_evidence():
+    conn = _Conn(total=0)
+    SupabaseEmailResearchRepository(conn).primary_listing_page(filters={"has_email": "all", "auto_decision": ["AUTO_FALSE"]})
+    count_sql, count_args = _listing_calls(conn)[0]
+    assert "email_research.email_rejection_evidence r WHERE r.clinic_id=s.clinic_id" in count_sql
+    assert count_args == [["AUTO_FALSE"]]
+    conn = _Conn(total=0)
+    SupabaseEmailResearchRepository(conn).primary_listing_page(filters={"has_email": "all", "auto_decision": ["REVIEW"]})
+    assert "email_rejection_evidence" not in _listing_calls(conn)[0][0]

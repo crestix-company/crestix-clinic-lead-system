@@ -786,12 +786,15 @@ class SupabaseEmailResearchRepository:
         decisions = [v for v in (filters.get("auto_decision") or [])
                      if v in cls.PRIMARY_LISTING_FILTER_VALUES["auto_decision"]]
         if decisions:
-            # Clinic has at least one Candidate with that AI decision (Primary or not).
-            clauses.append(
-                "EXISTS (SELECT 1 FROM email_research.email_candidates d "
-                "WHERE d.clinic_id=s.clinic_id AND d.auto_decision=ANY(%s::text[]))"
-            )
+            # Clinic has at least one Candidate with that AI decision (Primary or not). Rejected
+            # emails are persisted in email_rejection_evidence (always AUTO_FALSE), not as Candidates.
+            decision_sql = ("EXISTS (SELECT 1 FROM email_research.email_candidates d "
+                            "WHERE d.clinic_id=s.clinic_id AND d.auto_decision=ANY(%s::text[]))")
             args.append(decisions)
+            if "AUTO_FALSE" in decisions:
+                decision_sql = ("(" + decision_sql + " OR EXISTS (SELECT 1 FROM email_research.email_rejection_evidence r "
+                                "WHERE r.clinic_id=s.clinic_id))")
+            clauses.append(decision_sql)
         return (" WHERE " + " AND ".join(clauses)) if clauses else "", args
 
     def primary_listing_page(self, *, filters: dict | None = None, page: int = 1,
