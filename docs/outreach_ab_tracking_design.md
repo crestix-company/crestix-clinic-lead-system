@@ -462,6 +462,113 @@ PR #75のダッシュボード自体の実データ接続（§6.9）はまだ行
 （全量一致検証）は、§6.9の認証を設定した上でダッシュボードを実際に起動して初めて完了する。**
 今回の検証は「列マッピングが実シートの構造と一致していること」の確認に限定される。
 
+### 6.12 gcloud標準OAuthクライアントのスコープ制限への対応（カスタムOAuthクライアント方式）
+
+§6.10方式Aで案内した`gcloud auth application-default login`は、**gcloud自身が持つ共有の標準OAuth
+クライアント**を使う。Googleの制限ポリシーにより、この標準クライアントでは一部のスコープ（Sheets等）
+が制限対象になる場合がある
+（参考: https://docs.cloud.google.com/docs/authentication/troubleshoot-adc#access_blocked_when_using_scopes
+― ユーザーが提示）。
+
+この場合、**ユーザー自身のGoogle CloudプロジェクトでカスタムOAuthクライアントID（デスクトップアプリ
+種別）を作成し、`--client-id-file`で指定する方式**に切り替える。
+
+**PR #75の実装(`google.auth.default()`)は、変更なしでこの方式に対応できることを確認済み。**
+`google.auth.default()`はローカルのADC認証情報ファイル（`~/.config/gcloud/application_default_credentials.json`）
+を読むだけで、そのファイルが標準クライアント経由で作られたかカスタムクライアント経由で作られたかを
+区別しない。実際のスコープ付与は`gcloud auth application-default login --scopes=...`実行時の1回だけ
+行われる（`sheets_source.py`内で渡している`scopes=[READONLY_SCOPE]`引数は、ユーザー認証情報
+〈authorized_user型〉に対しては効果を持たない。これはGoogle認証ライブラリの既知の仕様で、サービス
+アカウント方式の場合にのみ有効に働く）。したがって**コード変更は不要**。
+
+**1. 既存Google Cloudプロジェクトの確認方法**
+
+```bash
+# gcloud未ログインの場合はまずログイン
+gcloud auth login
+
+# 既存プロジェクトの一覧を確認
+gcloud projects list
+
+# 既に使っているプロジェクトがあれば、それを使い続けてよい（新規作成は不要）
+export GCP_PROJECT_ID="<既存または選択したプロジェクトID>"
+gcloud config set project "$GCP_PROJECT_ID"
+```
+
+**2. Google Sheets APIの有効化**
+
+```bash
+gcloud services enable sheets.googleapis.com --project="$GCP_PROJECT_ID"
+
+# 有効化されたか確認
+gcloud services list --enabled --project="$GCP_PROJECT_ID" | grep sheets
+```
+
+**3. Desktop OAuthクライアントIDの作成方法（ブラウザ操作、gcloud CLIに該当コマンドが無いため）**
+
+Cloud ConsoleのUI操作が必要（2026年時点、汎用OAuthクライアントID作成をgcloud CLI単体で行う安定した
+コマンドは無いため、Console UIでの作成を案内する）。
+
+1. ブラウザで https://console.cloud.google.com/apis/credentials を開き、対象プロジェクト
+   （`$GCP_PROJECT_ID`）を選択する。
+2. 初回は「OAuth同意画面」の設定を求められる場合がある。User Type は**「外部」**を選択し、
+   公開ステータスは**「テスト」のまま**でよい（社内の少人数利用のため、Googleによるアプリ審査は
+   不要）。テストユーザーに、ADCログインで使う自分のGoogleアカウントを追加する。
+3. 「認証情報を作成」→「OAuth クライアント ID」を選択。
+4. アプリケーションの種類で**「デスクトップ アプリ」**を選択し、名前を入力（例:
+   `outreach-sheets-readonly-desktop`）。
+5. 作成後に表示される画面、または認証情報一覧から「JSONをダウンロード」する。
+
+**4. ダウンロードした鍵の保管、および`--client-id-file`を使うADC認証手順**
+
+```bash
+# ダウンロードしたファイルをリポジトリの外、パーミッション制限した場所に移動する
+mkdir -p ~/.config/outreach-dashboard
+mv ~/Downloads/client_secret_*.json ~/.config/outreach-dashboard/oauth-client-desktop.json
+chmod 600 ~/.config/outreach-dashboard/oauth-client-desktop.json
+```
+
+**5. cloud-platformとspreadsheets.readonlyのスコープ設定でADCログイン**
+
+```bash
+gcloud auth application-default login \
+  --client-id-file="$HOME/.config/outreach-dashboard/oauth-client-desktop.json" \
+  --scopes="https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/spreadsheets.readonly"
+
+# ADCのクォータ参照先プロジェクトを明示
+gcloud auth application-default set-quota-project "$GCP_PROJECT_ID"
+```
+
+ブラウザが開き、ログイン・同意を求められる（対象シートに既にアクセス権のあるGoogleアカウントで
+ログインする）。「このアプリは確認されていません」という警告が出ることがあるが、自分がOAuth
+同意画面のテストユーザーとして登録した本人のアプリなので、「詳細」→「（アプリ名）に移動」で進めてよい。
+
+**6. 認証完了後のREAD ONLY接続検証**
+
+```bash
+# ADCトークンが取得できることだけを確認する（トークンの値自体は出力させない・保存しない）
+gcloud auth application-default print-access-token > /dev/null && echo "ADC OK"
+
+export OUTREACH_SHEETS_ID="1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s"
+pip install google-api-python-client google-auth
+
+python scripts/launch_effect_dashboard.py
+```
+
+ブラウザでダッシュボードを開き、「🔒 既存Google Sheetsの実データを表示しています」の表示、および
+§6.6の整合性確認パネルで対象テンプレートがすべて「✅」になることを確認する。
+
+**注意（認証情報の非コミット・非ログ出力）**:
+- ダウンロードしたOAuthクライアントJSON（`client_secret_*.json`）、ADCトークンファイル
+  （`application_default_credentials.json`）は、いずれもリポジトリの外（`~/.config/...`）に置き、
+  `.gitignore`にもパターンを追加済み（`client_secret*.json` / `*oauth-client*.json` /
+  `application_default_credentials.json`）。
+- `gcloud auth application-default print-access-token`の出力をターミナルに表示したり、ログ・
+  チャット・コミットメッセージに貼り付けたりしない（上記コマンドは`> /dev/null`で値を破棄する形に
+  している）。
+- `sheets_source.py`のエラーメッセージには認証情報の値・パスを含めないことを引き続き保証する
+  （§6.5の監査で確認済み、変更なし）。
+
 ## 7. スコープ外（今回も将来PRでも、Gmail操作・トラッキング実装はしない）
 
 - 本ドキュメントの作成にあたり、Gmail操作・スプレッドシートへの書き込み・GAS実行は一切行っていない。
