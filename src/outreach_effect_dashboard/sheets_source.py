@@ -5,6 +5,17 @@ use requires explicit authorization (see docs/outreach_ab_tracking_design.md §6
 fails closed (raises immediately) if the required env vars are missing, exactly like
 src/outreach/readonly_access.py does for the Clinic Master DB connection in the sibling PR.
 
+Two auth modes, so an existing Google identity can be reused instead of always minting a new
+service account (see docs/outreach_ab_tracking_design.md §6.8 for the investigation this is
+based on -- no reusable credential existed on this machine, but gcloud Application Default
+Credentials is a lighter-weight option than a service account once the user runs one command):
+
+- ADC (default, lower friction): ``gcloud auth application-default login`` as the user's own
+  Google account. Reuses whatever Sheets access that account already has (this account already
+  has Viewer access to the target sheet via an existing share) -- no new sharing step needed.
+- Service account (opt-in via OUTREACH_SHEETS_READONLY_CREDENTIALS): for unattended/non-interactive
+  use. Requires creating a service account and sharing the sheet with it separately.
+
 Requests only the read-only scope; never requests write/edit access, and this module contains
 no code path that calls a write/update API.
 """
@@ -15,8 +26,8 @@ from datetime import datetime
 
 from .models import SendRecord
 
-CREDENTIALS_ENV_VAR = "OUTREACH_SHEETS_READONLY_CREDENTIALS"
-SHEET_ID_ENV_VAR = "OUTREACH_SHEETS_ID"
+CREDENTIALS_ENV_VAR = "OUTREACH_SHEETS_READONLY_CREDENTIALS"  # service account key path (optional)
+SHEET_ID_ENV_VAR = "OUTREACH_SHEETS_ID"  # required either way
 READONLY_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
 
 # 案件管理シートの列（docs/outreach_ab_tracking_design.md §2.2）のうち、このダッシュボードが読む列のみ。
@@ -27,35 +38,66 @@ class SheetsAccessError(RuntimeError):
     """Required configuration is missing, or the sheet can't be read read-only. Caller must stop."""
 
 
+def _require_sheet_id(environ=None) -> str:
+    env = os.environ if environ is None else environ
+    sheet_id = (env.get(SHEET_ID_ENV_VAR) or "").strip()
+    if not sheet_id:
+        raise SheetsAccessError(
+            f"実データ連携は未許可です。{SHEET_ID_ENV_VAR}（対象スプレッドシートID）を設定し、"
+            f"いずれかの認証方式を用意してください: "
+            f"(A) `gcloud auth application-default login --scopes={READONLY_SCOPE}` を実行する"
+            f"（既存のGoogleアカウントの閲覧権限をそのまま使う、新規共有不要）、"
+            f"(B) {CREDENTIALS_ENV_VAR} にREAD ONLYサービスアカウントの認証情報JSONパスを設定する。"
+            "許可が整うまでは synthetic_source の合成データを使用します。"
+        )
+    return sheet_id
+
+
 def _require_config(environ=None) -> tuple[str, str]:
+    """Backward-compat helper: requires the service-account path specifically (used by existing
+    tests/callers that assert the service-account mode's own config error). ADC mode does not
+    go through this function -- see fetch_raw_rows().
+    """
     env = os.environ if environ is None else environ
     credentials_path = (env.get(CREDENTIALS_ENV_VAR) or "").strip()
-    sheet_id = (env.get(SHEET_ID_ENV_VAR) or "").strip()
-    if not credentials_path or not sheet_id:
+    sheet_id = _require_sheet_id(environ)
+    if not credentials_path:
         raise SheetsAccessError(
-            f"実データ連携は未許可です。{CREDENTIALS_ENV_VAR}（READ ONLYサービスアカウントの認証情報JSONパス）"
-            f"と{SHEET_ID_ENV_VAR}（対象スプレッドシートID）の両方を設定してください。"
-            "許可が整うまでは synthetic_source の合成データを使用します。"
+            f"{CREDENTIALS_ENV_VAR}（READ ONLYサービスアカウントの認証情報JSONパス）が未設定です。"
         )
     return credentials_path, sheet_id
 
 
+def _build_credentials(environ=None):
+    """Returns (credentials, mode_label). Tries ADC first (reuses an existing Google identity,
+    e.g. via ``gcloud auth application-default login``), falls back to a service-account key
+    file only if OUTREACH_SHEETS_READONLY_CREDENTIALS is explicitly set.
+    """
+    env = os.environ if environ is None else environ
+    credentials_path = (env.get(CREDENTIALS_ENV_VAR) or "").strip()
+    if credentials_path:
+        from google.oauth2 import service_account
+        return service_account.Credentials.from_service_account_file(
+            credentials_path, scopes=[READONLY_SCOPE]), "service_account"
+    import google.auth
+    credentials, _project = google.auth.default(scopes=[READONLY_SCOPE])
+    return credentials, "adc"
+
+
 def fetch_raw_rows(environ=None, *, range_name: str = REQUIRED_RANGE):
     """Returns raw sheet rows. Raises SheetsAccessError if not configured, or if the read
-    itself fails for any reason (missing dependency, bad credentials file, insufficient
+    itself fails for any reason (missing dependency, no ADC/bad credentials file, insufficient
     permission, network error, etc.) -- the caller must be able to treat every failure mode
     the same way (fall back to synthetic data), never crash the page with a raw traceback.
 
     Never requests a write scope. Google API client is imported lazily so this module can be
     imported (and its fail-closed config check exercised) without the dependency installed.
     """
-    credentials_path, sheet_id = _require_config(environ)
+    sheet_id = _require_sheet_id(environ)
     try:
-        from google.oauth2 import service_account
         from googleapiclient.discovery import build
 
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_path, scopes=[READONLY_SCOPE])
+        credentials, _mode = _build_credentials(environ)
         service = build("sheets", "v4", credentials=credentials)
         result = service.spreadsheets().values().get(
             spreadsheetId=sheet_id, range=range_name).execute()

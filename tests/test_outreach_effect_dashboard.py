@@ -199,6 +199,21 @@ def test_fetch_raw_rows_wraps_any_failure_as_sheets_access_error_not_raw_excepti
         fetch_raw_rows(env)
 
 
+def test_fetch_raw_rows_tries_adc_when_no_service_account_path_given():
+    # OUTREACH_SHEETS_READONLY_CREDENTIALS を設定しない＝ADC（既存のGoogleアカウント）経路。
+    # 本テスト環境にはgoogle-auth/ADCいずれも無いため、これもSheetsAccessErrorに安全に包まれる。
+    env = {"OUTREACH_SHEETS_ID": "dummy-sheet-id"}
+    with pytest.raises(SheetsAccessError):
+        fetch_raw_rows(env)
+
+
+def test_sheet_id_alone_is_enough_to_pass_the_config_presence_check():
+    # 認証方式の選択は fetch_raw_rows 内部（ADC優先、無ければサービスアカウント）に任される。
+    # シートIDさえあれば「設定不足」エラーにはならない（実際の認証失敗は別エラーで捕捉される）。
+    from src.outreach_effect_dashboard.sheets_source import _require_sheet_id
+    assert _require_sheet_id({"OUTREACH_SHEETS_ID": "abc"}) == "abc"
+
+
 def test_sheets_access_error_message_never_contains_the_credentials_path():
     # 認証情報漏えい防止: エラーメッセージに設定値（パスの中身）そのものを含めない。
     secret_looking_path = "/Users/someone/.secret/my-service-account-key.json"
