@@ -167,7 +167,7 @@ def test_classify_article_states():
     assert classify_article("u1", [link("u1", "NOT_LISTED")]).status == ARTICLE_NOT_LISTED
     assert classify_article("u1", [link("u1", verified=False)]).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", []).status == ARTICLE_UNCONFIRMED
-    assert classify_article("u1", [], join_is_exhaustive=True).status == ARTICLE_NOT_LISTED
+    assert classify_article("u1", [link("u2", "NOT_LISTED")]).status == ARTICLE_UNCONFIRMED  # JOIN未登録≠記事なし
     assert classify_article("u1", [link("u1"), link("u1")]).status == ARTICLE_UNCONFIRMED
 
 

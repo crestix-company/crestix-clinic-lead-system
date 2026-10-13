@@ -46,13 +46,13 @@ def valid_email(value: str) -> bool:
     return bool(_EMAIL.fullmatch((value or "").strip()))
 
 
-def classify_article(clinic_uuid: str, links: list[ArticleLink], *,
-                     join_is_exhaustive: bool = False) -> ArticleState:
-    """記事あり/なし/未確認の判定。掲載確認のない医院を「記事あり」にしない。
+def classify_article(clinic_uuid: str, links: list[ArticleLink]) -> ArticleState:
+    """記事あり/なし/未確認の判定。確認根拠のない断定はしない。
 
     - 記事あり: 既存lookup_articleがREADY（検証済み・LISTED・VERIFIED_ARTICLE・正規URL）
-    - 記事なし: JOIN CSVでNOT_LISTEDかつverified=true、またはJOIN CSVを網羅リストとして扱い未登録
-    - それ以外: 未確認
+    - 記事なし: JOIN CSVでNOT_LISTEDかつverified=true（未掲載が確認済み）
+    - それ以外（JOIN CSVなし・JOINに未登録・未検証・複数候補）: 未確認
+      JOINに存在しないだけでは「記事なし」と断定しない。
     """
     looked = lookup_article(clinic_uuid, links)
     if looked.status == "READY" and looked.record is not None:
@@ -61,8 +61,6 @@ def classify_article(clinic_uuid: str, links: list[ArticleLink], *,
     rows = [r for r in links if r.clinic_uuid.strip().lower() == key]
     if rows and all(r.listing_status == "NOT_LISTED" and r.verified for r in rows):
         return ArticleState(ARTICLE_NOT_LISTED, reason="記事JOINで未掲載確認済み")
-    if not rows and looked.status == "NO_MAPPING" and join_is_exhaustive:
-        return ArticleState(ARTICLE_NOT_LISTED, reason="網羅JOINに未登録")
     return ArticleState(ARTICLE_UNCONFIRMED, reason=looked.reason or "記事掲載状況が未確認")
 
 
@@ -76,8 +74,7 @@ def _tuple(value) -> tuple[str, ...]:
     return tuple(dict.fromkeys(_text(x) for x in (value or ()) if _text(x)))
 
 
-def target_from_record(record: dict, *, email: str = "", links: list[ArticleLink] | None = None,
-                       join_is_exhaustive: bool = False) -> ClinicTarget:
+def target_from_record(record: dict, *, email: str = "", links: list[ArticleLink] | None = None) -> ClinicTarget:
     from src.normalizer.address import extract_municipality
     from src.normalizer.clinic_name import person_from_owner
     uuid = _text(record.get("uuid"))
@@ -96,7 +93,7 @@ def target_from_record(record: dict, *, email: str = "", links: list[ArticleLink
         director_name=_text(director),
         email=email,
         email_status=EMAIL_FOUND if valid_email(email) else EMAIL_MISSING,
-        article=classify_article(uuid, links or [], join_is_exhaustive=join_is_exhaustive),
+        article=classify_article(uuid, links or []),
     )
 
 
@@ -111,8 +108,7 @@ class Selection:
 
 def select_targets(records: Iterable[dict], *, email_lookup: Callable[[list[int]], dict[int, str]],
                    links: list[ArticleLink], email_filter: str = "指定なし",
-                   article_filter: tuple[str, ...] = (), join_is_exhaustive: bool = False,
-                   limit: int = DEFAULT_LIMIT) -> Selection:
+                   article_filter: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT) -> Selection:
     """Dedupe by Clinic UUID, apply email/article post-filters, cap at ``limit`` (default 50)."""
     records = list(records)
     emails = email_lookup([int(r.get("id") or 0) for r in records]) if records else {}
@@ -121,7 +117,7 @@ def select_targets(records: Iterable[dict], *, email_lookup: Callable[[list[int]
     truncated = False
     for record in records:
         target = target_from_record(record, email=emails.get(int(record.get("id") or 0), ""),
-                                    links=links, join_is_exhaustive=join_is_exhaustive)
+                                    links=links)
         if not target.clinic_uuid:
             no_uuid += 1
             continue

@@ -24,12 +24,12 @@ from src.outreach.generation import (
     FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
     summarize, to_csv_bytes,
 )
+from src.outreach.staff import load_staff
 from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, select_targets
 from src.utils.date_utils import today_japan
 
 ARTICLE_MASTER_ENV = "OUTREACH_ARTICLE_MASTER_CSV"
 ARTICLE_JOIN_ENV = "OUTREACH_ARTICLE_JOIN_CSV"
-STAFF_CONFIG = Path(__file__).resolve().parents[1] / "config" / "outreach_is_staff.yml"
 ARTICLE_COLUMNS = {"clinic_uuid", "listing_status", "example_article_url", "listing_url",
                    "listing_kind", "source_row", "article_id", "verified"}
 HP_RANK_OPTIONS = {"指定なし": [], "A+B": ["A", "B"], "A": ["A"], "B": ["B"], "C": ["C"], "D": ["D"]}
@@ -40,20 +40,25 @@ K = "outreach_"  # session_state key prefix (既存画面のキーと衝突さ�
 # ---------- READ ONLY data loaders ----------
 
 def _upload_or_env(label, env_var, key):
+    """Returns (source, name): source is uploaded bytes or the env-configured Path (read only)."""
     upload = st.file_uploader(label, type=["csv"], key=K + key)
     if upload is not None:
         return upload.getvalue(), upload.name
     path = (os.environ.get(env_var) or "").strip()
     if path and Path(path).is_file():
-        return Path(path).read_bytes(), Path(path).name
+        return Path(path), Path(path).name
+    if path:
+        st.warning(f"{env_var} のファイルが見つかりません: {path}")
     return None, ""
 
 
-def _load_articles(data: bytes) -> list[Article]:
-    # 原本はread_masterの読み取り専用パスで扱う。一時コピーは即削除。
+def _load_articles(source) -> list[Article]:
+    if isinstance(source, Path):
+        return read_master(source)  # 原本を読み取りモードで直接読む（書き込み・コピーなし）
+    # アップロードはメモリ上のため、読み取り用の一時コピーを作り即削除する
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "article_master.csv"
-        path.write_bytes(data)
+        path.write_bytes(source)
         return read_master(path)
 
 
@@ -64,7 +69,8 @@ def _bool(value):
     return text == "true"
 
 
-def _load_links(data: bytes) -> list[ArticleLink]:
+def _load_links(source) -> list[ArticleLink]:
+    data = source.read_bytes() if isinstance(source, Path) else source
     reader = csv.DictReader(StringIO(data.decode("utf-8-sig")))
     if not reader.fieldnames or not ARTICLE_COLUMNS.issubset(reader.fieldnames):
         raise ValueError("記事JOIN CSVの必要列がありません: " + ", ".join(sorted(ARTICLE_COLUMNS - set(reader.fieldnames or []))))
@@ -74,15 +80,6 @@ def _load_links(data: bytes) -> list[ArticleLink]:
         listing_kind=(r["listing_kind"] or "").strip(), source_row=(r["source_row"] or "").strip(),
         article_id=(r["article_id"] or "").strip(), verified=_bool(r["verified"]),
     ) for r in reader]
-
-
-def _staff_options():
-    try:
-        import yaml
-        data = yaml.safe_load(STAFF_CONFIG.read_text(encoding="utf-8")) or {}
-        return [str(x).strip() for x in data.get("staff") or [] if str(x).strip()]
-    except (OSError, ValueError, ImportError):
-        return []
 
 
 def _prefectures(store):
@@ -131,10 +128,10 @@ def _tab_targets(store, demo):
         return
     st.session_state[K + "articles"] = articles
     st.caption(f"記事原本: {len(articles):,}件{f'（{master_name}）' if master_name else '（未読込）'}　"
-               f"記事JOIN: {len(links):,}行{f'（{join_name}）' if join_name else '（未読込：全医院が記事未確認になります）'}")
-    exhaustive = st.checkbox("記事JOIN CSVを掲載医院の網羅リストとして扱う（未登録の医院＝記事なし）",
-                             value=False, key=K + "join_exhaustive",
-                             help="OFFの場合、JOINに無い医院は「未確認」となりNEEDS_REVIEWに分類されます。")
+               f"記事JOIN: {len(links):,}行{f'（{join_name}）' if join_name else '（任意・未読込）'}")
+    st.caption("記事あり＝掲載確認済み／記事なし＝未掲載確認済み（いずれも記事JOIN CSVの検証済み行のみ）／"
+               "それ以外は未確認。JOIN CSVがなくても、未確認として地域・標榜科目から記事例を選び安全な文面で生成します"
+               "（未確認はNEEDS_REVIEW）。JOINに無いだけで記事なしとは判定しません。")
 
     st.markdown("#### 絞り込み（Clinic Master・READ ONLY）")
     prefs = _prefectures(store)
@@ -165,7 +162,7 @@ def _tab_targets(store, demo):
             return
         selection = select_targets(records, email_lookup=_email_lookup, links=links,
                                    email_filter=email_filter, article_filter=tuple(article_filter),
-                                   join_is_exhaustive=exhaustive, limit=int(limit))
+                                   limit=int(limit))
         st.session_state[K + "selection"] = selection
         st.session_state.pop(K + "results", None)
 
@@ -190,8 +187,12 @@ def _tab_generate():
     if not selection or not selection.targets:
         st.info("先に「① 対象選択」で対象医院を抽出してください。")
         return
-    options = _staff_options()
-    choice = st.selectbox("IS担当者", options + ["（手入力）"], key=K + "staff_choice")
+    staff_config = load_staff()
+    for error in staff_config.errors:
+        st.warning(f"IS担当者設定: {error}")
+    if not staff_config.names:
+        st.caption(f"IS担当者は {staff_config.path.name} に登録すると選択肢に表示されます（コード修正不要）。")
+    choice = st.selectbox("IS担当者", list(staff_config.names) + ["（手入力）"], key=K + "staff_choice")
     staff = st.text_input("IS担当者名（手入力）", key=K + "staff_manual") if choice == "（手入力）" else choice
 
     st.markdown("##### 日程候補")
@@ -216,7 +217,7 @@ def _tab_generate():
     st.caption("記事判定: " + "　".join(f"{ARTICLE_STATUS_LABELS[s]} {n}件" for s, n in counts.items())
                + f"　｜記事原本 {len(articles):,}件から第一推奨1件＋候補最大3件を選定")
     if not articles:
-        st.warning("記事原本CSVが未読込です。推奨記事を選定できないため、記事あり以外は失敗になります。")
+        st.warning("記事原本CSVが未読込です。推奨記事を選定できないため、記事あり以外はFAILEDになります。")
     if st.button(f"{len(selection.targets)}医院の文章を一括生成", type="primary", key=K + "generate",
                  disabled=not (staff or "").strip() or not dates):
         settings = GenerationSettings(staff=staff.strip(), dates=tuple(sorted(dates)), start_time=start_time,
