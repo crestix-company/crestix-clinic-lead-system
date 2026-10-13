@@ -22,3 +22,12 @@ def test_specific_aesthetic_tags_do_not_collapse_into_general_aesthetic():
 
 def test_general_category_evidence_falls_back_to_general_dentistry():
     assert category_evidence({"GENERAL_DENTISTRY"}, "09") == "一般歯科"
+
+
+def test_export_uses_formal_30_column_comdesk_contract():
+    from src.master.comdesk import COMDESK_EXPORT_HEADERS
+
+    assert len(COMDESK_EXPORT_HEADERS) == 30
+    assert COMDESK_EXPORT_HEADERS[-2:] == ["HPランク", "メールアドレス"]
+    assert "営業カテゴリ" not in COMDESK_EXPORT_HEADERS
+    assert "カテゴリ根拠タグ" not in COMDESK_EXPORT_HEADERS
