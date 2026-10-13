@@ -93,7 +93,9 @@ def main():
     print(f"クリニック営業マスター： http://127.0.0.1:{port}/",flush=True)
     command=[sys.executable,"-m","streamlit","run",str(root/"app_v2.py"),"--server.address","127.0.0.1",
              "--server.port",str(port),"--browser.serverAddress","127.0.0.1","--browser.serverPort",str(port),
-             "--browser.gatherUsageStats","false","--global.developmentMode","false"]
+             "--browser.gatherUsageStats","false","--global.developmentMode","false",
+             # Never block a one-click start on Streamlit's first-run "Email:" console prompt.
+             "--server.showEmailPrompt","false"]
     if args.headless:
         command += ["--server.headless","true"]
     return subprocess.call(command,cwd=root)

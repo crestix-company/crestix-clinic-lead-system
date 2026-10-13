@@ -222,3 +222,26 @@ def test_updater_stops_without_touching_uncommitted_changes(tmp_path):
     assert "Uncommitted changes" in result.stdout
     assert "STUB_LAUNCHED" not in result.stdout
     assert (clone / "local_note.txt").read_text(encoding="ascii") == "keep me"
+
+
+def test_all_windows_batch_files_are_ascii_crlf():
+    # UTF-8 Japanese after "chcp 65001" makes cmd.exe execute fragments of echo lines as commands.
+    for path in sorted(ROOT.glob("*.bat")):
+        payload = path.read_bytes()
+        payload.decode("ascii")
+        assert b"\n" not in payload.replace(b"\r\n", b""), path.name
+
+
+def test_launch_v2_disables_streamlit_first_run_email_prompt(monkeypatch):
+    from scripts import launch_v2
+
+    calls = []
+    monkeypatch.setattr(launch_v2, "load_runtime_env", lambda root: True)
+    monkeypatch.setattr(launch_v2, "choose_port", lambda preferred: 8507)
+    monkeypatch.setattr(launch_v2.subprocess, "call", lambda command, cwd: calls.append(command) or 0)
+    monkeypatch.setattr(launch_v2.sys, "argv", ["launch_v2.py"])
+    assert launch_v2.main() == 0
+    command = calls[0]
+    assert command[command.index("--server.showEmailPrompt") + 1] == "false"
+    assert command[command.index("--server.port") + 1] == "8507"
+    assert "--server.headless" not in command
