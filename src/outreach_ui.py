@@ -1,135 +1,317 @@
-"""Streamlit preview-only outreach workspace (CSV inputs, no DB or Gmail writes)."""
+"""「メール送付文章」画面（4タブ）。
+
+Clinic Master・Email調査結果・マイナビ記事原本はすべてREAD ONLYで参照する。
+Gmail下書き作成・メール送信・DB書き込みは一切行わない（CSVダウンロードのみ）。
+"""
 from __future__ import annotations
 
 import csv
+import os
+import tempfile
 from datetime import timedelta
 from io import StringIO
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 from src.outreach.article_adapter import ArticleLink
-from src.outreach.batch_preview import ClinicContact, preview_batch
-from src.outreach.email_template import five_weekdays
+from src.outreach.article_recommender import Article, read_master
+from src.outreach.compose import (
+    ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_STATUS_LABELS, ARTICLE_UNCONFIRMED,
+)
+from src.outreach.generation import (
+    FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
+    summarize, to_csv_bytes,
+)
+from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, select_targets
 from src.utils.date_utils import today_japan
 
-CONTACT_COLUMNS = {"clinic_uuid", "clinic_name", "primary_email", "recipient_role",
-                   "recipient_name", "email_verified"}
+ARTICLE_MASTER_ENV = "OUTREACH_ARTICLE_MASTER_CSV"
+ARTICLE_JOIN_ENV = "OUTREACH_ARTICLE_JOIN_CSV"
+STAFF_CONFIG = Path(__file__).resolve().parents[1] / "config" / "outreach_is_staff.yml"
 ARTICLE_COLUMNS = {"clinic_uuid", "listing_status", "example_article_url", "listing_url",
                    "listing_kind", "source_row", "article_id", "verified"}
+HP_RANK_OPTIONS = {"指定なし": [], "A+B": ["A", "B"], "A": ["A"], "B": ["B"], "C": ["C"], "D": ["D"]}
+SCAN_POOL = 300
+K = "outreach_"  # session_state key prefix (既存画面のキーと衝突させない)
 
 
-def _read_csv(upload, required):
-    text = upload.getvalue().decode("utf-8-sig")
-    reader = csv.DictReader(StringIO(text))
-    if not reader.fieldnames or not required.issubset(reader.fieldnames):
-        raise ValueError("必要列がありません: " + ", ".join(sorted(required - set(reader.fieldnames or []))))
-    return list(reader)
+# ---------- READ ONLY data loaders ----------
+
+def _upload_or_env(label, env_var, key):
+    upload = st.file_uploader(label, type=["csv"], key=K + key)
+    if upload is not None:
+        return upload.getvalue(), upload.name
+    path = (os.environ.get(env_var) or "").strip()
+    if path and Path(path).is_file():
+        return Path(path).read_bytes(), Path(path).name
+    return None, ""
+
+
+def _load_articles(data: bytes) -> list[Article]:
+    # 原本はread_masterの読み取り専用パスで扱う。一時コピーは即削除。
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "article_master.csv"
+        path.write_bytes(data)
+        return read_master(path)
 
 
 def _bool(value):
-    if str(value).strip().lower() not in {"true", "false"}:
-        raise ValueError("確認済みフラグは true / false のみ許可します")
-    return str(value).strip().lower() == "true"
+    text = str(value).strip().lower()
+    if text not in {"true", "false"}:
+        raise ValueError("verified列は true / false のみ許可します")
+    return text == "true"
 
 
-def outreach_preview_page():
-    st.subheader("営業メール｜一括プレビュー")
-    st.info("開発プレビュー専用。ここではGmail下書き・送信・本番DB変更は一切行いません。")
-    st.caption("記事原本CSV単体ではClinic UUIDと紐付きません。検証済み記事JOIN CSVが必要です。")
-    st.divider()
-    st.markdown("#### おすすめ記事の候補選定（プレビュー）")
-    st.caption("地域・標榜科目から既存の記事マスターを検索。掲載中・販売枠の保証ではありません。")
-    article_master = st.file_uploader("マイナビ記事原本または実在確認記事CSV（読み取り専用）",
-                                      type=["csv"], key="outreach_article_master")
-    region = st.text_input("都道府県", key="outreach_region")
-    municipality = st.text_input("市区町村", key="outreach_municipality")
-    department = st.text_input("標榜科目（複数は読点区切り）", key="outreach_department")
-    treatment = st.text_input("確認済み治療・検査（任意・読点区切り）", key="outreach_treatment")
-    if st.button("おすすめ記事候補を表示", key="outreach_recommend"):
-        if article_master is None or not department.strip():
-            st.warning("記事CSVと標榜科目の入力が必要です。")
-        else:
-            import tempfile
-            from pathlib import Path
-            from src.outreach.article_recommender import read_master, recommend
-            try:
-                # Streamlit upload remains in-memory; a temporary read-only copy is removed immediately.
-                with tempfile.TemporaryDirectory() as directory:
-                    path = Path(directory) / "article_master.csv"
-                    path.write_bytes(article_master.getvalue())
-                    articles = read_master(path)
-                chosen = recommend(
-                    articles,
-                    prefecture=region,
-                    municipality=municipality,
-                    departments=tuple(x.strip() for x in department.replace("、", ",").split(",") if x.strip()),
-                    treatments=tuple(x.strip() for x in treatment.replace("、", ",").split(",") if x.strip()),
-                )
-                if chosen:
-                    for n, item in enumerate(chosen, 1):
-                        st.write(f"{n}. {item.article.title}")
-                        st.code(item.article.url)
-                        st.caption(" / ".join(item.reasons))
-                else:
-                    st.warning("一致候補がありません。診療科の同義語・地域拡張を人間が確認してください。")
-            except (OSError, ValueError, UnicodeDecodeError) as exc:
-                st.error(f"記事CSVを確認してください: {exc}")
-    st.divider()
-    contacts_file = st.file_uploader("医院・宛先CSV（Clinic UUID付き）", type=["csv"], key="outreach_contacts")
-    articles_file = st.file_uploader("マイナビ記事JOIN CSV（Clinic UUID・検証根拠付き）", type=["csv"], key="outreach_articles")
-    staff = st.text_input("IS担当者名", value="", key="outreach_staff")
-    start = st.date_input("候補日時の開始日（平日5日分を表示）",
-                          value=today_japan() + timedelta(days=2),
-                          key="outreach_start")
-    called = st.checkbox("全対象医院に本日電話し、メール送付を案内されたことを確認済み",
-                         value=False, key="outreach_called")
-    director = st.checkbox("院長参加依頼文を使うことを確認済み",
-                           value=False, key="outreach_director")
-    if not st.button("最大50件をプレビュー", type="primary", key="outreach_preview"):
-        return
-    if contacts_file is None or articles_file is None:
-        st.warning("医院CSVと記事JOIN CSVの両方が必要です。")
-        return
+def _load_links(data: bytes) -> list[ArticleLink]:
+    reader = csv.DictReader(StringIO(data.decode("utf-8-sig")))
+    if not reader.fieldnames or not ARTICLE_COLUMNS.issubset(reader.fieldnames):
+        raise ValueError("記事JOIN CSVの必要列がありません: " + ", ".join(sorted(ARTICLE_COLUMNS - set(reader.fieldnames or []))))
+    return [ArticleLink(
+        clinic_uuid=(r["clinic_uuid"] or "").strip(), listing_status=(r["listing_status"] or "").strip(),
+        example_article_url=(r["example_article_url"] or "").strip(), listing_url=(r["listing_url"] or "").strip(),
+        listing_kind=(r["listing_kind"] or "").strip(), source_row=(r["source_row"] or "").strip(),
+        article_id=(r["article_id"] or "").strip(), verified=_bool(r["verified"]),
+    ) for r in reader]
+
+
+def _staff_options():
     try:
-        contact_rows = _read_csv(contacts_file, CONTACT_COLUMNS)
-        article_rows = _read_csv(articles_file, ARTICLE_COLUMNS)
-        # Stop before generating any preview if the upload exceeds pilot scope.
-        if len(contact_rows) > 50:
-            st.warning("初回は50件以下の医院CSVに絞ってください。")
-            return
-        contacts = [ClinicContact(
-            clinic_uuid=r["clinic_uuid"], clinic_name=r["clinic_name"],
-            primary_email=r["primary_email"], recipient_role=r["recipient_role"],
-            recipient_name=r["recipient_name"], email_verified=_bool(r["email_verified"]),
-        ) for r in contact_rows]
-        links = [ArticleLink(
-            clinic_uuid=r["clinic_uuid"], listing_status=r["listing_status"],
-            example_article_url=r["example_article_url"], listing_url=r["listing_url"],
-            listing_kind=r["listing_kind"], source_row=r["source_row"],
-            article_id=r["article_id"], verified=_bool(r["verified"]),
-        ) for r in article_rows]
-        results = preview_batch(
-            contacts, links, is_staff_name=staff,
-            candidate_dates=five_weekdays(start),
-            called_today_and_told_to_email=called,
-            director_attendance_requested=director,
-        )
-    except (ValueError, UnicodeDecodeError) as exc:
-        st.error(f"入力を確認してください: {exc}")
+        import yaml
+        data = yaml.safe_load(STAFF_CONFIG.read_text(encoding="utf-8")) or {}
+        return [str(x).strip() for x in data.get("staff") or [] if str(x).strip()]
+    except (OSError, ValueError, ImportError):
+        return []
+
+
+def _prefectures(store):
+    if getattr(store, "is_supabase_runtime", False):
+        return store.prefectures()
+    with store.connect() as c:
+        return [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
+
+
+def _email_lookup(ids):
+    """Email調査のPrimary Email（Ownership guard通過分のみ）をREAD ONLYで1クエリ取得。"""
+    st.session_state.pop(K + "email_error", None)
+    if not ids:
+        return {}
+    try:
+        from src.repository.email_database import email_repositories_for_ui
+        bundle = email_repositories_for_ui()
+        repo = bundle.email_research if bundle is not None else None
+        if repo is None or not repo.available():
+            st.session_state[K + "email_error"] = "未接続"
+            return {}
+        wanted = set(ids)
+        return {int(r["clinic_id"]): str(r.get("email") or "").strip()
+                for r in repo.primary_listing(limit=1_000_000)
+                if int(r["clinic_id"]) in wanted and r.get("final_sales_eligible") is not False}
+    except Exception as exc:  # Email DB未接続でも画面は止めない（未取得扱い）
+        st.session_state[K + "email_error"] = type(exc).__name__
+        return {}
+
+
+# ---------- tabs ----------
+
+def _tab_targets(store, demo):
+    st.markdown("#### 記事データ（READ ONLY）")
+    st.caption(f"アップロードがない場合は環境変数 {ARTICLE_MASTER_ENV} / {ARTICLE_JOIN_ENV} のCSVを読み取ります。原本は変更しません。")
+    cols = st.columns(2)
+    with cols[0]:
+        master_bytes, master_name = _upload_or_env("マイナビ記事原本CSV（No./タイトル/URL/KW）", ARTICLE_MASTER_ENV, "master")
+    with cols[1]:
+        join_bytes, join_name = _upload_or_env("記事JOIN CSV（Clinic UUID・掲載確認根拠）", ARTICLE_JOIN_ENV, "join")
+    try:
+        articles = _load_articles(master_bytes) if master_bytes else []
+        links = _load_links(join_bytes) if join_bytes else []
+    except (OSError, ValueError, UnicodeDecodeError) as exc:
+        st.error(f"記事CSVを確認してください: {exc}")
         return
-    counts = {state: sum(r.status == state for r in results)
-              for state in ("READY", "NEEDS_REVIEW", "NO_MAPPING")}
-    st.write(f"対象: {len(results)}件 / READY: {counts['READY']}件 / 要確認: {counts['NEEDS_REVIEW']}件 / 紐付けなし: {counts['NO_MAPPING']}件")
+    st.session_state[K + "articles"] = articles
+    st.caption(f"記事原本: {len(articles):,}件{f'（{master_name}）' if master_name else '（未読込）'}　"
+               f"記事JOIN: {len(links):,}行{f'（{join_name}）' if join_name else '（未読込：全医院が記事未確認になります）'}")
+    exhaustive = st.checkbox("記事JOIN CSVを掲載医院の網羅リストとして扱う（未登録の医院＝記事なし）",
+                             value=False, key=K + "join_exhaustive",
+                             help="OFFの場合、JOINに無い医院は「未確認」となりNEEDS_REVIEWに分類されます。")
+
+    st.markdown("#### 絞り込み（Clinic Master・READ ONLY）")
+    prefs = _prefectures(store)
+    from src.normalizer.departments import DEPARTMENTS
+    c1, c2 = st.columns(2)
+    pref = c1.multiselect("都道府県", prefs, default=["東京都"] if "東京都" in prefs else [], key=K + "pref")
+    city_text = c2.text_input("市区町村（複数は読点区切り）", key=K + "city")
+    deps = c1.multiselect("標榜診療科", DEPARTMENTS, key=K + "deps")
+    rank_label = c2.selectbox("HPランク（HP ABC判定）", list(HP_RANK_OPTIONS), index=0 if demo else 1, key=K + "rank")
+    email_filter = c1.radio("メール", ["指定なし", "取得済み", "未取得"], horizontal=True, key=K + "email_filter")
+    article_filter = c2.multiselect(
+        "記事", [ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED],
+        format_func=ARTICLE_STATUS_LABELS.get, key=K + "article_filter")
+    limit = st.number_input("上限医院数", min_value=1, max_value=DEFAULT_LIMIT, value=DEFAULT_LIMIT, key=K + "limit")
+
+    if st.button("対象医院を抽出", type="primary", key=K + "select"):
+        from src.master.filters import Filters
+        from src.master.scope import SCOPE_ALL
+        filters = Filters(
+            active_only=True, hp_only=False, prefectures=pref,
+            municipalities=[x.strip() for x in city_text.replace("、", ",").split(",") if x.strip()],
+            departments=deps, effective_ranks=HP_RANK_OPTIONS[rank_label], scope=SCOPE_ALL,
+        )
+        try:
+            records = store.query(filters, limit=SCAN_POOL)  # READ ONLY
+        except Exception as exc:
+            st.error(f"Clinic Masterの取得に失敗しました: {exc}")
+            return
+        selection = select_targets(records, email_lookup=_email_lookup, links=links,
+                                   email_filter=email_filter, article_filter=tuple(article_filter),
+                                   join_is_exhaustive=exhaustive, limit=int(limit))
+        st.session_state[K + "selection"] = selection
+        st.session_state.pop(K + "results", None)
+
+    selection = st.session_state.get(K + "selection")
+    if selection is None:
+        return
+    if st.session_state.get(K + "email_error"):
+        st.caption("Email調査DBに接続できないため、メールは全件「未取得」扱いです。")
+    st.success(f"対象 {len(selection.targets)}医院（走査 {selection.scanned}件／UUIDなし除外 {selection.skipped_no_uuid}件"
+               f"／UUID重複除外 {selection.skipped_duplicate}件{'／上限で打ち切り' if selection.truncated else ''}）")
     st.dataframe(pd.DataFrame([{
-        "Clinic UUID": r.clinic_uuid, "判定": r.status,
-        "宛先": r.to, "件名": r.subject, "確認理由": r.reason,
-    } for r in results]), hide_index=True, use_container_width=True)
-    # Preview only: no export of unreviewed drafts or send/create buttons.
-    ready = [r for r in results if r.status == "READY"]
-    if ready:
-        index = st.selectbox("プレビューする医院", options=range(len(ready)),
-                             format_func=lambda i: ready[i].clinic_uuid)
-        st.text_input("宛先", ready[index].to, disabled=True)
-        st.text_input("件名", ready[index].subject, disabled=True)
-        st.text_area("本文", ready[index].body, height=500, disabled=True)
+        "医院名": t.clinic_name, "Clinic UUID": t.clinic_uuid, "都道府県": t.prefecture, "市区町村": t.municipality,
+        "標榜科": "、".join(t.departments), "HPランク": t.hp_rank,
+        "メール": "取得済み" if t.email_status == EMAIL_FOUND else "未取得",
+        "記事": ARTICLE_STATUS_LABELS[t.article.status],
+    } for t in selection.targets]), hide_index=True, use_container_width=True)
+
+
+def _tab_generate():
+    selection = st.session_state.get(K + "selection")
+    articles = st.session_state.get(K + "articles") or []
+    if not selection or not selection.targets:
+        st.info("先に「① 対象選択」で対象医院を抽出してください。")
+        return
+    options = _staff_options()
+    choice = st.selectbox("IS担当者", options + ["（手入力）"], key=K + "staff_choice")
+    staff = st.text_input("IS担当者名（手入力）", key=K + "staff_manual") if choice == "（手入力）" else choice
+
+    st.markdown("##### 日程候補")
+    c1, c2, c3 = st.columns(3)
+    start = c1.date_input("開始日", value=today_japan() + timedelta(days=2), key=K + "start")
+    start_time = c2.text_input("開始時刻", value="9:00", key=K + "start_time")
+    end_time = c3.text_input("終了時刻", value="21:00", key=K + "end_time")
+    weekdays, cursor = [], start
+    while len(weekdays) < 10:
+        if cursor.weekday() < 5:
+            weekdays.append(cursor)
+        cursor += timedelta(days=1)
+    dates = st.multiselect("候補日（平日）", weekdays, default=weekdays[:5], key=K + "dates",
+                           format_func=lambda d: f"{d.month}/{d.day}（{'月火水木金土日'[d.weekday()]}）")
+
+    st.markdown("##### 電話連絡の事実")
+    st.caption("ここで選択した医院だけに「本日お電話させていただき…」の文を入れます。未選択の医院には記載しません。")
+    labels = {t.clinic_uuid: f"{t.clinic_name}（{t.clinic_uuid[:8]}…）" for t in selection.targets}
+    called = st.multiselect("本日電話し、メール送付を案内された医院", list(labels), format_func=labels.get, key=K + "called")
+
+    counts = {s: sum(t.article.status == s for t in selection.targets) for s in ARTICLE_STATUS_LABELS}
+    st.caption("記事判定: " + "　".join(f"{ARTICLE_STATUS_LABELS[s]} {n}件" for s, n in counts.items())
+               + f"　｜記事原本 {len(articles):,}件から第一推奨1件＋候補最大3件を選定")
+    if not articles:
+        st.warning("記事原本CSVが未読込です。推奨記事を選定できないため、記事あり以外は失敗になります。")
+    if st.button(f"{len(selection.targets)}医院の文章を一括生成", type="primary", key=K + "generate",
+                 disabled=not (staff or "").strip() or not dates):
+        settings = GenerationSettings(staff=staff.strip(), dates=tuple(sorted(dates)), start_time=start_time,
+                                      end_time=end_time, called_uuids=frozenset(called))
+        st.session_state[K + "results"] = (settings, generate_batch(selection.targets, articles, settings))
+        st.success("生成しました。「③ プレビュー」「④ 生成結果」で確認してください。")
+    if not (staff or "").strip():
+        st.caption("IS担当者を指定すると生成できます。")
+
+
+def _highlight(row):
+    color = {"要確認": "background-color: #fff3cd", "失敗": "background-color: #f8d7da"}.get(row["判定"], "")
+    return [color] * len(row)
+
+
+def _tab_preview():
+    stored = st.session_state.get(K + "results")
+    if not stored:
+        st.info("「② 文章生成」で一括生成すると表示されます。")
+        return
+    settings, results = stored
+    status_filter = st.multiselect("判定で絞り込み", [READY, NEEDS_REVIEW, FAILED], default=[READY, NEEDS_REVIEW, FAILED],
+                                   format_func=STATUS_LABELS.get, key=K + "preview_filter")
+    shown = [r for r in results if r.status in status_filter]
+    frame = pd.DataFrame([{
+        "判定": STATUS_LABELS[r.status], "医院名": r.target.clinic_name, "Clinic UUID": r.target.clinic_uuid,
+        "宛先": r.target.email or "（未取得）", "記事": ARTICLE_STATUS_LABELS[r.target.article.status],
+        "おすすめ記事": r.first.article.title if r.first else "", "要確認理由": " / ".join(r.reasons),
+    } for r in shown])
+    if frame.empty:
+        st.caption("該当なし")
+        return
+    st.dataframe(frame.style.apply(_highlight, axis=1), hide_index=True, use_container_width=True)
+    index = st.selectbox("詳細を表示する医院", range(len(shown)), key=K + "preview_index",
+                         format_func=lambda i: f"[{STATUS_LABELS[shown[i].status]}] {shown[i].target.clinic_name}")
+    r = shown[index]
+    if r.status == NEEDS_REVIEW:
+        st.warning("要確認: " + " / ".join(r.reasons))
+    elif r.status == FAILED:
+        st.error("失敗: " + " / ".join(r.reasons))
+    else:
+        st.success("READY")
+    uid = r.target.clinic_uuid
+    c1, c2 = st.columns(2)
+    c1.text_input("医院名", r.target.clinic_name, disabled=True, key=K + f"pv_name_{uid}")
+    c2.text_input("Clinic UUID", uid, disabled=True, key=K + f"pv_uuid_{uid}")
+    c1.text_input("宛先メールアドレス", r.target.email or "（未取得・要確認）", disabled=True, key=K + f"pv_to_{uid}")
+    c2.text_input("IS担当者", settings.staff, disabled=True, key=K + f"pv_staff_{uid}")
+    c1.text_input("記事ステータス", ARTICLE_STATUS_LABELS[r.target.article.status], disabled=True, key=K + f"pv_art_{uid}")
+    c2.text_input("電話連絡文", "あり（本日電話済み）" if r.called else "なし", disabled=True, key=K + f"pv_call_{uid}")
+    if r.recommendations:
+        st.markdown("**おすすめ記事（第一推奨＋候補）**")
+        for n, rec in enumerate(r.recommendations, 1):
+            st.markdown(f"{'🥇 第一推奨' if n == 1 else f'候補{n}'}：{rec.article.title}  \n{rec.article.url}")
+            st.caption("選定理由: " + " / ".join(rec.reasons) + f"（score {rec.score}）")
+    if r.listed_url:
+        st.caption(f"掲載確認済み記事: {r.listed_url}")
+    st.text_input("件名", r.subject, disabled=True, key=K + f"pv_subject_{uid}")
+    st.text_area("メール本文", r.body, height=520, disabled=True, key=K + f"pv_body_{uid}")
+
+
+def _tab_results():
+    stored = st.session_state.get(K + "results")
+    if not stored:
+        st.info("「② 文章生成」で一括生成すると表示されます。")
+        return
+    settings, results = stored
+    s = summarize(results)
+    cols = st.columns(4)
+    cols[0].metric("生成対象数", s["total"])
+    cols[1].metric("READY", s[READY])
+    cols[2].metric("NEEDS_REVIEW", s[NEEDS_REVIEW])
+    cols[3].metric("FAILED", s[FAILED])
+    issues = [r for r in results if r.status != READY]
+    if issues:
+        st.markdown("##### 医院別エラー・要確認理由")
+        st.dataframe(pd.DataFrame([{
+            "判定": r.status, "医院名": r.target.clinic_name, "Clinic UUID": r.target.clinic_uuid,
+            "理由": " / ".join(r.reasons),
+        } for r in issues]), hide_index=True, use_container_width=True)
+    st.download_button("CSVダウンロード（医院・記事・宛先・件名・本文・判定）", to_csv_bytes(results, settings.staff),
+                       f"mail_send_text_{today_japan():%Y%m%d}.csv", mime="text/csv",
+                       key=K + "download", use_container_width=True)
+    st.caption("CSV出力のみです。Gmail下書き作成・メール送信は行いません。")
+
+
+def outreach_email_page(store, demo=False):
+    st.header("メール送付文章")
+    st.info("営業メール文章の生成・確認専用です。Gmail下書き作成・メール送信・本番DBへの書き込みは一切行いません。")
+    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果"])
+    with tabs[0]:
+        _tab_targets(store, demo)
+    with tabs[1]:
+        _tab_generate()
+    with tabs[2]:
+        _tab_preview()
+    with tabs[3]:
+        _tab_results()
