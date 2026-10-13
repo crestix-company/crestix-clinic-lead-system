@@ -339,69 +339,93 @@ JSONに`clinic_uuid` / `generation_batch_id` / `template_id` / `template_version
 - 実データ接続時、ダッシュボード本体の数値表示の**前**にこの比較結果を表示し、不一致があれば
   警告を出す（§2.2の列マッピングを見直す必要がある、という扱い）。
 
-### 6.7 Macでの設定手順（ユーザー操作、コピペ用）
+### 6.8 既存のGoogle認証を再利用できないか（調査結果）
 
-**前提**: Google Cloudプロジェクトへのアクセス権、および対象シート（第一営業部_メール日程調整管理）の
-共有権限を持つ方（Workspace管理者またはシート所有者`info@crestix-inc.com`）の操作が必要な手順を含む。
-以下はすべて**ユーザー自身が**実行する（私が代行することはない）。
+新規サービスアカウントを作る前に、このマシン上で再利用できる既存のGoogle認証が無いか調査した。
 
-**1. Google Cloud側: Sheets APIを有効化し、READ ONLY専用サービスアカウントを作成**
+- **gcloud CLI**: 未インストール。
+- **gcloud Application Default Credentials (ADC)**: `~/.config/gcloud/application_default_credentials.json`
+  は存在しない。
+- **`GOOGLE_APPLICATION_CREDENTIALS`環境変数**: 未設定。
+- **関連する全リポジトリ（同一マシン上のclinic-*系クローン）**: サービスアカウントJSON鍵・
+  Google Sheets API関連の環境変数、いずれも横断検索したが見つからなかった。
+- **このAI実行環境自身のGoogle Drive連携**: 本調査で実際にこのシートの内容を読み取るのに使用した
+  （読み取り専用）。ただしこれはAIのツール呼び出しに紐づくセッションスコープの連携であり、
+  Macでスタンドアロンで動くPythonスクリプト（PR #75）が再利用できる、持ち出し可能な認証情報では
+  ない。
+
+**結論: このマシン上に再利用できる既存のGoogle認証情報は無かった。** ただし、調査の過程で
+サービスアカウント新規作成より手数の少ない代替手段を見つけたため、PR #75に実装した（§6.9）。
+
+### 6.9 認証方式: ADC優先、サービスアカウントは代替手段（実装済み）
+
+`sheets_source.py`は次の優先順位で認証を試みる（実装済み、PR #75）。
+
+1. **ADC（推奨・低コスト）**: `OUTREACH_SHEETS_READONLY_CREDENTIALS`が未設定なら、
+   `google.auth.default()`（Application Default Credentials）を試す。これは**ユーザー自身の
+   既存Googleアカウント**を使う方式で、そのアカウントは対象シートに**既に閲覧者として共有済み**
+   （シート一覧の「共有アイテム」に表示される）。**新規のシート共有操作が不要**。
+2. **サービスアカウント（代替・無人実行向け）**: `OUTREACH_SHEETS_READONLY_CREDENTIALS`を
+   明示的に設定した場合のみ、そちらを使う。対話的なログインなしで動かしたい場合や、個人の
+   Googleアカウントに紐づけたくない場合向け。
+
+いずれの方式でも`OUTREACH_SHEETS_ID`は必須。
+
+### 6.10 Macでの設定手順（ユーザー操作、コピペ用）
+
+**方式A: ADC（推奨。新規サービスアカウント作成・シート共有が不要）**
 
 ```bash
-# gcloud CLI が未インストールなら: brew install google-cloud-sdk
-gcloud auth login
+# gcloud CLIが未インストールなら:
+brew install google-cloud-sdk
 
-# 対象プロジェクトを指定（既存のGoogle CloudプロジェクトIDに置き換える）
+# 自分のGoogleアカウント（対象シートに既にアクセス権があるアカウント）でログインし、
+# Sheets READ ONLYスコープ付きのApplication Default Credentialsを作成する。
+# ブラウザが開くので、対象シートを閲覧できるGoogleアカウントでログインする。
+gcloud auth application-default login \
+  --scopes="https://www.googleapis.com/auth/spreadsheets.readonly"
+
+# ADCにひもづけるクォータ用プロジェクトを指定する（既存のGoogle CloudプロジェクトIDでよい。
+# 新規にサービスアカウント等を作る必要はない）。
+gcloud auth application-default set-quota-project "<既存のGoogle CloudプロジェクトID>"
+
+# 環境変数の設定（サービスアカウントの鍵パスは設定しない＝ADCが使われる）
+export OUTREACH_SHEETS_ID="1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s"
+```
+
+**方式B: サービスアカウント（無人実行向け、個人アカウントに依存させたくない場合）**
+
+```bash
+gcloud auth login
 export GCP_PROJECT_ID="your-project-id"
 gcloud config set project "$GCP_PROJECT_ID"
-
-# Google Sheets APIを有効化
 gcloud services enable sheets.googleapis.com
 
-# READ ONLY専用のサービスアカウントを新規作成（他の用途と共用しない）
 gcloud iam service-accounts create outreach-sheets-readonly \
   --display-name="Outreach Effect Dashboard (READ ONLY)"
 
-# 鍵（JSON）を発行し、ローカルの安全な場所に保存する
-# ~/.config 配下などリポジトリの外に置く。リポジトリ内には絶対に置かない。
 mkdir -p ~/.config/outreach-dashboard
 gcloud iam service-accounts keys create \
   ~/.config/outreach-dashboard/outreach-sheets-readonly-key.json \
   --iam-account="outreach-sheets-readonly@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
-
-# 発行したサービスアカウントのメールアドレスを確認（次の手順でシート共有に使う）
-echo "outreach-sheets-readonly@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
-```
-
-**2. Google Sheets側: サービスアカウントを閲覧者として共有**
-
-ブラウザで対象シートを開く:
-`https://docs.google.com/spreadsheets/d/1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s/edit`
-
-右上の「共有」ボタン →
-上記で表示されたサービスアカウントのメールアドレス（`outreach-sheets-readonly@<プロジェクトID>.iam.gserviceaccount.com`）を追加 →
-権限は**「閲覧者」**を選択（「編集者」にはしない）→ 送信。
-
-**3. ローカル環境変数の設定**
-
-```bash
-# 鍵ファイルのパーミッションを絞る（自分だけ読めるように）
 chmod 600 ~/.config/outreach-dashboard/outreach-sheets-readonly-key.json
 
-# シェルの設定ファイル（~/.zshrc 等）に追記、または実行前に都度 export する
+echo "共有先に追加するメールアドレス: outreach-sheets-readonly@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+```
+
+その後ブラウザで対象シート（`https://docs.google.com/spreadsheets/d/1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s/edit`）
+を開き、「共有」→ 上記サービスアカウントのメールアドレスを**「閲覧者」**で追加（「編集者」にはしない）。
+
+```bash
 export OUTREACH_SHEETS_READONLY_CREDENTIALS="$HOME/.config/outreach-dashboard/outreach-sheets-readonly-key.json"
 export OUTREACH_SHEETS_ID="1fqzCokKT2q5Iv4rMZBg8oSSXmtj2x_vdnw7sJqTbT9s"
 ```
 
-**4. 依存ライブラリのインストール（ダッシュボード実行環境に）**
+**共通: 依存ライブラリのインストールと起動**
 
 ```bash
 pip install google-api-python-client google-auth
-```
 
-**5. 起動して整合性確認パネルを確認**
-
-```bash
 python scripts/launch_effect_dashboard.py
 ```
 
@@ -409,8 +433,34 @@ python scripts/launch_effect_dashboard.py
 確認パネルで対象テンプレートがすべて「✅」になることを確認する。**不一致（⚠️）があれば、本番として
 使う前に列マッピング（§2.2・`sheets_source.py`の列名）を見直すこと。**
 
-**注意**: 鍵ファイル（`*.json`）はリポジトリにコミットしない（`.gitignore`に該当パターンを追加済み）。
-環境変数の値をチャット・ログ・コミットメッセージに貼り付けない。
+**注意**: 鍵ファイル（方式Bの`*.json`）はリポジトリにコミットしない（`.gitignore`に該当パターンを
+追加済み）。環境変数の値をチャット・ログ・コミットメッセージに貼り付けない。
+
+### 6.11 実データでの列マッピング検証（実施済み、認証情報は不要だった）
+
+PR #75のダッシュボード自体の実データ接続（§6.9）はまだ行っていないが、**列マッピングの正しさ自体**
+は、既存の読み取り専用Drive連携（§6.8）で取得した実シートのヘッダー行と、各シートの先頭数行を使って、
+`parse_rows_to_records()` / `parse_summary_sheet_template_breakdown()` の実コードに通して検証した
+（個人情報は`[REDACTED]`に置換、案件ID・日付・テンプレート番号・各種ステータス値は実値のまま）。
+
+結果:
+- 「案件管理」シートの実ヘッダー行（83列）のうち、本ダッシュボードが参照する15列
+  （送信日時・IS担当・テンプレート・送信有無・案件ID・返信有無・初回返信日時・開封推定レベル・
+  初回画像読込日時・高信頼開封・初回高信頼シグナル日時・記事クリック有無・初回クリック日時・
+  メール経由アポ・アポ日時）は、列名が**一字一句完全一致**することを確認した。
+- 実際の日時値（`2026/09/11 14:38:07`、`2026/9/11 16:36`、`2026/09/11`）がいずれも正しくパースされる
+  ことを確認した。
+- 実際のステータス値（`送信済み`、`なし`、`可能性あり`、`未了承`、`―`）が期待どおりに真偽判定される
+  ことを確認した。
+- 「集計」シートの実ヘッダー（`テンプレート`/`送信`/`開封推定率`/`返信率`/`クリック率`/`アポ率`）も
+  完全一致し、パーセント表記（`100.0%`等）のパースも正しく動作した。
+
+**制約（正直に明記）**: 読み取り専用Drive連携で取得できるのは各シート先頭の数行サンプルのみで、
+全量（案件管理138行・集計の全テンプレート）を取得できない。サンプル3行は「テンプレート5・6・6」
+だったため、「集計」シートの「テンプレート1」の数値（送信3件・開封推定率100%等）と直接突き合わせる
+意味のある一致検証はできなかった（比較対象のテンプレートが異なるため）。**§6.6の整合性確認
+（全量一致検証）は、§6.9の認証を設定した上でダッシュボードを実際に起動して初めて完了する。**
+今回の検証は「列マッピングが実シートの構造と一致していること」の確認に限定される。
 
 ## 7. スコープ外（今回も将来PRでも、Gmail操作・トラッキング実装はしない）
 
