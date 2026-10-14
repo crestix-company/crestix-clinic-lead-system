@@ -31,6 +31,28 @@ blocked_exit() {
     exit 2
 }
 
+# Works for a normal clone (.git is a directory) and a git worktree (.git is a
+# file pointing at the main repo's gitdir) alike; `rev-parse --is-inside-work-tree`
+# is the correct test for "is this a git working tree", not a `-d .git` check.
+is_git_work_tree() {
+    [ -e "$1" ] && git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+# Reads KEY=value out of an env file without ever printing the value.
+# Exits BLOCKED if the key is missing or its value is empty.
+require_nonempty_key() {
+    local file="$1" key="$2"
+    local line value
+    line="$(grep -E "^${key}=" "$file" || true)"
+    if [ -z "$line" ]; then
+        blocked_exit "Email Research credentialに ${key} がありません。値は表示しません。"
+    fi
+    value="${line#*=}"
+    if [ -z "$value" ]; then
+        blocked_exit "Email Research credentialの ${key} が空です。値は表示しません。"
+    fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 RUNTIME_DIR="${CLINIC_RUNTIME_DIR:-$HOME/ClinicLeadRuntime}"
@@ -38,13 +60,13 @@ RUNTIME_DIR="${CLINIC_RUNTIME_DIR:-$HOME/ClinicLeadRuntime}"
 echo "== 前提確認 =="
 command -v git >/dev/null 2>&1 || error_exit "git が見つかりません。"
 command -v python3 >/dev/null 2>&1 || error_exit "python3 が見つかりません。Python 3.12以上をインストールしてください。"
-if [ ! -d "$SOURCE_REPO_ROOT/.git" ]; then
-    error_exit "このスクリプトはgitリポジトリの scripts/ から実行してください: $SOURCE_REPO_ROOT"
+if ! is_git_work_tree "$SOURCE_REPO_ROOT"; then
+    error_exit "このスクリプトはgit working tree (通常clone、またはgit worktree) の scripts/ から実行してください: $SOURCE_REPO_ROOT"
 fi
 
 echo "== Runtime clone ($RUNTIME_DIR) =="
-if [ -d "$RUNTIME_DIR/.git" ]; then
-    echo "既存のRuntime cloneを再利用します。"
+if is_git_work_tree "$RUNTIME_DIR"; then
+    echo "既存のRuntime cloneを検出しました。originを検証します。"
 else
     if [ -e "$RUNTIME_DIR" ]; then
         error_exit "$RUNTIME_DIR はgitリポジトリではない既存のパスです。削除するか別の場所を指定してください。"
@@ -53,7 +75,15 @@ else
     git clone "$ORIGIN_URL" "$RUNTIME_DIR"
 fi
 
-echo "== Credential確認（値は表示しません） =="
+echo "== Runtime origin検証 =="
+SOURCE_ORIGIN_URL="$(git -C "$SOURCE_REPO_ROOT" remote get-url origin)"
+RUNTIME_ORIGIN_URL="$(git -C "$RUNTIME_DIR" remote get-url origin 2>/dev/null || true)"
+if [ -z "$RUNTIME_ORIGIN_URL" ] || [ "$SOURCE_ORIGIN_URL" != "$RUNTIME_ORIGIN_URL" ]; then
+    blocked_exit "Runtime clone ($RUNTIME_DIR) のoriginがsource repoのoriginと一致しません。別のrepoへcredentialを誤配置しないため、credentialはコピーせず終了します。Runtimeを削除して再作成するか、正しいoriginのcloneに差し替えてください。"
+fi
+echo "Runtime origin: OK (source repoと一致)"
+
+echo "== Supabase credential確認（値は表示しません） =="
 CRED_FILE="$RUNTIME_DIR/.supabase-runtime.env.local"
 EMAIL_FILE="$RUNTIME_DIR/config/email_research.env.local"
 
@@ -70,17 +100,21 @@ fi
 chmod 600 "$CRED_FILE"
 echo "Supabase credential: OK"
 
+echo "== Email Research credential確認（値は表示しません） =="
 EMAIL_SOURCE="$SOURCE_REPO_ROOT/config/email_research.env.local"
 if [ ! -f "$EMAIL_FILE" ] && [ -f "$EMAIL_SOURCE" ]; then
     mkdir -p "$(dirname "$EMAIL_FILE")"
     cp "$EMAIL_SOURCE" "$EMAIL_FILE"
 fi
-if [ -f "$EMAIL_FILE" ]; then
-    chmod 600 "$EMAIL_FILE"
-    echo "Email Research credential: OK"
-else
-    echo "[WARN] config/email_research.env.local が見つかりません。Email Researchは利用できません（メイン機能は起動します）。"
+if [ ! -f "$EMAIL_FILE" ]; then
+    blocked_exit "Email Research credential ($EMAIL_FILE) が見つかりません。値は要求・表示しません。安全な方法で配置してから再実行してください。"
 fi
+chmod 600 "$EMAIL_FILE"
+require_nonempty_key "$EMAIL_FILE" "SERPAPI_API_KEY"
+require_nonempty_key "$EMAIL_FILE" "EMAIL_AUTO_RUN_ENABLED"
+echo "Email Research credential: OK"
+
+echo "MAC PRIVATE CONFIG: PASS"
 
 echo "== .gitignore確認 =="
 if ! git -C "$RUNTIME_DIR" check-ignore -q ".supabase-runtime.env.local"; then

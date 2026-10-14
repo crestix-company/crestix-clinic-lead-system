@@ -95,12 +95,30 @@ def test_update_launcher_hands_off_to_launch_v2_mac_at_the_end():
 
 
 def test_no_credentials_in_mac_scripts():
+    # SETUP_SCRIPT legitimately references the SERPAPI_API_KEY / EMAIL_AUTO_RUN_ENABLED
+    # *key names* to validate their presence (see test_setup_script_validates_email_credential_key_names);
+    # it never reads or prints their *values*, which the other scripts here still ban outright.
     for relative in MAC_SCRIPTS:
         text = _text(relative)
         assert "postgresql://" not in text
         assert "SUPABASE_RUNTIME_DB_URL" not in text
         assert "EMAIL_RESEARCH_DB_URL" not in text
-        assert "SERPAPI_API_KEY" not in text
+        if relative != SETUP_SCRIPT:
+            assert "SERPAPI_API_KEY" not in text
+            assert "EMAIL_AUTO_RUN_ENABLED" not in text
+
+
+def test_setup_script_validates_email_credential_key_names_without_reading_values():
+    text = _text(SETUP_SCRIPT)
+    assert "SERPAPI_API_KEY" in text
+    assert "EMAIL_AUTO_RUN_ENABLED" in text
+    assert "require_nonempty_key" in text
+    assert 'require_nonempty_key "$EMAIL_FILE" "SERPAPI_API_KEY"' in text
+    assert 'require_nonempty_key "$EMAIL_FILE" "EMAIL_AUTO_RUN_ENABLED"' in text
+    # The helper must never echo/print the parsed value anywhere in the script.
+    assert "echo \"$value\"" not in text
+    assert "echo $value" not in text
+    assert "echo \"$line\"" not in text
 
 
 def test_desktop_launcher_creator_has_no_hardcoded_username():
@@ -254,6 +272,136 @@ def test_desktop_launcher_creator_fails_before_runtime_setup_exists(tmp_path):
     assert not desktop_dir.exists() or not any(desktop_dir.iterdir())
 
 
+@mac_only
+def test_setup_full_setup_succeeds_with_normal_clone_source(tmp_path):
+    source_repo = _seed_main_repo(tmp_path, "source_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(source_repo, origin_bare)
+    _write_credential_files(source_repo, serpapi="FAKE_SERP_normal_clone_9f2a", auto_run="true")
+    assert (source_repo / ".git").is_dir()  # normal clone: .git is a directory
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(source_repo / SETUP_SCRIPT)], cwd=source_repo, env=env)
+
+    assert "MAC PRIVATE CONFIG: PASS" in result.stdout
+    assert "FAKE_SERP_normal_clone_9f2a" not in result.stdout
+    assert "FAKE_SERP_normal_clone_9f2a" not in result.stderr
+    assert (runtime_dir / ".supabase-runtime.env.local").is_file()
+    assert (runtime_dir / "config" / "email_research.env.local").is_file()
+
+
+@mac_only
+def test_setup_full_setup_succeeds_with_git_worktree_source(tmp_path):
+    main_repo = _seed_main_repo(tmp_path, "main_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(main_repo, origin_bare)
+
+    worktree_path = tmp_path / "source_worktree"
+    _git(main_repo, "worktree", "add", "-b", "wt-branch", str(worktree_path), "main")
+    assert (worktree_path / ".git").is_file()  # git worktree: .git is a file, not a directory
+    _write_credential_files(worktree_path, serpapi="FAKE_SERP_worktree_7b1c", auto_run="false")
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(worktree_path / SETUP_SCRIPT)], cwd=worktree_path, env=env)
+
+    assert "MAC PRIVATE CONFIG: PASS" in result.stdout
+    assert "FAKE_SERP_worktree_7b1c" not in result.stdout
+    assert "FAKE_SERP_worktree_7b1c" not in result.stderr
+    assert (runtime_dir / ".supabase-runtime.env.local").is_file()
+    assert (runtime_dir / "config" / "email_research.env.local").is_file()
+
+
+@mac_only
+def test_setup_blocked_when_serpapi_key_missing(tmp_path):
+    source_repo = _seed_main_repo(tmp_path, "source_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(source_repo, origin_bare)
+    _write_credential_files(source_repo, serpapi=None, auto_run="true")
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(source_repo / SETUP_SCRIPT)], cwd=source_repo, env=env)
+
+    assert result.returncode == 2
+    assert "[BLOCKED]" in result.stderr
+    assert "SERPAPI_API_KEY" in result.stderr
+    assert "MAC PRIVATE CONFIG: PASS" not in result.stdout
+
+
+@mac_only
+def test_setup_blocked_when_email_auto_run_enabled_missing(tmp_path):
+    source_repo = _seed_main_repo(tmp_path, "source_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(source_repo, origin_bare)
+    _write_credential_files(source_repo, serpapi="FAKE_SERP_present_4d8e", auto_run=None)
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(source_repo / SETUP_SCRIPT)], cwd=source_repo, env=env)
+
+    assert result.returncode == 2
+    assert "[BLOCKED]" in result.stderr
+    assert "EMAIL_AUTO_RUN_ENABLED" in result.stderr
+    assert "FAKE_SERP_present_4d8e" not in result.stdout
+    assert "FAKE_SERP_present_4d8e" not in result.stderr
+    assert "MAC PRIVATE CONFIG: PASS" not in result.stdout
+
+
+@mac_only
+def test_setup_reuses_existing_runtime_when_origin_matches(tmp_path):
+    source_repo = _seed_main_repo(tmp_path, "source_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(source_repo, origin_bare)
+    _write_credential_files(source_repo, serpapi="FAKE_SERP_reuse_2c6f", auto_run="true")
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    subprocess.run(["git", "clone", str(origin_bare), str(runtime_dir)], check=True, capture_output=True)
+
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(source_repo / SETUP_SCRIPT)], cwd=source_repo, env=env)
+
+    assert "Runtime origin: OK" in result.stdout
+    assert "MAC PRIVATE CONFIG: PASS" in result.stdout
+    assert "FAKE_SERP_reuse_2c6f" not in result.stdout
+    assert "FAKE_SERP_reuse_2c6f" not in result.stderr
+    assert (runtime_dir / ".supabase-runtime.env.local").is_file()
+
+
+@mac_only
+def test_setup_blocks_and_skips_credential_copy_when_runtime_origin_mismatches(tmp_path):
+    source_repo = _seed_main_repo(tmp_path, "source_repo")
+    origin_bare = _make_bare(tmp_path, "origin.git")
+    _add_origin_and_push(source_repo, origin_bare)
+    _write_credential_files(source_repo, serpapi="FAKE_SERP_mismatch_5a91", auto_run="true")
+
+    other_bare = _make_bare(tmp_path, "other-origin.git")
+    other_repo = _seed_main_repo(tmp_path, "other_repo")
+    _add_origin_and_push(other_repo, other_bare)
+
+    runtime_dir = tmp_path / "ClinicLeadRuntime"
+    subprocess.run(["git", "clone", str(other_bare), str(runtime_dir)], check=True, capture_output=True)
+
+    env = dict(os.environ)
+    env["CLINIC_RUNTIME_DIR"] = str(runtime_dir)
+    result = _run_bash([str(source_repo / SETUP_SCRIPT)], cwd=source_repo, env=env)
+
+    assert result.returncode == 2
+    assert "[BLOCKED]" in result.stderr
+    assert "origin" in (result.stdout + result.stderr).lower()
+    assert "FAKE_SERP_mismatch_5a91" not in result.stdout
+    assert "FAKE_SERP_mismatch_5a91" not in result.stderr
+    assert "MAC PRIVATE CONFIG: PASS" not in result.stdout
+    assert not (runtime_dir / ".supabase-runtime.env.local").exists()
+    assert not (runtime_dir / "config" / "email_research.env.local").exists()
+
+
 def _git(cwd, *args):
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
@@ -263,6 +411,55 @@ def _init_repo(path):
     _git(path, "init", "-b", "main")
     _git(path, "config", "user.email", "t@example.com")
     _git(path, "config", "user.name", "t")
+
+
+def _make_bare(tmp_path, name):
+    path = tmp_path / name
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(path)], check=True, capture_output=True)
+    return path
+
+
+def _seed_main_repo(tmp_path, name):
+    """A git repo seeded with the Mac launcher scripts plus a .gitignore covering
+    the two credential files, suitable for cloning as a Runtime, or for use as a
+    setup source repo (directly, or as the base of a git worktree)."""
+    repo = tmp_path / name
+    _init_repo(repo)
+    (repo / "scripts").mkdir()
+    (repo / "config").mkdir()
+    for relative in (SETUP_SCRIPT, LAUNCHER_CREATOR_SCRIPT, UPDATE_SCRIPT, "scripts/launch_v2_mac.sh"):
+        dest = repo / relative
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(ROOT / relative, dest)
+        os.chmod(dest, 0o755)
+    (repo / "requirements-lock.txt").write_text("", encoding="ascii")
+    (repo / ".gitignore").write_text(
+        ".supabase-runtime.env.local\nconfig/email_research.env.local\n", encoding="ascii"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-m", "seed")
+    return repo
+
+
+def _add_origin_and_push(repo, origin_bare):
+    _git(repo, "remote", "add", "origin", str(origin_bare))
+    _git(repo, "push", "origin", "main")
+
+
+def _write_credential_files(repo, *, serpapi, auto_run):
+    (repo / ".supabase-runtime.env.local").write_text(
+        "SUPABASE_RUNTIME_DB_URL=postgresql://fake-user:fake-pass@fake-host/fake-db\n", encoding="ascii"
+    )
+    os.chmod(repo / ".supabase-runtime.env.local", 0o600)
+    (repo / "config").mkdir(exist_ok=True)
+    lines = []
+    if serpapi is not None:
+        lines.append(f"SERPAPI_API_KEY={serpapi}")
+    if auto_run is not None:
+        lines.append(f"EMAIL_AUTO_RUN_ENABLED={auto_run}")
+    email_file = repo / "config" / "email_research.env.local"
+    email_file.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="ascii")
+    os.chmod(email_file, 0o600)
 
 
 def _updater_sandbox(tmp_path):
