@@ -1,6 +1,8 @@
 """Pure state transitions shared by the persistent Auto HP repository and tests."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 
 def initial_auto_state(*, run_id, prefecture, medical_types, force, batch_size,
                        initial_count, current_job_id, timestamp):
@@ -42,3 +44,23 @@ def advance_completed_batch(state, *, remaining, next_job_id, timestamp):
         "last_error": "",
     })
     return output
+
+
+def controller_lease_health(state, *, at=None):
+    """Project process liveness from the durable lease without mutating the run."""
+    if (state or {}).get("status") not in {"RUNNING", "WAITING_NETWORK"}:
+        return "INACTIVE"
+    owner = str((state or {}).get("controller_id") or "").strip()
+    raw_lease = (state or {}).get("controller_lease_until")
+    if not owner or not raw_lease:
+        return "RECOVERABLE"
+    try:
+        lease = datetime.fromisoformat(str(raw_lease).replace("Z", "+00:00"))
+        if lease.tzinfo is None:
+            lease = lease.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return "RECOVERABLE"
+    current = at or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return "ACTIVE" if lease > current else "RECOVERABLE"
