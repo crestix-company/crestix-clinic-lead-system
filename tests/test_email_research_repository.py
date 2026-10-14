@@ -142,6 +142,19 @@ def test_background_targets_require_verified_official_hp_and_no_exclude_reason()
     assert "s.research_status='NOT_RESEARCHED'" in source
 
 
+def test_email_controller_lease_uses_existing_metrics_json_and_fenced_finish():
+    source = open("src/repository/email_research_repository.py", encoding="utf-8").read()
+    assert "def acquire_controller" in source
+    assert "def heartbeat_controller" in source
+    assert "clock_timestamp()" in source
+    assert "metrics->>'controller_id'=%s" in source
+    assert "controller_lease_until" in source
+    migration = open("scripts/supabase_migration/email_research_schema.sql", encoding="utf-8").read()
+    # No migration is needed: controller ownership is stored in the existing metrics JSONB.
+    auto_table = migration.split("create table if not exists email_research.email_auto_runs", 1)[1]
+    assert "metrics jsonb" in auto_table
+
+
 def test_summary_definitions_keep_sales_primary_and_new_verified_targets_separate():
     source = open("src/repository/email_research_repository.py", encoding="utf-8").read()
     assert "p.final_sales_eligible=true" in source

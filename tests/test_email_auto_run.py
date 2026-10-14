@@ -3,6 +3,8 @@ from threading import Event
 
 from src.master.email_auto_run import EmailAutoRunner
 from src.master.email_research_config import EmailResearchConfig
+from src.repository.email_research_repository import email_controller_health
+from datetime import datetime, timedelta, timezone
 
 
 class Result:
@@ -114,6 +116,38 @@ def test_existing_primary_is_skipped_by_claim_contract():
     assert "s.primary_email_candidate_id IS NULL" in sql
     assert "SKIP LOCKED" in sql
     assert "claim_expires_at<now()" in sql
+
+
+def test_stale_email_controller_is_recoverable_and_keeps_same_run():
+    at = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    run = {
+        "run_id": "same-run", "status": "RUNNING",
+        "metrics": {"controller_id": "dead-pc", "controller_lease_until":
+                    (at - timedelta(seconds=1)).isoformat()},
+    }
+    assert email_controller_health(run, at=at) == "RECOVERABLE"
+    assert run["run_id"] == "same-run"
+
+
+def test_live_email_controller_is_active():
+    at = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    run = {
+        "run_id": "run", "status": "RUNNING",
+        "metrics": {"controller_id": "active-pc", "controller_lease_until":
+                    (at + timedelta(seconds=1)).isoformat()},
+    }
+    assert email_controller_health(run, at=at) == "ACTIVE"
+
+
+def test_eight_workers_reclaim_eight_expired_claims_without_duplicates():
+    shared = Shared()
+    shared.pending = list(range(1, 9))
+    runner = EmailAutoRunner(lambda: Repo(shared), lambda claim, cfg: Result(),
+                             config=EmailResearchConfig(workers=8))
+    outcome = runner.run("run")
+    assert outcome.processed == 8
+    assert sorted(shared.completed) == list(range(1, 9))
+    assert len(shared.claimed) == 8
 
 
 def test_stop_is_terminal_and_resume_only_accepts_paused_run():

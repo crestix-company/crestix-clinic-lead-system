@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from src.master.email_auto_run import EmailAutoRunner, build_default_research_one
 from src.master.email_research_config import load_email_research_config
+from src.repository.email_research_repository import email_controller_health
 from src.repository.email_database import (
     build_email_repositories, email_database_status, email_target_reader_status,
     email_repositories_for_ui,
@@ -89,9 +90,13 @@ def _email_auto_research_controls(store, *, demo=False):
     summary = repo.summary()
     run = repo.latest_auto_run()
     status = run.get("status") if run else "STOPPED"
+    controller_health = email_controller_health(run)
     human_repo = repositories.email_human_review
     human_summary = human_repo.summary() if human_repo is not None and human_repo.available() else {}
-    st.markdown(f"状態：**{EMAIL_RUN_LABELS.get(status, '停止中')}**")
+    status_label = EMAIL_RUN_LABELS.get(status, "停止中")
+    if controller_health == "RECOVERABLE":
+        status_label = "復旧待ち（controller lease期限切れ）"
+    st.markdown(f"状態：**{status_label}**")
     metrics = run.get("metrics") or {} if run else {}
     counts = st.columns(6)
     counts[0].metric("対象", f"{summary.get('total', 0):,}件")
@@ -115,6 +120,11 @@ def _email_auto_research_controls(store, *, demo=False):
         st.caption(target_status.message)
     runtime = bool(getattr(store, "is_supabase_runtime", False))
     runner = _auto_runner() if enabled and runtime and not demo else None
+    if (runner is not None and hasattr(runner, "running") and run and status == "RUNNING"
+            and controller_health == "RECOVERABLE" and not runner.running()):
+        # Re-offer the existing run to this process. The persisted lease decides
+        # Active vs Standby; no new run/cohort is created here.
+        runner.recover(run["run_id"])
     controls = st.columns(4)
     if controls[0].button(
         "メール自動調査を開始", key="simple_email_auto_start", type="primary",
@@ -161,10 +171,14 @@ def email_research_sidebar_status(store):
         return
     run = repo.latest_auto_run()
     status = run.get("status") if run else "STOPPED"
+    health = email_controller_health(run)
+    if health == "RECOVERABLE":
+        status = "RECOVERABLE"
     primary_count = repo.summary().get("primary", 0)
     with st.sidebar:
         st.markdown("### 📧 Email調査")
-        st.caption(f"● {EMAIL_RUN_LABELS.get(status, '停止中')}　Primary {primary_count:,}件")
+        label = "復旧待ち" if status == "RECOVERABLE" else EMAIL_RUN_LABELS.get(status, "停止中")
+        st.caption(f"● {label}　Primary {primary_count:,}件")
 
 
 def _batch_progress_card(repo):

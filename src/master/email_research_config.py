@@ -22,8 +22,9 @@ class EmailResearchConfig:
             raise ValueError("workers must be between 1 and 64")
         if self.search_query_limit != 2:
             raise ValueError("formal Email Research search_query_limit must be 2")
-        if (self.read_timeout_seconds <= 0 or self.retry_count < 0 or self.idle_poll_seconds <= 0
-                or self.target_sync_interval_seconds <= 0):
+        if (self.read_timeout_seconds <= 0 or not 0 <= self.retry_count <= 5
+                or not 30 <= self.claim_lease_seconds <= 3600
+                or self.idle_poll_seconds <= 0 or self.target_sync_interval_seconds <= 0):
             raise ValueError("timeout/retry configuration is invalid")
 
 
