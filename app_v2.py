@@ -23,6 +23,7 @@ from src.master.filters import Filters
 from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
 from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
+from src.master.hp_auto_state import controller_lease_health
 from src.repository.write_backend import write_repositories_for
 from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
 from src.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
@@ -44,7 +45,7 @@ from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvaria
 from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
 from src.master.data_paths import production_db_path
 
-NAV = ["かんたん操作","営業対象・出力","Email調査","詳細設定"]
+NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
@@ -205,6 +206,7 @@ def _auto_hp_progress_snapshot(store, auto_repo):
 
     return {
         "state": state,
+        "controller_health": controller_lease_health(state),
         "current": auto_current,
         "initial_count": initial_count,
         "processed": processed,
@@ -234,6 +236,8 @@ def _render_auto_hp_progress(snapshot, *, live=False):
     frozen_types = "・".join(state.get("medical_types") or ["両方"])
     frozen_pref = state.get("prefecture") or "すべて"
     status_label = labels.get(state.get("status"), state.get("status", "不明"))
+    if snapshot.get("controller_health") == "RECOVERABLE":
+        status_label = "復旧待ち（controller lease期限切れ）"
     st.write(f"自動HP調査：{status_label}")
     st.caption(
         f"固定条件：都道府県={frozen_pref}／医科・歯科={frozen_types}／"
@@ -1398,6 +1402,9 @@ def main():
         simple_sales_ui(store, demo)
     elif nav == "Email調査":
         email_research_page(store)
+    elif nav == "メール送付文章":
+        from src.outreach_ui import outreach_email_page
+        outreach_email_page(store, demo)
     else:
         advanced_ui(store, demo)
 
