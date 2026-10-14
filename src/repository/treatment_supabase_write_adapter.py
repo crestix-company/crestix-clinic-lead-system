@@ -18,6 +18,21 @@ class SupabaseTreatmentWriteRepository:
     def __init__(self, conn):
         self._conn = conn
 
+    def close(self):
+        try:
+            if not getattr(self._conn, "closed", False):
+                self._conn.close()
+        except Exception:
+            pass
+
+    def incremental_candidates(self, *, limit=500):
+        from src.master.treatment_incremental import select_incremental_candidates
+        return select_incremental_candidates(self._conn, limit=limit)
+
+    def coverage_kpis(self):
+        from src.master.treatment_incremental import coverage_kpis
+        return coverage_kpis(self._conn)
+
     def write_clinic_result(self, clinic_id, rows, status_row):
         try:
             with self._conn.cursor() as cur:
