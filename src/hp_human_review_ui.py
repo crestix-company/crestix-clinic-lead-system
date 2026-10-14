@@ -28,6 +28,9 @@ HP_HUMAN_REVIEW_UNAVAILABLE_MESSAGE = (
 HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE = (
     "HP Human Reviewの保存に失敗しました。DB接続を確認し、もう一度お試しください。"
 )
+HP_HUMAN_REVIEW_REANALYSIS_FAILED_MESSAGE = (
+    "判定は保存しましたが、HP再解析を開始できませんでした。後から再解析してください。"
+)
 
 
 def _fail_soft_on_connection_failure(render_unavailable):
@@ -320,16 +323,34 @@ def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, 
     """Persist a Human Review decision, then (for Positive decisions) re-run HP content
     analysis against the human-verified URL.
 
-    A connectivity failure anywhere in this sequence -- the ``repo.save_review(...)`` write
-    itself, or the subsequent ``reanalyze_human_verified_hp(...)`` call (which opens its own
-    fresh connection via ``write_repositories_for(store)`` and performs further writes) --
-    must never be silently treated as success: the success flash/session-state is only set,
-    and ``rerun`` only happens, when this entire sequence actually completed. On a caught
-    connectivity failure this shows a fixed retry error and returns ``None`` instead; callers
-    must check for ``None`` before assuming anything was saved (see the dialog's decision
-    button handler, which skips its own rerun when this returns ``None``). Any
-    non-connectivity exception (a real bug, or the existing ``ValueError`` business-validation
-    errors from ``repo.save_review``) is not caught here and continues to propagate unchanged.
+    These are two separate, NON-atomic phases, and a connectivity failure in each must be
+    reported differently -- conflating them is a correctness/trust bug, not just a wording
+    issue: ``SupabaseHpHumanReviewRepository.save_review()`` commits before returning
+    ``review_id``, and ``reanalyze_human_verified_hp()``'s own docstring says "The human
+    label is already committed before this function is called." So once Phase 1 returns,
+    the decision is durably saved, full stop -- a Phase 2 failure must never be reported as
+    "save failed" (false, and risks a reviewer re-submitting an already-recorded judgement).
+
+    Phase 1 -- ``repo.save_review(...)``: on a connectivity failure here, NOTHING was saved.
+    Shows the save-failed message, sets no flash/session-state, returns ``None`` without
+    calling ``repo.save_review(...)`` again. Callers must treat a ``None`` return as "did not
+    save" (see the dialog's decision button handler, which skips its own rerun in that case).
+
+    Phase 2 -- ``reanalyze_human_verified_hp(...)`` (Positive decisions only, only reached
+    once Phase 1 already returned successfully): this call opens its OWN fresh connection
+    via its own ``write_repositories_for(store)`` call, separate from ``repo``'s connection,
+    and can fail independently. On a connectivity failure here the decision IS saved, so this
+    shows a distinct "saved, but reanalysis couldn't start" message (never implying the save
+    failed, never inviting a re-submit) and still returns ``review_id`` (not ``None``) --
+    Phase 1 already succeeded. Best-effort records a FAILED reanalysis run on ``repo``'s own
+    (separate, still-open) connection so the existing "治療カテゴリ再解析を再試行" retry
+    button in ``_review_tab()`` becomes reachable next time this item is viewed; if that
+    best-effort write also fails, it is swallowed silently -- it must never escalate into a
+    second ``save_review()`` call or a crash.
+
+    In both phases, any non-connectivity exception (a real bug, or the existing ``ValueError``
+    business-validation errors from ``repo.save_review``) is not caught and propagates exactly
+    as before.
     """
     try:
         review_id = repo.save_review(
@@ -342,8 +363,17 @@ def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, 
             research_job_id=row.get("job_id") or "",
             auto_run_id=row.get("auto_run_id") or "",
         )
-        message = f"{row['clinic_name']} の判定を保存しました（{DECISION_LABELS[decision]}）。"
-        if decision in POSITIVE_DECISIONS:
+    except (psycopg.OperationalError, psycopg.InterfaceError):
+        # Phase 1 failed: nothing was committed. Do not call repo.save_review(...) again
+        # here -- the reviewer can press the decision button again themselves.
+        st.error(HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE)
+        return None
+
+    # Phase 1 succeeded: the decision is durably committed from this point on, regardless
+    # of what happens next. message/flash below always reflect at least that fact.
+    message = f"{row['clinic_name']} の判定を保存しました（{DECISION_LABELS[decision]}）。"
+    if decision in POSITIVE_DECISIONS:
+        try:
             with st.spinner("Human確認済みHPを再取得し、治療カテゴリを解析しています…"):
                 outcome = reanalyze_human_verified_hp(
                     store,
@@ -351,15 +381,33 @@ def _save_decision(store, repo, row, decision, selected_url, reviewer, note, *, 
                     clinic_id=row["clinic_id"],
                     selected_url=selected_url,
                 )
-            if outcome["status"] == "DONE":
-                count = int(outcome.get("treatment_count") or 0)
-                destination = "治療カテゴリ検出あり" if count > 0 else "治療カテゴリ検出なし"
-                message += f" 再解析完了：{count}カテゴリ → {destination}。"
-            else:
-                message += " HP内容を取得できなかったため「Webサイト調査失敗」へ反映しました。後から再試行できます。"
-    except (psycopg.OperationalError, psycopg.InterfaceError):
-        st.error(HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE)
-        return None
+        except (psycopg.OperationalError, psycopg.InterfaceError):
+            # Phase 2 failed, but Phase 1 already succeeded -- never say "save failed" and
+            # never trigger another repo.save_review() call for this same decision.
+            try:
+                repo.record_reanalysis(
+                    human_review_id=review_id,
+                    clinic_id=row["clinic_id"],
+                    selected_url=selected_url,
+                    status="FAILED",
+                    treatment_categories=[],
+                    error_detail="HP再解析の開始時にDB接続エラーが発生しました。",
+                )
+            except Exception:
+                pass  # best-effort only; never let this hide the Phase 1 success below.
+            st.session_state["_hp_human_review_flash"] = (
+                f"{row['clinic_name']}：{HP_HUMAN_REVIEW_REANALYSIS_FAILED_MESSAGE}"
+            )
+            st.session_state["_hp_human_review_last_id"] = review_id
+            if rerun:
+                st.rerun()
+            return review_id
+        if outcome["status"] == "DONE":
+            count = int(outcome.get("treatment_count") or 0)
+            destination = "治療カテゴリ検出あり" if count > 0 else "治療カテゴリ検出なし"
+            message += f" 再解析完了：{count}カテゴリ → {destination}。"
+        else:
+            message += " HP内容を取得できなかったため「Webサイト調査失敗」へ反映しました。後から再試行できます。"
     st.session_state["_hp_human_review_flash"] = message
     st.session_state["_hp_human_review_last_id"] = review_id
     if rerun:
