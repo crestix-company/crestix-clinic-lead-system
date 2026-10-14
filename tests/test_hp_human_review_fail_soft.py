@@ -482,6 +482,86 @@ def test_reanalysis_retry_button_is_reachable_once_status_is_failed(monkeypatch)
     assert any("再解析が完了しました" in s.value for s in app.success)
 
 
+@pytest.mark.parametrize("exc", [
+    psycopg.OperationalError("could not connect to server"),
+    psycopg.InterfaceError("connection already closed"),
+])
+def test_reanalysis_retry_button_connectivity_failure_is_not_reported_as_save_failed(monkeypatch, exc):
+    """The "治療カテゴリ再解析を再試行" retry button only ever re-attempts the HP
+    reanalysis step for an item whose Human Review decision was already saved long ago --
+    showing HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE here would wrongly suggest the reviewer's
+    judgement wasn't recorded. A connectivity failure on this retry call must show the
+    dedicated HP_HUMAN_REVIEW_REANALYSIS_RETRY_FAILED_MESSAGE instead, never the
+    save-failed message, never a success flash, and must not rerun past the error."""
+    row = dict(_ROW)
+    row.update({
+        "reviewed": True,
+        "human_decision": "OFFICIAL",
+        "human_review_id": "review-id-1",
+        "reviewed_url": "https://clinic.example/",
+        "reanalysis_status": "FAILED",
+        "reanalysis_error": "HP再解析の開始時にDB接続エラーが発生しました。",
+        "reanalysis_treatment_count": 0,
+        "reanalysis_treatment_categories": [],
+    })
+    repo = _FakeRepo(rows=[row])
+    monkeypatch.setattr(human_review_ui, "_repo_for", lambda store: repo)
+    reanalyze_calls = _patch_reanalyze(monkeypatch, exc=exc)
+
+    app = _open_review_page(lambda: repo)
+    app.run()
+    app.checkbox(key="hp_human_review_include_reviewed").check()
+    app.run()
+    app.button(key="hp_human_review_retry_1").click()
+    app.run()
+
+    assert not app.exception
+    assert len(reanalyze_calls) == 1
+    assert any(
+        human_review_ui.HP_HUMAN_REVIEW_REANALYSIS_RETRY_FAILED_MESSAGE in e.value for e in app.error
+    )
+    # Never the "save failed" message -- the decision was already committed long ago.
+    assert not any(human_review_ui.HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE in e.value for e in app.error)
+    assert not any(human_review_ui.HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE in s.value for s in app.success)
+    # Never implies the retry worked, and does not silently rerun past the error.
+    assert not any("再解析が完了しました" in s.value for s in app.success)
+    assert not any("再解析は再度失敗しました" in s.value for s in app.success)
+
+    # No duplicate/unexpected reruns re-triggering the retry on their own.
+    app.run()
+    assert len(reanalyze_calls) == 1
+
+
+def test_reanalysis_retry_button_connectivity_failure_does_not_leak_secrets(monkeypatch):
+    row = dict(_ROW)
+    row.update({
+        "reviewed": True,
+        "human_decision": "OFFICIAL",
+        "human_review_id": "review-id-1",
+        "reviewed_url": "https://clinic.example/",
+        "reanalysis_status": "FAILED",
+        "reanalysis_error": "HP再解析の開始時にDB接続エラーが発生しました。",
+        "reanalysis_treatment_count": 0,
+        "reanalysis_treatment_categories": [],
+    })
+    repo = _FakeRepo(rows=[row])
+    monkeypatch.setattr(human_review_ui, "_repo_for", lambda store: repo)
+    _patch_reanalyze(monkeypatch, exc=psycopg.OperationalError(_SECRET_MESSAGE))
+
+    app = _open_review_page(lambda: repo)
+    app.run()
+    app.checkbox(key="hp_human_review_include_reviewed").check()
+    app.run()
+    app.button(key="hp_human_review_retry_1").click()
+    app.run()
+
+    assert not app.exception
+    rendered = " ".join(e.value for e in app.error) + " ".join(s.value for s in app.success)
+    for leaked in (_SECRET_MESSAGE, "password", _SECRET_DSN,
+                   "aws-0-ap-northeast-1.pooler.supabase.com", "SERPAPI_API_KEY", "s3cr3t"):
+        assert leaked not in rendered
+
+
 def test_positive_decision_full_success_path_unchanged(monkeypatch):
     """Requirement 5 (no regression): save_review() succeeds, reanalyze_human_verified_hp()
     succeeds -- existing success behavior is unchanged by the phase-separation fix."""

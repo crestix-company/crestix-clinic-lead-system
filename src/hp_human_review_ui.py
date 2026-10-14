@@ -31,6 +31,9 @@ HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE = (
 HP_HUMAN_REVIEW_REANALYSIS_FAILED_MESSAGE = (
     "判定は保存しましたが、HP再解析を開始できませんでした。後から再解析してください。"
 )
+HP_HUMAN_REVIEW_REANALYSIS_RETRY_FAILED_MESSAGE = (
+    "HP再解析を開始できませんでした。DB接続を確認し、後から再試行してください。"
+)
 
 
 def _fail_soft_on_connection_failure(render_unavailable):
@@ -564,8 +567,12 @@ def _review_tab(store, repo):
                 except (psycopg.OperationalError, psycopg.InterfaceError):
                     # Same write-path contract as _save_decision(): a connectivity failure
                     # here must not be treated as success (no flash, no rerun) -- the reviewer
-                    # can just press the retry button again once the DB is reachable.
-                    st.error(HP_HUMAN_REVIEW_SAVE_FAILED_MESSAGE)
+                    # can just press the retry button again once the DB is reachable. This is
+                    # NOT a Human Review save failure -- the decision was already committed
+                    # long ago (that's precisely why this item is sitting in a FAILED-reanalysis
+                    # state with a retry button); only the reanalysis attempt failed to start,
+                    # so this must use a distinct message and must never say "保存に失敗しました".
+                    st.error(HP_HUMAN_REVIEW_REANALYSIS_RETRY_FAILED_MESSAGE)
                 else:
                     if outcome["status"] == "DONE":
                         count = int(outcome.get("treatment_count") or 0)
