@@ -9,6 +9,11 @@ from src.normalizer.address import extract_municipality
 from src.repository.email_database import email_repositories_for_ui
 
 
+EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE = (
+    "Email Human Reviewを現在利用できません。Clinic Master / HP Researchは引き続き利用できます。"
+)
+
+
 def _repo(store):
     repositories = email_repositories_for_ui()
     return repositories.email_human_review if repositories is not None else None
@@ -21,7 +26,10 @@ def _open():
 
 def email_human_review_card(store):
     repo = _repo(store)
-    if repo is None or not repo.available():
+    if repo is None:
+        st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE)
+        return
+    if not repo.available():
         return
     summary = repo.summary()
     st.markdown("#### ✉️ Email要確認")
@@ -35,7 +43,11 @@ def email_human_review_card(store):
 
 def email_human_review_sidebar(store):
     repo = _repo(store)
-    if repo is None or not repo.available():
+    if repo is None:
+        with st.sidebar:
+            st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE)
+        return
+    if not repo.available():
         return
     summary = repo.summary()
     with st.sidebar:
