@@ -161,7 +161,35 @@ def _bundle_for_connection(conn, *, same_database: bool = False, cohort=None, co
 
 
 def email_repositories_for_ui():
-    """UI accessor that preserves the explicit Email-only connection boundary."""
+    """UI accessor that preserves the explicit Email-only connection boundary.
+
+    Fail-soft boundary: ``build_email_repositories()`` is intentionally fail-closed
+    (see its docstring) and must keep raising on any config/connectivity failure --
+    callers that need the raw exception (e.g. the Auto Run worker factory) call it
+    directly. This accessor is the UI-facing entry point used by every Streamlit
+    fragment/page, and those callers already treat a ``None`` return as "Email
+    unavailable". So any *expected*, config/connectivity-shaped failure out of the
+    build call chain -- bad credential or dropped connection (``psycopg.OperationalError``
+    / ``psycopg.InterfaceError``) or an invalid/missing cohort file
+    (``ValueError`` from ``email_cohort.load_cohort``) -- is caught here and turned into
+    the same ``None`` result, so a broken Email DB degrades the Email features only and
+    never crashes the whole Streamlit app (Clinic Master / HP Research keep working).
+
+    This must never become fail-open: on any such failure nothing is cached as a
+    successful bundle, and the caught exception's text (which can contain host/IP/
+    connection-string or file-path fragments) is never surfaced to the UI or logs --
+    only the generic "unavailable" messages already shown by callers via
+    ``email_database_status()``.
+
+    A failure is also never cached as a permanent state: ``_cached_bundle``/``_cached_key``
+    are left untouched on failure, so the very next call retries the connection/cohort
+    load from scratch once the problem is fixed -- this is what lets Email features
+    recover automatically once the DB (or cohort file) comes back, without a restart.
+
+    Unexpected programming errors (``TypeError``, ``AttributeError``, ``KeyError``, etc.)
+    are NOT caught here and continue to propagate, so real bugs aren't hidden.
+    """
+    import psycopg
     global _cached_bundle, _cached_key
     status = email_database_status()
     if not status.ready:
@@ -171,7 +199,13 @@ def email_repositories_for_ui():
     with _lock:
         if _cached_key == cache_key and _cached_bundle is not None:
             return _cached_bundle
-        bundle, _ = build_email_repositories()
+        try:
+            bundle, _ = build_email_repositories()
+        except (psycopg.OperationalError, psycopg.InterfaceError, ValueError):
+            # Do not touch _cached_bundle/_cached_key: a transient failure must never
+            # be remembered as a stable "nothing to connect to" result that would
+            # block recovery once the DB (or cohort file) is fixed.
+            return None
         _cached_key, _cached_bundle = cache_key, bundle
         return bundle
 

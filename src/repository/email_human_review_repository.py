@@ -77,8 +77,21 @@ class SupabaseEmailHumanReviewRepository:
         if self._connection_is_dead():
             self._reconnect_read()
 
-    def available(self):
-        self._ensure_read_connection()
+    def available(self) -> bool:
+        """``available()`` is a bool API, so a reconnect attempt that itself fails to
+        reach the DB (connection was healthy when this repository was cached, then the
+        DB/network dropped, and the follow-up reconnect also fails) must resolve to
+        ``False`` here -- not propagate -- the same as the "could reach the DB but the
+        schema isn't there yet" case below already does. Only connectivity-shaped
+        exceptions are caught; a bug in `_ensure_read_connection()` itself (TypeError,
+        AttributeError, ...) still raises so it is not hidden.
+        """
+        try:
+            self._ensure_read_connection()
+        except Exception as exc:
+            if not self._is_retryable_connection_error(exc):
+                raise
+            return False
         try:
             with self._conn.cursor() as cur:
                 cur.execute("SELECT to_regclass(%s)", (TABLE_NAME,))
