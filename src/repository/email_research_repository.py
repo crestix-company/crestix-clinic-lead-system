@@ -94,6 +94,10 @@ def email_controller_health(run, *, at=None):
 
 
 class SupabaseEmailResearchRepository:
+    # EmailAutoRunner uses this capability flag to avoid a second, non-atomic KPI
+    # transaction after complete_claim().
+    complete_claim_records_run_metrics = True
+
     def __init__(self, conn, *, same_database: bool = False, cohort: frozenset[int] | None = None,
                  connect_fn=None):
         self._conn = conn
@@ -638,6 +642,14 @@ class SupabaseEmailResearchRepository:
                         confidence_rank.get(item[1]["confidence"], 9),
                         item[1]["normalized_email"],
                     ))
+                stored_metrics = {
+                    **(metrics or {}),
+                    "db_write_ms": (time.perf_counter() - db_write_started) * 1000,
+                    "candidate_found_count": (metrics or {}).get(
+                        "candidate_found_count", len(all_payloads)),
+                    "valid_candidate_count": len(payloads),
+                    "auto_false_count": len(rejections) + len(rejection_evidence or []),
+                }
                 cur.execute(
                     """
                     UPDATE email_research.clinic_email_status
@@ -647,24 +659,28 @@ class SupabaseEmailResearchRepository:
                     WHERE clinic_id=%s AND claim_token=%s
                     """,
                     (research_status, len(ids), primary_id, RULE_VERSION, str(error or "")[:4000],
-                     Jsonb({**(metrics or {}), "db_write_ms": (time.perf_counter() - db_write_started) * 1000,
-                            "candidate_found_count": (metrics or {}).get("candidate_found_count", len(all_payloads)),
-                            "valid_candidate_count": len(payloads),
-                            "auto_false_count": len(rejections) + len(rejection_evidence or [])}),
+                     Jsonb(stored_metrics),
                      int(clinic_id), str(claim_token)),
                 )
                 if cur.rowcount != 1:
                     raise ValueError("Email Research claimの更新に失敗しました。")
+                if research_run_id:
+                    self._record_auto_run_result_tx(
+                        cur, str(research_run_id), metrics=stored_metrics,
+                        research_status=research_status,
+                    )
             self._conn.commit()
-            return {"candidate_ids": ids, "primary_email_candidate_id": primary_id}
+            return {"candidate_ids": ids, "primary_email_candidate_id": primary_id,
+                    "db_write_ms": stored_metrics["db_write_ms"]}
         except Exception:
             self._safe_rollback()
             raise
 
-    def fail_claim(self, *, clinic_id: int, claim_token: str, error: str, metrics: dict | None = None):
+    def fail_claim(self, *, clinic_id: int, claim_token: str, error: str,
+                   metrics: dict | None = None, research_run_id: str = ""):
         return self.complete_claim(
             clinic_id=clinic_id, claim_token=claim_token, candidates=[], research_status="ERROR",
-            error=error, metrics=metrics,
+            error=error, metrics=metrics, research_run_id=research_run_id,
         )
 
     @_retry_closed_read_connection
@@ -1265,11 +1281,12 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
-    def record_auto_run_result(self, run_id: str, *, metrics=None, research_status="ERROR"):
+    @staticmethod
+    def _run_metric_increments(metrics=None, research_status="ERROR"):
         values = metrics or {}
         search_count = int(values.get("search_query_count", 0) or 0)
         terminal = str(research_status or "ERROR").upper()
-        increments = {
+        return {
             "processed": 1,
             "found": int(terminal == "FOUND"),
             "review": int(terminal == "REVIEW"),
@@ -1295,6 +1312,49 @@ class SupabaseEmailResearchRepository:
             "target_sync_ms": float(values.get("target_sync_ms", 0) or 0),
             "elapsed_ms": float(values.get("elapsed_ms", 0) or 0),
         }
+
+    def _record_auto_run_result_tx(self, cur, run_id: str, *, metrics=None,
+                                   research_status="ERROR"):
+        """Update durable run KPI in the caller's clinic-result transaction."""
+        increments = self._run_metric_increments(metrics, research_status)
+        cur.execute(
+            """
+            UPDATE email_research.email_auto_runs r
+            SET metrics=COALESCE(r.metrics,'{}'::jsonb) || jsonb_build_object(
+              'processed',COALESCE((r.metrics->>'processed')::int,0)+%s,
+              'found',COALESCE((r.metrics->>'found')::int,0)+%s,
+              'review',COALESCE((r.metrics->>'review')::int,0)+%s,
+              'no_email',COALESCE((r.metrics->>'no_email')::int,0)+%s,
+              'error',COALESCE((r.metrics->>'error')::int,0)+%s,
+              'query1_called',COALESCE((r.metrics->>'query1_called')::int,0)+%s,
+              'query2_called',COALESCE((r.metrics->>'query2_called')::int,0)+%s,
+              'search_0_count',COALESCE((r.metrics->>'search_0_count')::int,0)+%s,
+              'search_query_count',COALESCE((r.metrics->>'search_query_count')::int,0)+%s,
+              'http_attempts',COALESCE((r.metrics->>'http_attempts')::int,0)+%s,
+              'web_fetch_attempts',COALESCE((r.metrics->>'web_fetch_attempts')::int,0)+%s,
+              'timeout_count',COALESCE((r.metrics->>'timeout_count')::int,0)+%s,
+              'retry_count',COALESCE((r.metrics->>'retry_count')::int,0)+%s,
+              'elapsed_seconds',COALESCE((r.metrics->>'elapsed_seconds')::numeric,0)+%s,
+              'candidate_found_count',COALESCE((r.metrics->>'candidate_found_count')::int,0)+%s,
+              'valid_candidate_count',COALESCE((r.metrics->>'valid_candidate_count')::int,0)+%s,
+              'auto_true_count',COALESCE((r.metrics->>'auto_true_count')::int,0)+%s,
+              'auto_false_count',COALESCE((r.metrics->>'auto_false_count')::int,0)+%s,
+              'review_candidate_count',COALESCE((r.metrics->>'review_candidate_count')::int,0)+%s,
+              'claim_ms',COALESCE((r.metrics->>'claim_ms')::numeric,0)+%s,
+              'db_read_ms',COALESCE((r.metrics->>'db_read_ms')::numeric,0)+%s,
+              'db_write_ms',COALESCE((r.metrics->>'db_write_ms')::numeric,0)+%s,
+              'target_sync_ms',COALESCE((r.metrics->>'target_sync_ms')::numeric,0)+%s,
+              'elapsed_ms',COALESCE((r.metrics->>'elapsed_ms')::numeric,0)+%s
+            ),updated_at=now()
+            WHERE r.run_id=%s
+            """,
+            tuple(increments.values()) + (str(run_id),),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("Email Auto Run KPIの更新対象が見つかりません。")
+
+    def record_auto_run_result(self, run_id: str, *, metrics=None, research_status="ERROR"):
+        increments = self._run_metric_increments(metrics, research_status)
         try:
             with self._conn.cursor() as cur:
                 cur.execute(

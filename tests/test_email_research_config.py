@@ -5,7 +5,7 @@ from src.master.email_research_config import load_email_research_config
 
 def test_performance_defaults_are_configured():
     cfg = load_email_research_config({})
-    assert (cfg.workers, cfg.read_timeout_seconds, cfg.retry_count, cfg.search_query_limit) == (12, 20, 1, 2)
+    assert (cfg.workers, cfg.read_timeout_seconds, cfg.retry_count, cfg.search_query_limit) == (8, 20, 1, 2)
 
 
 def test_query_limit_cannot_be_raised_above_two():

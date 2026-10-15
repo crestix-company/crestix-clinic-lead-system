@@ -197,12 +197,17 @@ def research_clinic(clinic: dict, *, fetcher, search_provider=None, trusted_cand
         metrics.update({
             "http_attempts": provider_metrics.get("attempted", metrics["search_query_count"]),
             "retry_count": int(provider_metrics.get("retry_count", 0) or 0)
-                           + int(fetch_metrics.get("rate_limit_retry_count", 0) or 0),
+                           + int(fetch_metrics.get("rate_limit_retry_count", 0) or 0)
+                           + int(transport_metrics.get("web_fetch_retry_count", 0) or 0),
             "timeout_count": int(provider_metrics.get("timeout", 0) or 0)
                              + int(transport_metrics.get("web_fetch_timeout", 0) or 0),
             "web_fetch_attempts": transport_metrics.get("web_fetch_attempts", 0),
             "web_fetch_errors": transport_metrics.get("web_fetch_errors", 0),
             "web_fetch_timeout": transport_metrics.get("web_fetch_timeout", 0),
+            "web_fetch_dns_error": transport_metrics.get("web_fetch_dns_error", 0),
+            "web_fetch_ssl_error": transport_metrics.get("web_fetch_ssl_error", 0),
+            "web_fetch_http_5xx": transport_metrics.get("web_fetch_http_5xx", 0),
+            "web_fetch_retry_count": transport_metrics.get("web_fetch_retry_count", 0),
             "search_timeout": provider_metrics.get("timeout", 0),
             "elapsed_seconds": monotonic() - started,
         })

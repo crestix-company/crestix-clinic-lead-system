@@ -193,6 +193,22 @@ def test_4xx_is_not_retried():
     assert provider.metrics["retry_count"] == 0
 
 
+def test_429_with_short_retry_after_is_retried_once():
+    first = FakeResponse(status_code=429)
+    first.headers = {"Retry-After": "0"}
+    second = FakeResponse(status_code=200, payload={"organic_results": []})
+    session = SequenceSession([first, second])
+    provider = SerpApiSearchProvider(
+        api_key="dummy-key", session=session, max_retries=1,
+        backoff_base_seconds=0, sleep_fn=lambda _seconds: None,
+        retry_rate_limit=True,
+    )
+    assert provider.search("q") == []
+    assert len(session.requests) == 2
+    assert provider.metrics["rate_limit"] == 1
+    assert provider.metrics["retry_429"] == 1
+
+
 def test_metering_counts_api_error_field_as_failed():
     provider = SerpApiSearchProvider(api_key="dummy-key", session=FakeSession(payload={"error": "Invalid API key"}))
     with pytest.raises(SearchError):

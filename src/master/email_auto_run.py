@@ -29,6 +29,9 @@ class RunOutcome:
 
 
 class EmailAutoRunner:
+    controller_heartbeat_interval_seconds = 20.0
+    lease_retry_base_seconds = 0.5
+
     def __init__(self, repository_factory, research_one, *, target_reader=None,
                  config: EmailResearchConfig | None = None):
         self.repository_factory = repository_factory
@@ -41,6 +44,26 @@ class EmailAutoRunner:
         self._last_target_sync = 0.0
         self.controller_id = f"{socket.gethostname()}:{uuid.uuid4().hex}"
         self._controller_lost = Event()
+
+    @staticmethod
+    def _is_connection_error(exc):
+        """Only classify errors for which abandoning the old connection is safe.
+
+        Writes are never blindly replayed here.  A completion with an unknown commit
+        outcome is left behind its claim token and is reconciled by the durable DB
+        state/lease on the next claim attempt.
+        """
+        try:
+            import psycopg
+        except ImportError:
+            return False
+        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+
+    def _replace_repo_after_connection_error(self, repo, failures):
+        self._close_repo(repo)
+        if self._stop.wait(min(5.0, 0.25 * (2 ** min(failures, 4)))):
+            return None
+        return self.repository_factory()
 
     def running(self):
         return bool(self._thread and self._thread.is_alive())
@@ -123,19 +146,28 @@ class EmailAutoRunner:
                     return outcome  # healthy controller on another PC: this process is standby
 
                 def heartbeat_loop():
-                    heartbeat_repo = None
-                    try:
-                        heartbeat_repo = self.repository_factory()
-                        while not heartbeat_stop.wait(20):
-                            if not heartbeat_repo.heartbeat_controller(run_id, self.controller_id):
-                                self._controller_lost.set()
-                                self._stop.set()
-                                return
-                    except Exception:
-                        self._controller_lost.set()
-                        self._stop.set()
-                    finally:
-                        self._close_repo(heartbeat_repo)
+                    while not heartbeat_stop.wait(self.controller_heartbeat_interval_seconds):
+                        renewed = False
+                        for attempt in range(3):
+                            heartbeat_repo = None
+                            try:
+                                # A fresh connection per heartbeat prevents a stale
+                                # long-lived socket from killing an otherwise healthy run.
+                                heartbeat_repo = self.repository_factory()
+                                renewed = bool(heartbeat_repo.heartbeat_controller(
+                                    run_id, self.controller_id))
+                                break
+                            except Exception as exc:
+                                if not self._is_connection_error(exc):
+                                    break
+                                if heartbeat_stop.wait(self.lease_retry_base_seconds * (attempt + 1)):
+                                    return
+                            finally:
+                                self._close_repo(heartbeat_repo)
+                        if not renewed:
+                            self._controller_lost.set()
+                            self._stop.set()
+                            return
 
                 heartbeat_thread = Thread(target=heartbeat_loop, daemon=True,
                                           name=f"email-heartbeat-{run_id[:8]}")
@@ -179,23 +211,59 @@ class EmailAutoRunner:
     def _worker(self, run_id, index):
         outcome = RunOutcome()
         worker_id = f"{socket.gethostname()}:{uuid.uuid4().hex}:{index}"
-        repo = self.repository_factory()
+        repo = None
+        connection_failures = 0
         try:
             while not self._stop.is_set() and not self._controller_lost.is_set():
-                state = repo.auto_run(run_id) or {}
+                try:
+                    if repo is None:
+                        repo = self.repository_factory()
+                    state = repo.auto_run(run_id) or {}
+                except Exception as exc:
+                    if not self._is_connection_error(exc):
+                        outcome.errors += 1
+                        break
+                    connection_failures += 1
+                    try:
+                        repo = self._replace_repo_after_connection_error(repo, connection_failures)
+                    except Exception as reconnect_exc:
+                        repo = None
+                        if not self._is_connection_error(reconnect_exc):
+                            outcome.errors += 1
+                            break
+                    continue
+                connection_failures = 0
                 if state.get("stop_requested") or state.get("status") in {"PAUSED", "STOPPING", "ERROR"}:
                     break
-                if (index == 0 and self.target_reader is not None
-                        and time.monotonic() - self._last_target_sync >= self.config.target_sync_interval_seconds):
-                    sync_started = time.monotonic()
-                    repo.sync_targets(self.target_reader())
-                    sync_ms = (time.monotonic() - sync_started) * 1000
-                    if hasattr(repo, "record_target_sync"):
-                        repo.record_target_sync(run_id, elapsed_ms=sync_ms)
-                    self._last_target_sync = time.monotonic()
-                claim_started = time.monotonic()
-                claim = repo.claim_next(worker_id=worker_id, run_id=run_id,
-                                        lease_seconds=self.config.claim_lease_seconds)
+                try:
+                    if (index == 0 and self.target_reader is not None
+                            and time.monotonic() - self._last_target_sync >= self.config.target_sync_interval_seconds):
+                        sync_started = time.monotonic()
+                        repo.sync_targets(self.target_reader())
+                        sync_ms = (time.monotonic() - sync_started) * 1000
+                        if hasattr(repo, "record_target_sync"):
+                            repo.record_target_sync(run_id, elapsed_ms=sync_ms)
+                        self._last_target_sync = time.monotonic()
+                    claim_started = time.monotonic()
+                    claim = repo.claim_next(worker_id=worker_id, run_id=run_id,
+                                            lease_seconds=self.config.claim_lease_seconds)
+                except Exception as exc:
+                    if self._is_connection_error(exc):
+                        connection_failures += 1
+                        try:
+                            repo = self._replace_repo_after_connection_error(repo, connection_failures)
+                        except Exception as reconnect_exc:
+                            repo = None
+                            if not self._is_connection_error(reconnect_exc):
+                                outcome.errors += 1
+                                break
+                        continue
+                    outcome.errors += 1
+                    # A worker-local repository/query failure must not terminate the
+                    # other workers or incorrectly mark the durable run completed.
+                    if self._stop.wait(self.config.idle_poll_seconds):
+                        break
+                    continue
                 claim_ms = (time.monotonic() - claim_started) * 1000
                 if claim is None:
                     # A fixed Canary cohort stops when every member is terminal.
@@ -231,27 +299,67 @@ class EmailAutoRunner:
                         "clinic_started_at": clinic_started_at,
                     })
                     metrics["elapsed_ms"] = (time.monotonic() - processing_started) * 1000
+                    metrics["clinic_finished_at"] = datetime.now(timezone.utc).isoformat()
                     write_started = time.monotonic()
-                    repo.complete_claim(
+                    completion = repo.complete_claim(
                         clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
                         candidates=result.candidates, research_status=result.research_status,
                         metrics=metrics, research_run_id=run_id,
                         rejection_evidence=getattr(result, "rejection_evidence", []),
                         primary_minimum_confidence=self.config.primary_minimum_confidence,
                     )
-                    metrics["db_write_ms"] = (time.monotonic() - write_started) * 1000
-                    metrics["clinic_finished_at"] = datetime.now(timezone.utc).isoformat()
+                    metrics["db_write_ms"] = float(
+                        (completion or {}).get("db_write_ms",
+                                               (time.monotonic() - write_started) * 1000))
                     outcome.processed += 1
                     outcome.add_metrics(metrics)
-                    if hasattr(repo, "record_auto_run_result"):
+                    if (hasattr(repo, "record_auto_run_result")
+                            and not getattr(repo, "complete_claim_records_run_metrics", False)):
                         repo.record_auto_run_result(run_id, metrics=metrics,
                                                     research_status=result.research_status)
                 except Exception as exc:
-                    repo.fail_claim(clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
-                                    error=str(exc))
                     outcome.errors += 1
-                    if hasattr(repo, "record_auto_run_result"):
-                        repo.record_auto_run_result(run_id, research_status="ERROR")
+                    if self._is_connection_error(exc):
+                        # The commit outcome is unknown. Never replay the write or turn
+                        # it into ERROR; a committed result remains terminal, otherwise
+                        # the fenced claim becomes reclaimable after lease expiry.
+                        connection_failures += 1
+                        try:
+                            repo = self._replace_repo_after_connection_error(repo, connection_failures)
+                        except Exception:
+                            repo = None
+                        continue
+                    try:
+                        repo.fail_claim(
+                            clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
+                            error=str(exc), metrics={"clinic_started_at": clinic_started_at},
+                            research_run_id=run_id,
+                        )
+                        if (hasattr(repo, "record_auto_run_result")
+                                and not getattr(repo, "complete_claim_records_run_metrics", False)):
+                            repo.record_auto_run_result(run_id, research_status="ERROR")
+                    except TypeError:
+                        # Compatibility with small repository fakes and older adapters.
+                        try:
+                            repo.fail_claim(
+                                clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
+                                error=str(exc))
+                        except Exception as failure_exc:
+                            if self._is_connection_error(failure_exc):
+                                connection_failures += 1
+                                try:
+                                    repo = self._replace_repo_after_connection_error(
+                                        repo, connection_failures)
+                                except Exception:
+                                    repo = None
+                    except Exception as failure_exc:
+                        if self._is_connection_error(failure_exc):
+                            connection_failures += 1
+                            try:
+                                repo = self._replace_repo_after_connection_error(
+                                    repo, connection_failures)
+                            except Exception:
+                                repo = None
         finally:
             self._close_repo(repo)
         return outcome
@@ -264,21 +372,28 @@ class EmailAutoRunner:
         lost = Event()
 
         def renew_loop():
-            renew_repo = None
-            try:
-                renew_repo = self.repository_factory()
-                interval = max(10, min(60, int(self.config.claim_lease_seconds) // 3))
-                while not stopped.wait(interval):
-                    if not renew_repo.renew_claim(
-                        clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
-                        lease_seconds=self.config.claim_lease_seconds,
-                    ):
-                        lost.set()
-                        return
-            except Exception:
-                lost.set()
-            finally:
-                self._close_repo(renew_repo)
+            interval = max(10, min(60, int(self.config.claim_lease_seconds) // 3))
+            while not stopped.wait(interval):
+                renewed = False
+                for attempt in range(3):
+                    renew_repo = None
+                    try:
+                        renew_repo = self.repository_factory()
+                        renewed = bool(renew_repo.renew_claim(
+                            clinic_id=claim["clinic_id"], claim_token=claim["claim_token"],
+                            lease_seconds=self.config.claim_lease_seconds,
+                        ))
+                        break
+                    except Exception as exc:
+                        if not self._is_connection_error(exc):
+                            break
+                        if stopped.wait(self.lease_retry_base_seconds * (attempt + 1)):
+                            return
+                    finally:
+                        self._close_repo(renew_repo)
+                if not renewed:
+                    lost.set()
+                    return
 
         thread = Thread(target=renew_loop, daemon=True,
                         name=f"email-claim-{claim['clinic_id']}")
@@ -293,21 +408,57 @@ class EmailAutoRunner:
 
 class MeteredTransport:
     """Separate public-web fetch accounting from paid Search API accounting."""
-    def __init__(self, transport):
+    def __init__(self, transport, *, max_retries=1, backoff_seconds=0.5, sleeper=time.sleep):
         self.transport = transport
-        self.metrics = {"web_fetch_attempts": 0, "web_fetch_errors": 0, "web_fetch_timeout": 0}
+        self.max_retries = max(0, int(max_retries))
+        self.backoff_seconds = max(0.0, float(backoff_seconds))
+        self.sleep = sleeper
+        self.metrics = {
+            "web_fetch_attempts": 0, "web_fetch_errors": 0,
+            "web_fetch_timeout": 0, "web_fetch_dns_error": 0,
+            "web_fetch_ssl_error": 0, "web_fetch_http_5xx": 0,
+            "web_fetch_retry_count": 0,
+        }
 
     def get(self, *args, **kwargs):
-        self.metrics["web_fetch_attempts"] += 1
-        try:
-            return self.transport.get(*args, **kwargs)
-        except Exception as exc:
-            self.metrics["web_fetch_errors"] += 1
-            # SafeFetcher/PinnedTransport expose timeout failures as a bounded,
-            # sanitized WebError string; do not retain request content or URLs.
-            if any(token in str(exc).casefold() for token in ("timeout", "timed out", "時間上限", "タイムアウト")):
-                self.metrics["web_fetch_timeout"] += 1
-            raise
+        retries = 0
+        while True:
+            self.metrics["web_fetch_attempts"] += 1
+            try:
+                response = self.transport.get(*args, **kwargs)
+            except Exception as exc:
+                self.metrics["web_fetch_errors"] += 1
+                message = str(exc).casefold()
+                is_ssl = "ssl証明書" in message or "certificate" in message
+                is_dns = "dns" in message or "名前解決" in message
+                is_timeout = any(token in message for token in (
+                    "timeout", "timed out", "時間上限", "タイムアウト"))
+                if is_ssl:
+                    self.metrics["web_fetch_ssl_error"] += 1
+                if is_dns:
+                    self.metrics["web_fetch_dns_error"] += 1
+                if is_timeout:
+                    self.metrics["web_fetch_timeout"] += 1
+                # Certificate validation is permanent/security-sensitive. DNS,
+                # timeout and sanitized connection failures get a bounded retry.
+                retryable = not is_ssl and (
+                    is_dns or is_timeout or "接続・ssl・タイムアウト" in message)
+                if retryable and retries < self.max_retries:
+                    self.metrics["web_fetch_retry_count"] += 1
+                    if self.backoff_seconds:
+                        self.sleep(self.backoff_seconds * (2 ** retries))
+                    retries += 1
+                    continue
+                raise
+            if 500 <= int(getattr(response, "status", 0) or 0) < 600:
+                self.metrics["web_fetch_http_5xx"] += 1
+                if retries < self.max_retries:
+                    self.metrics["web_fetch_retry_count"] += 1
+                    if self.backoff_seconds:
+                        self.sleep(self.backoff_seconds * (2 ** retries))
+                    retries += 1
+                    continue
+            return response
 
 
 def build_default_research_one(*, trusted_candidate_provider=None):
@@ -321,8 +472,9 @@ def build_default_research_one(*, trusted_candidate_provider=None):
         provider = SerpApiSearchProvider(
             connect_timeout=config.connect_timeout_seconds,
             read_timeout=config.read_timeout_seconds, max_retries=config.retry_count,
+            retry_rate_limit=True,
         )
-        transport = MeteredTransport(PinnedTransport())
+        transport = MeteredTransport(PinnedTransport(), max_retries=config.retry_count)
         fetcher = SafeFetcher(transport=transport, timeout=config.read_timeout_seconds)
         clinic = dict(claim)
         clinic["city"] = clinic.get("city") or extract_municipality(clinic.get("address") or "")

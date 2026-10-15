@@ -7,7 +7,7 @@ import os
 
 @dataclass(frozen=True)
 class EmailResearchConfig:
-    workers: int = 12
+    workers: int = 8
     connect_timeout_seconds: float = 10.0
     read_timeout_seconds: float = 20.0
     retry_count: int = 1
@@ -31,7 +31,7 @@ class EmailResearchConfig:
 def load_email_research_config(environ=None) -> EmailResearchConfig:
     env = os.environ if environ is None else environ
     return EmailResearchConfig(
-        workers=int(env.get("EMAIL_RESEARCH_WORKERS", "12")),
+        workers=int(env.get("EMAIL_RESEARCH_WORKERS", "8")),
         connect_timeout_seconds=float(env.get("EMAIL_RESEARCH_CONNECT_TIMEOUT_SECONDS", "10")),
         read_timeout_seconds=float(env.get("EMAIL_RESEARCH_READ_TIMEOUT_SECONDS", "20")),
         retry_count=int(env.get("EMAIL_RESEARCH_RETRY_COUNT", "1")),

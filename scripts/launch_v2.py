@@ -1,11 +1,15 @@
-"""既に旧版が8501で動いていても、空いているローカルポートで起動する。"""
+"""Streamlit Runtimeを空きポートで単一起動する。"""
 from pathlib import Path
 import argparse
+import hashlib
 import os
 import shlex
 import socket
 import subprocess
 import sys
+import tempfile
+
+from filelock import FileLock, Timeout
 
 
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
@@ -21,6 +25,14 @@ EMAIL_ENV_KEYS = {
     "EMAIL_RESEARCH_DB_MODE",
     "EMAIL_RESEARCH_COHORT_FILE",
     "EMAIL_RESEARCH_WORKERS",
+    "EMAIL_RESEARCH_CONNECT_TIMEOUT_SECONDS",
+    "EMAIL_RESEARCH_READ_TIMEOUT_SECONDS",
+    "EMAIL_RESEARCH_RETRY_COUNT",
+    "EMAIL_RESEARCH_SEARCH_QUERY_LIMIT",
+    "EMAIL_RESEARCH_CLAIM_LEASE_SECONDS",
+    "EMAIL_RESEARCH_IDLE_POLL_SECONDS",
+    "EMAIL_RESEARCH_TARGET_SYNC_INTERVAL_SECONDS",
+    "EMAIL_RESEARCH_PRIMARY_MINIMUM_CONFIDENCE",
 }
 
 
@@ -86,19 +98,30 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--headless",action="store_true")
     parser.add_argument("--port",type=int,default=8501)
+    parser.add_argument("--strict-port",action="store_true")
     args=parser.parse_args()
     root=Path(__file__).resolve().parents[1]
     load_runtime_env(root)
-    port=choose_port(args.port)
-    print(f"クリニック営業マスター： http://127.0.0.1:{port}/",flush=True)
-    command=[sys.executable,"-m","streamlit","run",str(root/"app_v2.py"),"--server.address","127.0.0.1",
-             "--server.port",str(port),"--browser.serverAddress","127.0.0.1","--browser.serverPort",str(port),
-             "--browser.gatherUsageStats","false","--global.developmentMode","false",
-             # Never block a one-click start on Streamlit's first-run "Email:" console prompt.
-             "--server.showEmailPrompt","false"]
-    if args.headless:
-        command += ["--server.headless","true"]
-    return subprocess.call(command,cwd=root)
+    lock_name = hashlib.sha256(str(root.resolve()).encode("utf-8")).hexdigest()[:16]
+    lock = FileLock(str(Path(tempfile.gettempdir()) / f"clinic-lead-runtime-{lock_name}.lock"))
+    try:
+        with lock.acquire(timeout=0):
+            port=choose_port(args.port)
+            if args.strict_port and port != args.port:
+                raise RuntimeError(
+                    f"正式ポート{args.port}は使用中です。別ポートでは起動しません。")
+            print(f"クリニック営業マスター： http://127.0.0.1:{port}/",flush=True)
+            command=[sys.executable,"-m","streamlit","run",str(root/"app_v2.py"),"--server.address","127.0.0.1",
+                     "--server.port",str(port),"--browser.serverAddress","127.0.0.1","--browser.serverPort",str(port),
+                     "--browser.gatherUsageStats","false","--global.developmentMode","false",
+                     # Never block a one-click start on Streamlit's first-run "Email:" console prompt.
+                     "--server.showEmailPrompt","false"]
+            if args.headless:
+                command += ["--server.headless","true"]
+            return subprocess.call(command,cwd=root)
+    except Timeout:
+        raise RuntimeError(
+            "Clinic Lead Systemは既にこのRuntimeから起動中です。二重起動は行いません。") from None
 
 
 if __name__=="__main__":
