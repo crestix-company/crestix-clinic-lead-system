@@ -1,4 +1,5 @@
 from src.repository.email_research_repository import SupabaseEmailResearchRepository
+import pytest
 
 
 def valid_candidate(**changes):
@@ -140,6 +141,150 @@ def test_background_targets_require_verified_official_hp_and_no_exclude_reason()
     assert "status='RUNNING' AND stop_requested=false" in source
     assert "FOR SHARE" in source
     assert "s.research_status='NOT_RESEARCHED'" in source
+
+
+def test_email_controller_lease_uses_existing_metrics_json_and_fenced_finish():
+    source = open("src/repository/email_research_repository.py", encoding="utf-8").read()
+    assert "def acquire_controller" in source
+    assert "def heartbeat_controller" in source
+    assert "clock_timestamp()" in source
+    assert "metrics->>'controller_id'=%s" in source
+    assert "controller_lease_until" in source
+    migration = open("scripts/supabase_migration/email_research_schema.sql", encoding="utf-8").read()
+    # No migration is needed: controller ownership is stored in the existing metrics JSONB.
+    auto_table = migration.split("create table if not exists email_research.email_auto_runs", 1)[1]
+    assert "metrics jsonb" in auto_table
+
+
+def test_complete_claim_and_run_kpi_commit_in_one_transaction():
+    class AtomicCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self.row = None
+            self.rowcount = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=None):
+            self.conn.statements.append((sql, params))
+            if "SELECT claim_token" in sql:
+                self.row = ("claim-1",)
+            elif "UPDATE email_research.clinic_email_status" in sql:
+                self.rowcount = 1
+            elif "UPDATE email_research.email_auto_runs" in sql:
+                self.rowcount = 1
+        def fetchone(self): return self.row
+
+    class AtomicConn:
+        def __init__(self):
+            self.statements = []
+            self.commits = 0
+            self.rollbacks = 0
+        def cursor(self): return AtomicCursor(self)
+        def commit(self): self.commits += 1
+        def rollback(self): self.rollbacks += 1
+
+    conn = AtomicConn()
+    result = SupabaseEmailResearchRepository(conn).complete_claim(
+        clinic_id=1, claim_token="claim-1", candidates=[],
+        research_status="NO_EMAIL_FOUND", research_run_id="same-run",
+        metrics={"search_query_count": 2},
+    )
+    sql = "\n".join(statement for statement, _ in conn.statements)
+    assert "UPDATE email_research.clinic_email_status" in sql
+    assert "UPDATE email_research.email_auto_runs" in sql
+    assert conn.commits == 1 and conn.rollbacks == 0
+    assert result["db_write_ms"] >= 0
+
+
+def test_atomic_run_kpi_update_fails_closed_when_run_row_is_missing():
+    class MissingRunCursor:
+        rowcount = 0
+        def execute(self, sql, params=None): pass
+
+    repo = SupabaseEmailResearchRepository(Conn())
+    with pytest.raises(ValueError, match="KPI"):
+        repo._record_auto_run_result_tx(
+            MissingRunCursor(), "missing-run", metrics={},
+            research_status="NO_EMAIL_FOUND",
+        )
+
+
+def test_controller_takeover_heartbeat_and_finish_are_fenced_by_db_clock():
+    from datetime import datetime, timedelta, timezone
+
+    class LeaseCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self.row = None
+            self.rowcount = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=None):
+            if sql.startswith("SELECT status,stop_requested,metrics,clock_timestamp()"):
+                self.row = (self.conn.status, False, dict(self.conn.metrics), self.conn.now)
+                return
+            if sql.startswith("UPDATE email_research.email_auto_runs SET metrics="):
+                self.conn.metrics = dict(params[0].obj)
+                self.rowcount = 1
+                return
+            if "metrics->>'controller_id'=%s" in sql:
+                owner = params[-1]
+                self.rowcount = int(self.conn.status == "RUNNING"
+                                    and self.conn.metrics.get("controller_id") == owner)
+                if self.rowcount:
+                    self.conn.status = params[0]
+                return
+            raise AssertionError(sql)
+        def fetchone(self): return self.row
+
+    class LeaseConn:
+        def __init__(self, now, metrics):
+            self.now = now
+            self.metrics = dict(metrics)
+            self.status = "RUNNING"
+            self.commits = 0
+        def cursor(self): return LeaseCursor(self)
+        def commit(self): self.commits += 1
+        def rollback(self): pass
+
+    now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    conn = LeaseConn(now, {
+        "controller_id": "dead", "controller_epoch": 4,
+        "controller_lease_until": (now - timedelta(seconds=1)).isoformat(),
+    })
+    repo = SupabaseEmailResearchRepository(conn)
+    acquired = repo.acquire_controller("same-run", "mac-8502")
+    assert acquired["run_id"] == "same-run"
+    assert conn.metrics["controller_id"] == "mac-8502"
+    assert conn.metrics["controller_epoch"] == 5
+    assert repo.heartbeat_controller("same-run", "mac-8502") is True
+    assert repo.finish_controller("same-run", "stale-owner", status="COMPLETED") is False
+    assert repo.finish_controller("same-run", "mac-8502", status="COMPLETED") is True
+
+
+def test_expired_controller_cannot_resurrect_its_lease():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 10, 15, tzinfo=timezone.utc)
+
+    class Cursor:
+        rowcount = 0
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def execute(self, sql, params=None):
+            self.sql = sql
+        def fetchone(self):
+            return ("RUNNING", False, {
+                "controller_id": "old",
+                "controller_lease_until": (now - timedelta(seconds=1)).isoformat(),
+            }, now)
+    class Connection:
+        def cursor(self): return Cursor()
+        def commit(self): pass
+        def rollback(self): pass
+
+    assert SupabaseEmailResearchRepository(Connection()).heartbeat_controller(
+        "same-run", "old") is False
 
 
 def test_summary_definitions_keep_sales_primary_and_new_verified_targets_separate():

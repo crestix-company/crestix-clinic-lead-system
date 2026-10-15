@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import socket
 
-from src.master.hp_auto_state import initial_auto_state, advance_completed_batch
+from src.master.hp_auto_state import initial_auto_state, advance_completed_batch, controller_lease_health
 from src.master.store import ClinicStore
 from src.repository.hp_targets import maps_hp_target_predicate
 from src.repository.sqlite_write_adapter import SqliteJobsWriteRepository
@@ -172,6 +172,41 @@ def test_k_unexpired_database_clock_lease_rejects_second_pc():
     assert SupabaseHpAutoRunRepository(conn).acquire("windows") is None
     assert conn.committed == 1
     assert not any("ON CONFLICT(key) DO UPDATE" in sql for sql, _ in conn.executed)
+
+
+def test_expired_owner_cannot_resurrect_lease_with_heartbeat():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+
+    db_now = datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc)
+    state = {
+        "status": "RUNNING", "controller_id": "old-process",
+        "controller_lease_until": (db_now - timedelta(seconds=1)).isoformat(),
+    }
+    conn = _Connection([(json.dumps(state),), (db_now,)])
+    assert SupabaseHpAutoRunRepository(conn).heartbeat("old-process") is False
+    assert conn.committed == 1
+    assert not any("ON CONFLICT(key) DO UPDATE" in sql for sql, _ in conn.executed)
+
+
+def test_expired_controller_is_reported_recoverable_without_changing_checkpoint():
+    at = datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc)
+    state = {
+        "status": "RUNNING", "run_id": "same-run", "current_job_id": "same-job",
+        "controller_id": "dead-process",
+        "controller_lease_until": (at - timedelta(seconds=1)).isoformat(),
+    }
+    assert controller_lease_health(state, at=at) == "RECOVERABLE"
+    assert state["run_id"] == "same-run" and state["current_job_id"] == "same-job"
+
+
+def test_live_controller_is_reported_active():
+    at = datetime(2026, 10, 8, 3, 0, tzinfo=timezone.utc)
+    state = {
+        "status": "RUNNING", "controller_id": "active-process",
+        "controller_lease_until": (at + timedelta(seconds=1)).isoformat(),
+    }
+    assert controller_lease_health(state, at=at) == "ACTIVE"
 
 
 def test_e_network_waiting_then_recovery_keeps_completed_work(monkeypatch):

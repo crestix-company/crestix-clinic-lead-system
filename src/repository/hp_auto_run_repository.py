@@ -226,6 +226,12 @@ class SupabaseHpAutoRunRepository:
                     self._conn.commit()
                     return False
                 db_now = _db_now(cur)
+                # Expired owners must re-enter through acquire(). This prevents a
+                # suspended process from resurrecting an expired lease while a new
+                # PC is attempting takeover.
+                if _parse_time(state.get("controller_lease_until")) <= db_now:
+                    self._conn.commit()
+                    return False
                 state["controller_lease_until"] = _iso(db_now + timedelta(seconds=lease_seconds))
                 state["last_progress_at"] = _iso(db_now)
                 self._save(cur, state)

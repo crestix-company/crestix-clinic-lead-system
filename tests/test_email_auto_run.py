@@ -3,6 +3,9 @@ from threading import Event
 
 from src.master.email_auto_run import EmailAutoRunner
 from src.master.email_research_config import EmailResearchConfig
+from src.repository.email_research_repository import email_controller_health
+from datetime import datetime, timedelta, timezone
+import psycopg
 
 
 class Result:
@@ -114,6 +117,110 @@ def test_existing_primary_is_skipped_by_claim_contract():
     assert "s.primary_email_candidate_id IS NULL" in sql
     assert "SKIP LOCKED" in sql
     assert "claim_expires_at<now()" in sql
+
+
+def test_stale_email_controller_is_recoverable_and_keeps_same_run():
+    at = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    run = {
+        "run_id": "same-run", "status": "RUNNING",
+        "metrics": {"controller_id": "dead-pc", "controller_lease_until":
+                    (at - timedelta(seconds=1)).isoformat()},
+    }
+    assert email_controller_health(run, at=at) == "RECOVERABLE"
+    assert run["run_id"] == "same-run"
+
+
+def test_live_email_controller_is_active():
+    at = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)
+    run = {
+        "run_id": "run", "status": "RUNNING",
+        "metrics": {"controller_id": "active-pc", "controller_lease_until":
+                    (at + timedelta(seconds=1)).isoformat()},
+    }
+    assert email_controller_health(run, at=at) == "ACTIVE"
+
+
+def test_eight_workers_reclaim_eight_expired_claims_without_duplicates():
+    shared = Shared()
+    shared.pending = list(range(1, 9))
+    runner = EmailAutoRunner(lambda: Repo(shared), lambda claim, cfg: Result(),
+                             config=EmailResearchConfig(workers=8))
+    outcome = runner.run("run")
+    assert outcome.processed == 8
+    assert sorted(shared.completed) == list(range(1, 9))
+    assert len(shared.claimed) == 8
+
+
+def test_worker_rebuilds_connection_after_transient_db_disconnect_and_continues():
+    shared = Shared()
+
+    class DisconnectedRepo(Repo):
+        def auto_run(self, run_id):
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+    repos = [DisconnectedRepo(shared), Repo(shared)]
+    runner = EmailAutoRunner(lambda: repos.pop(0) if repos else Repo(shared),
+                             lambda claim, cfg: Result(),
+                             config=EmailResearchConfig(workers=1))
+    outcome = runner.run("run")
+    assert outcome.processed == 4
+    assert sorted(shared.completed) == [1, 2, 3, 4]
+
+
+def test_one_clinic_failure_does_not_stop_worker_from_processing_following_clinics():
+    shared = Shared()
+    failed = []
+
+    class FailureIsolatingRepo(Repo):
+        def fail_claim(self, **values):
+            failed.append(values["clinic_id"])
+
+    def research_one(claim, _config):
+        if claim["clinic_id"] == 1:
+            raise RuntimeError("one clinic failed")
+        return Result()
+
+    runner = EmailAutoRunner(lambda: FailureIsolatingRepo(shared), research_one,
+                             config=EmailResearchConfig(workers=1))
+    outcome = runner.run("run")
+    assert failed == [1]
+    assert outcome.errors == 1
+    assert outcome.processed == 3
+    assert shared.completed == [2, 3, 4]
+
+
+def test_controller_heartbeat_reconnects_after_one_transient_disconnect():
+    import time
+
+    shared = Shared()
+    shared.pending = [1]
+    shared.heartbeat_calls = 0
+
+    class ControllerRepo(Repo):
+        def acquire_controller(self, run_id, controller_id):
+            return {"run_id": run_id, "status": "RUNNING"}
+        def heartbeat_controller(self, run_id, controller_id):
+            with self.s.lock:
+                self.s.heartbeat_calls += 1
+                if self.s.heartbeat_calls == 1:
+                    raise psycopg.OperationalError("connection dropped")
+            return True
+        def finish_controller(self, run_id, controller_id, *, status, error=""):
+            self.s.run["status"] = status
+            return True
+
+    def slow_research(_claim, _config):
+        time.sleep(0.12)
+        return Result()
+
+    runner = EmailAutoRunner(lambda: ControllerRepo(shared), slow_research,
+                             config=EmailResearchConfig(workers=1))
+    runner.controller_heartbeat_interval_seconds = 0.01
+    runner.lease_retry_base_seconds = 0.01
+    outcome = runner.run("run")
+    assert outcome.processed == 1
+    assert shared.heartbeat_calls >= 2
+    assert shared.run["status"] == "COMPLETED"
 
 
 def test_stop_is_terminal_and_resume_only_accepts_paused_run():

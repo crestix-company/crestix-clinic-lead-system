@@ -21,6 +21,7 @@ snapshot = {
         "current_batch": 6,
         "completed_batches": 5,
     },
+    "controller_health": "ACTIVE",
     "current": {"DONE": 211, "PENDING": 287, "RUNNING": 2},
     "initial_count": 5742,
     "processed": 2711,

@@ -1,7 +1,7 @@
 """Supabase persistence and atomic queue operations for formal Email Research."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 import json
 import re
@@ -70,9 +70,34 @@ def _json_dict(value) -> dict:
 
 
 TERMINAL_RESEARCH_STATUSES = frozenset({"FOUND", "REVIEW", "NO_EMAIL_FOUND", "ERROR"})
+EMAIL_CONTROLLER_LEASE_SECONDS = 120
+
+
+def _parse_timestamp(value):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
+def email_controller_health(run, *, at=None):
+    """Return ACTIVE/RECOVERABLE/INACTIVE from the lease stored in metrics JSON."""
+    if not run or run.get("status") != "RUNNING":
+        return "INACTIVE"
+    metrics = _json_dict(run.get("metrics"))
+    owner = str(metrics.get("controller_id") or "").strip()
+    if not owner:
+        return "RECOVERABLE"
+    current = at or utc_now()
+    return "ACTIVE" if _parse_timestamp(metrics.get("controller_lease_until")) > current else "RECOVERABLE"
 
 
 class SupabaseEmailResearchRepository:
+    # EmailAutoRunner uses this capability flag to avoid a second, non-atomic KPI
+    # transaction after complete_claim().
+    complete_claim_records_run_metrics = True
+
     def __init__(self, conn, *, same_database: bool = False, cohort: frozenset[int] | None = None,
                  connect_fn=None):
         self._conn = conn
@@ -114,6 +139,14 @@ class SupabaseEmailResearchRepository:
         try:
             if not getattr(self._conn, "closed", False):
                 self._conn.rollback()
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """Close this factory-owned connection; callers decide repository lifetime."""
+        try:
+            if not getattr(self._conn, "closed", False):
+                self._conn.close()
         except Exception:
             pass
 
@@ -609,6 +642,14 @@ class SupabaseEmailResearchRepository:
                         confidence_rank.get(item[1]["confidence"], 9),
                         item[1]["normalized_email"],
                     ))
+                stored_metrics = {
+                    **(metrics or {}),
+                    "db_write_ms": (time.perf_counter() - db_write_started) * 1000,
+                    "candidate_found_count": (metrics or {}).get(
+                        "candidate_found_count", len(all_payloads)),
+                    "valid_candidate_count": len(payloads),
+                    "auto_false_count": len(rejections) + len(rejection_evidence or []),
+                }
                 cur.execute(
                     """
                     UPDATE email_research.clinic_email_status
@@ -618,24 +659,28 @@ class SupabaseEmailResearchRepository:
                     WHERE clinic_id=%s AND claim_token=%s
                     """,
                     (research_status, len(ids), primary_id, RULE_VERSION, str(error or "")[:4000],
-                     Jsonb({**(metrics or {}), "db_write_ms": (time.perf_counter() - db_write_started) * 1000,
-                            "candidate_found_count": (metrics or {}).get("candidate_found_count", len(all_payloads)),
-                            "valid_candidate_count": len(payloads),
-                            "auto_false_count": len(rejections) + len(rejection_evidence or [])}),
+                     Jsonb(stored_metrics),
                      int(clinic_id), str(claim_token)),
                 )
                 if cur.rowcount != 1:
                     raise ValueError("Email Research claimの更新に失敗しました。")
+                if research_run_id:
+                    self._record_auto_run_result_tx(
+                        cur, str(research_run_id), metrics=stored_metrics,
+                        research_status=research_status,
+                    )
             self._conn.commit()
-            return {"candidate_ids": ids, "primary_email_candidate_id": primary_id}
+            return {"candidate_ids": ids, "primary_email_candidate_id": primary_id,
+                    "db_write_ms": stored_metrics["db_write_ms"]}
         except Exception:
             self._safe_rollback()
             raise
 
-    def fail_claim(self, *, clinic_id: int, claim_token: str, error: str, metrics: dict | None = None):
+    def fail_claim(self, *, clinic_id: int, claim_token: str, error: str,
+                   metrics: dict | None = None, research_run_id: str = ""):
         return self.complete_claim(
             clinic_id=clinic_id, claim_token=claim_token, candidates=[], research_status="ERROR",
-            error=error, metrics=metrics,
+            error=error, metrics=metrics, research_run_id=research_run_id,
         )
 
     @_retry_closed_read_connection
@@ -1095,6 +1140,110 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
+    def acquire_controller(self, run_id: str, controller_id: str,
+                           lease_seconds: int = EMAIL_CONTROLLER_LEASE_SECONDS) -> dict | None:
+        """Atomically acquire an empty/expired persisted controller lease for one run."""
+        controller_id = str(controller_id or "").strip()
+        if not controller_id:
+            raise ValueError("Email controller_idを指定してください。")
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status,stop_requested,metrics,clock_timestamp() "
+                    "FROM email_research.email_auto_runs WHERE run_id=%s FOR UPDATE",
+                    (str(run_id),),
+                )
+                row = cur.fetchone()
+                if not row or row[0] != "RUNNING" or bool(row[1]):
+                    self._conn.commit()
+                    return None
+                metrics = _json_dict(row[2])
+                db_now = row[3] if row[3].tzinfo else row[3].replace(tzinfo=timezone.utc)
+                owner = str(metrics.get("controller_id") or "")
+                lease = _parse_timestamp(metrics.get("controller_lease_until"))
+                if owner and owner != controller_id and lease > db_now:
+                    self._conn.commit()
+                    return None
+                if owner != controller_id or lease <= db_now:
+                    metrics["controller_epoch"] = int(metrics.get("controller_epoch", 0) or 0) + 1
+                metrics.update({
+                    "controller_id": controller_id,
+                    "controller_heartbeat_at": db_now.isoformat(timespec="seconds"),
+                    "controller_lease_until": (db_now + timedelta(
+                        seconds=max(30, int(lease_seconds))
+                    )).isoformat(timespec="seconds"),
+                })
+                cur.execute(
+                    "UPDATE email_research.email_auto_runs SET metrics=%s,updated_at=now() WHERE run_id=%s",
+                    (Jsonb(metrics), str(run_id)),
+                )
+            self._conn.commit()
+            return {"run_id": str(run_id), "status": "RUNNING", "metrics": metrics}
+        except Exception:
+            self._safe_rollback()
+            raise
+
+    def heartbeat_controller(self, run_id: str, controller_id: str,
+                             lease_seconds: int = EMAIL_CONTROLLER_LEASE_SECONDS) -> bool:
+        """Renew only a live lease; an expired process must reacquire and be fenced."""
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status,stop_requested,metrics,clock_timestamp() "
+                    "FROM email_research.email_auto_runs WHERE run_id=%s FOR UPDATE",
+                    (str(run_id),),
+                )
+                row = cur.fetchone()
+                if not row or row[0] != "RUNNING" or bool(row[1]):
+                    self._conn.commit()
+                    return False
+                metrics = _json_dict(row[2])
+                db_now = row[3] if row[3].tzinfo else row[3].replace(tzinfo=timezone.utc)
+                if (str(metrics.get("controller_id") or "") != str(controller_id)
+                        or _parse_timestamp(metrics.get("controller_lease_until")) <= db_now):
+                    self._conn.commit()
+                    return False
+                metrics.update({
+                    "controller_heartbeat_at": db_now.isoformat(timespec="seconds"),
+                    "controller_lease_until": (db_now + timedelta(
+                        seconds=max(30, int(lease_seconds))
+                    )).isoformat(timespec="seconds"),
+                })
+                cur.execute(
+                    "UPDATE email_research.email_auto_runs SET metrics=%s,updated_at=now() WHERE run_id=%s",
+                    (Jsonb(metrics), str(run_id)),
+                )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._safe_rollback()
+            raise
+
+    def finish_controller(self, run_id: str, controller_id: str, *, status: str,
+                          error: str = "") -> bool:
+        """Fenced final transition; a superseded process cannot finish another owner."""
+        if status not in {"COMPLETED", "ERROR"}:
+            raise ValueError(status)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE email_research.email_auto_runs
+                    SET status=%s,finished_at=now(),updated_at=now(),last_error=%s,
+                        metrics=(COALESCE(metrics,'{}'::jsonb)
+                          - 'controller_id' - 'controller_lease_until')
+                    WHERE run_id=%s AND status='RUNNING'
+                      AND metrics->>'controller_id'=%s
+                    """,
+                    (status, str(error or "")[:4000], str(run_id), str(controller_id)),
+                )
+                changed = cur.rowcount == 1
+            self._conn.commit()
+            return changed
+        except Exception:
+            self._safe_rollback()
+            raise
+
     @_retry_closed_read_connection
     def auto_run(self, run_id: str) -> dict | None:
         try:
@@ -1115,6 +1264,8 @@ class SupabaseEmailResearchRepository:
             fields.append("status=%s"); params.append(str(status))
             if status in {"COMPLETED", "ERROR"}:
                 fields.append("finished_at=now()")
+            if status in {"PAUSED", "STOPPED", "COMPLETED", "ERROR"} and metrics is None:
+                fields.append("metrics=(COALESCE(metrics,'{}'::jsonb)-'controller_id'-'controller_lease_until')")
         if metrics is not None:
             fields.append("metrics=%s"); params.append(Jsonb(metrics))
         if error:
@@ -1130,11 +1281,12 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
-    def record_auto_run_result(self, run_id: str, *, metrics=None, research_status="ERROR"):
+    @staticmethod
+    def _run_metric_increments(metrics=None, research_status="ERROR"):
         values = metrics or {}
         search_count = int(values.get("search_query_count", 0) or 0)
         terminal = str(research_status or "ERROR").upper()
-        increments = {
+        return {
             "processed": 1,
             "found": int(terminal == "FOUND"),
             "review": int(terminal == "REVIEW"),
@@ -1160,6 +1312,49 @@ class SupabaseEmailResearchRepository:
             "target_sync_ms": float(values.get("target_sync_ms", 0) or 0),
             "elapsed_ms": float(values.get("elapsed_ms", 0) or 0),
         }
+
+    def _record_auto_run_result_tx(self, cur, run_id: str, *, metrics=None,
+                                   research_status="ERROR"):
+        """Update durable run KPI in the caller's clinic-result transaction."""
+        increments = self._run_metric_increments(metrics, research_status)
+        cur.execute(
+            """
+            UPDATE email_research.email_auto_runs r
+            SET metrics=COALESCE(r.metrics,'{}'::jsonb) || jsonb_build_object(
+              'processed',COALESCE((r.metrics->>'processed')::int,0)+%s,
+              'found',COALESCE((r.metrics->>'found')::int,0)+%s,
+              'review',COALESCE((r.metrics->>'review')::int,0)+%s,
+              'no_email',COALESCE((r.metrics->>'no_email')::int,0)+%s,
+              'error',COALESCE((r.metrics->>'error')::int,0)+%s,
+              'query1_called',COALESCE((r.metrics->>'query1_called')::int,0)+%s,
+              'query2_called',COALESCE((r.metrics->>'query2_called')::int,0)+%s,
+              'search_0_count',COALESCE((r.metrics->>'search_0_count')::int,0)+%s,
+              'search_query_count',COALESCE((r.metrics->>'search_query_count')::int,0)+%s,
+              'http_attempts',COALESCE((r.metrics->>'http_attempts')::int,0)+%s,
+              'web_fetch_attempts',COALESCE((r.metrics->>'web_fetch_attempts')::int,0)+%s,
+              'timeout_count',COALESCE((r.metrics->>'timeout_count')::int,0)+%s,
+              'retry_count',COALESCE((r.metrics->>'retry_count')::int,0)+%s,
+              'elapsed_seconds',COALESCE((r.metrics->>'elapsed_seconds')::numeric,0)+%s,
+              'candidate_found_count',COALESCE((r.metrics->>'candidate_found_count')::int,0)+%s,
+              'valid_candidate_count',COALESCE((r.metrics->>'valid_candidate_count')::int,0)+%s,
+              'auto_true_count',COALESCE((r.metrics->>'auto_true_count')::int,0)+%s,
+              'auto_false_count',COALESCE((r.metrics->>'auto_false_count')::int,0)+%s,
+              'review_candidate_count',COALESCE((r.metrics->>'review_candidate_count')::int,0)+%s,
+              'claim_ms',COALESCE((r.metrics->>'claim_ms')::numeric,0)+%s,
+              'db_read_ms',COALESCE((r.metrics->>'db_read_ms')::numeric,0)+%s,
+              'db_write_ms',COALESCE((r.metrics->>'db_write_ms')::numeric,0)+%s,
+              'target_sync_ms',COALESCE((r.metrics->>'target_sync_ms')::numeric,0)+%s,
+              'elapsed_ms',COALESCE((r.metrics->>'elapsed_ms')::numeric,0)+%s
+            ),updated_at=now()
+            WHERE r.run_id=%s
+            """,
+            tuple(increments.values()) + (str(run_id),),
+        )
+        if cur.rowcount != 1:
+            raise ValueError("Email Auto Run KPIの更新対象が見つかりません。")
+
+    def record_auto_run_result(self, run_id: str, *, metrics=None, research_status="ERROR"):
+        increments = self._run_metric_increments(metrics, research_status)
         try:
             with self._conn.cursor() as cur:
                 cur.execute(

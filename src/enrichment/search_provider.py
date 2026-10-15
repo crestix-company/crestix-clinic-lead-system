@@ -65,11 +65,13 @@ class SerpApiSearchProvider:
         "query_count", "attempted", "success", "failed", "http_4xx", "http_5xx", "timeout",
         "connect_timeout", "read_timeout", "network_error", "terminal_timeout",
         "retry_count", "retry_recovery", "retry_timeout", "retry_network", "retry_5xx",
+        "rate_limit", "retry_429",
     )
 
     def __init__(self, api_key=None, session=None, hl="ja", gl="jp", num=10, *,
                  connect_timeout=10, read_timeout=60, max_retries=2,
-                 backoff_base_seconds=0.5, sleep_fn=time.sleep):
+                 backoff_base_seconds=0.5, sleep_fn=time.sleep,
+                 retry_rate_limit=False):
         # None means "use normal environment configuration".  An explicitly
         # supplied empty string means "disabled" and must never fall back to an
         # ambient key, because that could turn an offline/test invocation live.
@@ -80,6 +82,7 @@ class SerpApiSearchProvider:
         self.max_retries = max(0, int(max_retries))
         self.backoff_base_seconds = max(0.0, float(backoff_base_seconds))
         self.sleep_fn = sleep_fn
+        self.retry_rate_limit = bool(retry_rate_limit)
         self.metrics = {key: 0 for key in self.METRIC_KEYS}
 
     def _record(self, key):
@@ -141,6 +144,23 @@ class SerpApiSearchProvider:
             if response.status_code != 200:
                 if 400 <= response.status_code < 500:
                     self._record("http_4xx")
+                    if response.status_code == 429:
+                        self._record("rate_limit")
+                        headers = getattr(response, "headers", {}) or {}
+                        raw_retry_after = str(headers.get("Retry-After", headers.get("retry-after", ""))).strip()
+                        try:
+                            retry_after = int(raw_retry_after)
+                        except (TypeError, ValueError):
+                            retry_after = None
+                        if (self.retry_rate_limit and retry_after is not None
+                                and 0 <= retry_after <= 30
+                                and retries < self.max_retries):
+                            self._record("retry_count")
+                            self._record("retry_429")
+                            retries += 1
+                            if retry_after:
+                                self.sleep_fn(retry_after)
+                            continue
                 elif 500 <= response.status_code < 600:
                     self._record("http_5xx")
                     if retries_5xx < 1 and retries < self.max_retries:
