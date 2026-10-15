@@ -40,3 +40,8 @@ node_modules/
 # Outreach Phase 1-2 contains clinic identities and approved recipient addresses.
 /artifacts/outreach_phase12_*/
 /artifacts/outreach_phase2_*/
+
+# Gmail outreach OAuth credentials/tokens. Never commit downloaded client secrets or tokens.
+/.secrets/outreach_gmail/
+/config/gmail_oauth_client.json
+/config/gmail_oauth_token.json
