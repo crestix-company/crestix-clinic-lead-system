@@ -775,7 +775,7 @@ class SupabaseEmailResearchRepository:
             with self._conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT s.clinic_id, t.clinic_name, t.prefecture, t.city,
+                    SELECT s.clinic_id, p.candidate_id, t.clinic_name, t.prefecture, t.city,
                       p.email, p.role, p.ownership, p.email_ownership, p.discovery_source,
                       p.source_owner_type, p.source_url, p.confidence, p.hard_block_codes,
                       p.final_sales_eligible, s.updated_at

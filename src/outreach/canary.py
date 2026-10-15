@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 
-from .compose import ARTICLE_LISTED, ARTICLE_UNCONFIRMED
+from .compose import ARTICLE_LISTED
 from .generation import FAILED, NEEDS_REVIEW, GenerationSettings, OutreachResult
 
 _URL = re.compile(r"https?://[^\s）)]+")
@@ -29,6 +29,9 @@ def audit(results: list[OutreachResult], *, master_urls: set[str], source_uuids:
         if r.status == FAILED:
             continue
         body = r.body
+        if r.status == NEEDS_REVIEW and not body:
+            # Fixed listed copy is intentionally not rendered until all factual gates pass.
+            continue
         # 2. 記事URLの原本一致（本文中の記事URL・推奨候補すべて）
         body_urls = [u for u in _URL.findall(body) if "mynavi" in u]
         for url in body_urls + [x.article.url for x in r.recommendations]:
@@ -56,8 +59,8 @@ def audit(results: list[OutreachResult], *, master_urls: set[str], source_uuids:
             fail("fact_listing_claim", r)
         if not r.called and any(p in body for p in CALL_CLAIMS):
             fail("fact_phone_claim", r)
-        # 7. 要確認への振り分け
-        if (t.article.status == ARTICLE_UNCONFIRMED or not t.email) and r.status != NEEDS_REVIEW:
+        # 7. 要確認への振り分け。掲載未確認は中立文ならContent READYを許可する。
+        if not t.email and r.status != NEEDS_REVIEW:
             fail("review_routing", r, r.status)
     by_check = Counter(i["check"] for i in issues)
     return {

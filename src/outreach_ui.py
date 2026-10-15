@@ -21,10 +21,9 @@ from src.outreach.compose import (
     ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_STATUS_LABELS, ARTICLE_UNCONFIRMED,
 )
 from src.outreach.generation import (
-    FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
+    FAILED, NEEDS_REVIEW, READY, REQUIRED_STAFF, STATUS_LABELS, GenerationSettings, generate_batch,
     summarize, to_csv_bytes,
 )
-from src.outreach.staff import load_staff
 from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, LIMIT_OPTIONS, select_targets
 from src.utils.date_utils import today_japan
 
@@ -102,7 +101,10 @@ def _email_lookup(ids):
             st.session_state[K + "email_error"] = "未接続"
             return {}
         wanted = set(ids)
-        return {int(r["clinic_id"]): str(r.get("email") or "").strip()
+        return {int(r["clinic_id"]): {
+                    "email": str(r.get("email") or "").strip(),
+                    "candidate_id": str(r.get("candidate_id") or "").strip(),
+                }
                 for r in repo.primary_listing(limit=1_000_000)
                 if int(r["clinic_id"]) in wanted and r.get("final_sales_eligible") is not False}
     except Exception as exc:  # Email DB未接続でも画面は止めない（未取得扱い）
@@ -131,7 +133,7 @@ def _tab_targets(store, demo):
                f"記事JOIN: {len(links):,}行{f'（{join_name}）' if join_name else '（任意・未読込）'}")
     st.caption("記事あり＝掲載確認済み／記事なし＝未掲載確認済み（いずれも記事JOIN CSVの検証済み行のみ）／"
                "それ以外は未確認。JOIN CSVがなくても、未確認として地域・標榜科目から記事例を選び安全な文面で生成します"
-               "（未確認はNEEDS_REVIEW）。JOINに無いだけで記事なしとは判定しません。")
+               "（掲載済みとは記載しません）。JOINに無いだけで記事なしとは判定しません。")
 
     st.markdown("#### 絞り込み（Clinic Master・READ ONLY）")
     prefs = _prefectures(store)
@@ -194,13 +196,8 @@ def _tab_generate():
     if not selection or not selection.targets:
         st.info("先に「① 対象選択」で対象医院を抽出してください。")
         return
-    staff_config = load_staff()
-    for error in staff_config.errors:
-        st.warning(f"IS担当者設定: {error}")
-    if not staff_config.names:
-        st.caption(f"IS担当者は {staff_config.path.name} に登録すると選択肢に表示されます（コード修正不要）。")
-    choice = st.selectbox("IS担当者", list(staff_config.names) + ["（手入力）"], key=K + "staff_choice")
-    staff = st.text_input("IS担当者名（手入力）", key=K + "staff_manual") if choice == "（手入力）" else choice
+    staff = REQUIRED_STAFF
+    st.text_input("差出人名", staff, disabled=True, key=K + "staff_fixed")
 
     st.markdown("##### 日程候補")
     c1, c2, c3 = st.columns(3)
@@ -214,9 +211,18 @@ def _tab_generate():
         cursor += timedelta(days=1)
     dates = st.multiselect("候補日（平日）", weekdays, default=weekdays[:5], key=K + "dates",
                            format_func=lambda d: f"{d.month}/{d.day}（{'月火水木金土日'[d.weekday()]}）")
+    calendar_confirmed = st.checkbox(
+        "候補日時を髙原のGoogleカレンダーまたは本人予定と照合済み",
+        key=K + "calendar_confirmed",
+    )
+    provisional_approved = st.checkbox(
+        "関連記事紹介型テンプレートをGmail保存前の最終確認済み",
+        key=K + "provisional_approved",
+    )
 
     st.markdown("##### 電話連絡の事実")
-    st.caption("ここで選択した医院だけに「本日お電話させていただき…」の文を入れます。未選択の医院には記載しません。")
+    st.caption("ここで選択した医院だけに「本日お電話させていただき…」の文を入れます。"
+               "未選択の医院は電話を示唆しない中立文へ自動分岐します。")
     labels = {t.clinic_uuid: f"{t.clinic_name}（{t.clinic_uuid[:8]}…）" for t in selection.targets}
     called = st.multiselect("本日電話し、メール送付を案内された医院", list(labels), format_func=labels.get, key=K + "called")
 
@@ -224,11 +230,13 @@ def _tab_generate():
     st.caption("記事判定: " + "　".join(f"{ARTICLE_STATUS_LABELS[s]} {n}件" for s, n in counts.items())
                + f"　｜記事原本 {len(articles):,}件から第一推奨1件＋候補最大3件を選定")
     if not articles:
-        st.warning("記事原本CSVが未読込です。推奨記事を選定できないため、記事あり以外はFAILEDになります。")
+        st.warning("記事原本CSVが未読込です。推奨記事を選定できない医院はNEEDS_REVIEWになります。")
     if st.button(f"{len(selection.targets)}医院の文章を一括生成", type="primary", key=K + "generate",
                  disabled=not (staff or "").strip() or not dates):
         settings = GenerationSettings(staff=staff.strip(), dates=tuple(sorted(dates)), start_time=start_time,
-                                      end_time=end_time, called_uuids=frozenset(called))
+                                      end_time=end_time, called_uuids=frozenset(called),
+                                      calendar_confirmed=calendar_confirmed,
+                                      provisional_template_approved=provisional_approved)
         total = len(selection.targets)
         progress = st.progress(0, text=f"生成中… 0/{total}件")
 
@@ -239,8 +247,6 @@ def _tab_generate():
         progress.empty()
         st.session_state[K + "results"] = (settings, results)
         st.success("生成しました。「③ プレビュー」「④ 生成結果」で確認してください。")
-    if not (staff or "").strip():
-        st.caption("IS担当者を指定すると生成できます。")
 
 
 def _highlight(row):
@@ -281,6 +287,7 @@ def _tab_preview():
     c2.text_input("Clinic UUID", uid, disabled=True, key=K + f"pv_uuid_{uid}")
     c1.text_input("宛先メールアドレス", r.target.email or "（未取得・要確認）", disabled=True, key=K + f"pv_to_{uid}")
     c2.text_input("IS担当者", settings.staff, disabled=True, key=K + f"pv_staff_{uid}")
+    c1.text_input("院長名の出典", r.target.director_name_source, disabled=True, key=K + f"pv_director_source_{uid}")
     c1.text_input("記事ステータス", ARTICLE_STATUS_LABELS[r.target.article.status], disabled=True, key=K + f"pv_art_{uid}")
     c2.text_input("電話連絡文", "あり（本日電話済み）" if r.called else "なし", disabled=True, key=K + f"pv_call_{uid}")
     if r.recommendations:
@@ -315,7 +322,8 @@ def _tab_results():
         } for r in issues]), hide_index=True, use_container_width=True)
     st.download_button(
         "CSVダウンロード（医院・記事・宛先・件名・本文・判定）",
-        to_csv_bytes(results, settings.staff, settings.generation_batch_id),
+        to_csv_bytes(results, settings.staff, settings.generation_batch_id,
+                     calendar_confirmed=settings.calendar_confirmed),
         f"mail_send_text_{today_japan():%Y%m%d}.csv", mime="text/csv",
         key=K + "download", use_container_width=True)
     st.caption("CSV出力のみです。Gmail下書き作成・メール送信は行いません。")

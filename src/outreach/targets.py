@@ -17,6 +17,10 @@ LIMIT_OPTIONS = (10, 50, 100, 200, 500, 1000)  # UI選択肢。CLIやテスト�
 MAX_LIMIT = max(LIMIT_OPTIONS)
 EMAIL_FOUND = "FOUND"
 EMAIL_MISSING = "MISSING"
+DIRECTOR_MANAGER_CONFIRMED = "MANAGER_NAME_CONFIRMED"
+DIRECTOR_OWNER_CONFIRMED = "OWNER_NAME_CONFIRMED_AS_DIRECTOR"
+DIRECTOR_OWNER_UNVERIFIED = "OWNER_NAME_UNVERIFIED"
+DIRECTOR_MISSING = "MISSING"
 _EMAIL = re.compile(r"^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]+$")
 
 
@@ -41,6 +45,10 @@ class ClinicTarget:
     director_name: str
     email: str
     email_status: str
+    email_candidate_id: str = ""
+    director_name_source: str = DIRECTOR_MANAGER_CONFIRMED
+    director_name_confirmed: bool = True
+    owner_name: str = ""
     article: ArticleState = field(default_factory=lambda: ArticleState(ARTICLE_UNCONFIRMED))
     duplicate_uuid: bool = False
 
@@ -71,18 +79,48 @@ def _text(value) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _known_name(value) -> str:
+    text = _text(value)
+    return "" if text.casefold() in {"", "null", "none", "nan", "不明"} else text
+
+
 def _tuple(value) -> tuple[str, ...]:
     if isinstance(value, str):
         value = [x for x in re.split(r"[、,，/／\s]+", value)]
     return tuple(dict.fromkeys(_text(x) for x in (value or ()) if _text(x)))
 
 
-def target_from_record(record: dict, *, email: str = "", links: list[ArticleLink] | None = None) -> ClinicTarget:
+def _email_fields(value) -> tuple[str, str]:
+    """Accept the legacy ``clinic_id -> email`` lookup and the richer Phase 2 shape.
+
+    The candidate id is provenance only.  Keeping the legacy string form supported avoids
+    changing the Email Auto/Clinic Master boundary or existing callers.
+    """
+    if isinstance(value, dict):
+        return _text(value.get("email")), _text(value.get("candidate_id"))
+    if isinstance(value, (tuple, list)):
+        return _text(value[0] if value else ""), _text(value[1] if len(value) > 1 else "")
+    return _text(value), ""
+
+
+def target_from_record(record: dict, *, email: str | dict | tuple = "",
+                       links: list[ArticleLink] | None = None) -> ClinicTarget:
     from src.normalizer.address import extract_municipality
     from src.normalizer.clinic_name import person_from_owner
     uuid = _text(record.get("uuid"))
-    email = _text(email)
-    director = _text(record.get("manager_name")) or person_from_owner(record.get("owner_name", ""))
+    email, email_candidate_id = _email_fields(email)
+    manager = _known_name(record.get("manager_name"))
+    owner = _known_name(record.get("owner_name"))
+    owner_person = _known_name(person_from_owner(owner))
+    owner_is_director_verified = record.get("owner_is_director_verified") is True
+    if manager:
+        director, director_source, director_confirmed = manager, DIRECTOR_MANAGER_CONFIRMED, True
+    elif owner_person and owner_is_director_verified:
+        director, director_source, director_confirmed = owner_person, DIRECTOR_OWNER_CONFIRMED, True
+    elif owner:
+        director, director_source, director_confirmed = "", DIRECTOR_OWNER_UNVERIFIED, False
+    else:
+        director, director_source, director_confirmed = "", DIRECTOR_MISSING, False
     treatments = _tuple(record.get("treatment_categories")) + _tuple(record.get("website_treatment_categories"))
     return ClinicTarget(
         clinic_id=int(record.get("id") or 0),
@@ -95,7 +133,11 @@ def target_from_record(record: dict, *, email: str = "", links: list[ArticleLink
         hp_rank=_text(record.get("effective_hp_rank")) or "-",
         director_name=_text(director),
         email=email,
+        email_candidate_id=email_candidate_id,
         email_status=EMAIL_FOUND if valid_email(email) else EMAIL_MISSING,
+        director_name_source=director_source,
+        director_name_confirmed=director_confirmed,
+        owner_name=owner,
         article=classify_article(uuid, links or []),
     )
 
@@ -109,7 +151,7 @@ class Selection:
     truncated: bool
 
 
-def select_targets(records: Iterable[dict], *, email_lookup: Callable[[list[int]], dict[int, str]],
+def select_targets(records: Iterable[dict], *, email_lookup: Callable[[list[int]], dict[int, object]],
                    links: list[ArticleLink], email_filter: str = "指定なし",
                    article_filter: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT) -> Selection:
     """Select rows and flag duplicate UUIDs for FAILED generation, capped at 1000."""
