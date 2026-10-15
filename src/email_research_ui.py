@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from functools import wraps
+import logging
 import streamlit as st
 import os
 from pathlib import Path
@@ -21,6 +22,74 @@ EMAIL_RUN_LABELS = {
 }
 
 DB_CONNECTION_LOST_MESSAGE = "Email Research DBとの接続が一時的に切れました。自動再接続を試行します。"
+EMAIL_AUTO_START_ERROR_STATE_KEY = "_email_auto_start_error"
+_logger = logging.getLogger(__name__)
+
+
+def _safe_connection_error_category(exc: BaseException) -> str:
+    """Classify a connection failure without returning/logging its raw message."""
+    messages = []
+    sqlstates = set()
+    current = exc
+    seen = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        messages.append(str(current).casefold())
+        if getattr(current, "sqlstate", None):
+            sqlstates.add(str(current.sqlstate))
+        current = current.__cause__ or current.__context__
+    message = " ".join(messages)
+    if any(token in message for token in (
+        "tenant or user not found", "no such tenant", "project not found",
+        "max client connections", "max clients reached", "connection pool",
+    )):
+        return "pool"
+    if sqlstates & {"28P01", "28000"} or any(token in message for token in (
+        "password authentication failed", "authentication failed", "invalid password",
+    )):
+        return "auth"
+    if any(token in message for token in (
+        "name or service not known", "nodename nor servname provided",
+        "temporary failure in name resolution", "could not translate host name",
+    )):
+        return "dns"
+    if "connection refused" in message:
+        return "refused"
+    if any(token in message for token in (
+        "certificate verify failed", "ssl error", "tls error", "certificate has expired",
+    )):
+        return "ssl"
+    if any(token in message for token in (
+        "timeout expired", "timed out", "connection timeout",
+    )):
+        return "timeout"
+    return "other"
+
+
+def _email_auto_start_error_message(*, stage: str, category: str) -> str:
+    stage_labels = {
+        "email_repository": "Email DB接続",
+        "target_reader": "FULL対象取得",
+        "sync_targets": "対象同期",
+        "create_auto_run": "Run作成",
+    }
+    category_labels = {
+        "auth": "DB認証に失敗しました。正式ランチャーの接続資格情報を確認してください。",
+        "pool": "DB接続プールで接続を確立できませんでした。接続設定またはプール上限を確認してください。",
+        "dns": "DBホストの名前解決に失敗しました。DNS・ネットワーク設定を確認してください。",
+        "refused": "DB接続が拒否されました。接続先とポートを確認してください。",
+        "ssl": "DBのSSL/TLS検証に失敗しました。SSL設定を確認してください。",
+        "timeout": "DB接続がタイムアウトしました。ネットワークと接続先の状態を確認してください。",
+        "other": "開始前処理でエラーが発生しました。安全な診断ログを確認してください。",
+    }
+    stage_label = stage_labels.get(stage, "開始前処理")
+    detail = category_labels.get(category, category_labels["other"])
+    if stage == "create_auto_run":
+        return (
+            f"メール自動調査の開始結果を確認できません（{stage_label}）：{detail} "
+            "Run作成の応答が失われた可能性があります。再実行せず、Run一覧を再読込してください。"
+        )
+    return f"メール自動調査の開始失敗（{stage_label}）：{detail} 新規Runは作成されていません。"
 
 
 def _fail_soft_on_db_loss(func):
@@ -131,9 +200,37 @@ def _email_auto_research_controls(store, *, demo=False):
         disabled=not enabled or demo or not runtime or not target_ready or status in {"RUNNING", "PAUSED"},
         use_container_width=True,
     ):
-        started = runner.start()
+        try:
+            started = runner.start()
+        except Exception as exc:
+            stage = str(getattr(runner, "last_start_stage", "unknown") or "unknown")
+            category = _safe_connection_error_category(exc)
+            # Never log exc/str(exc)/exc_info: libpq errors may contain endpoint details.
+            _logger.error(
+                "email_auto_start_failed stage=%s category=%s exception_type=%s",
+                stage, category, type(exc).__name__,
+            )
+            st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY] = (
+                _email_auto_start_error_message(stage=stage, category=category)
+            )
+            started = False
         if started:
+            st.session_state.pop(EMAIL_AUTO_START_ERROR_STATE_KEY, None)
             st.rerun(scope="fragment")
+        elif EMAIL_AUTO_START_ERROR_STATE_KEY not in st.session_state:
+            # cache_resource intentionally preserves the controller thread across
+            # fragment reruns. If it is still alive, start() returns False; make that
+            # otherwise-silent state explicit without creating another Run.
+            st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY] = (
+                "メール自動調査を開始できませんでした。このMac Runtime内で前回Runの"
+                "終了処理が継続中です。新規Runは作成されていません。"
+            )
+            _logger.error(
+                "email_auto_start_failed stage=%s category=runner_busy exception_type=none",
+                str(getattr(runner, "last_start_stage", "unknown") or "unknown"),
+            )
+    if st.session_state.get(EMAIL_AUTO_START_ERROR_STATE_KEY):
+        st.error(st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY])
     if controls[1].button(
         "一時停止", key="simple_email_auto_pause",
         disabled=not runner or status != "RUNNING", use_container_width=True,

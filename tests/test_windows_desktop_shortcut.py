@@ -109,6 +109,15 @@ def test_launch_ordering_keeps_venv_and_credential_checks_and_port_logic_in_laun
         assert "taskkill" not in text.lower()
 
 
+def test_windows_launcher_loads_new_email_reader_setting_through_shared_python_loader():
+    launch = _text("scripts/launch_v2_windows.ps1")
+    python_launcher = _text("scripts/launch_v2.py")
+    assert 'Join-Path $RepoRoot "scripts\\launch_v2.py"' in launch
+    assert '"EMAIL_TARGET_READER_DB_URL"' in python_launcher
+    assert "EMAIL_TARGET_READER_DB_URL" not in launch
+    assert "CLINIC_READONLY_DB_URL" not in launch
+
+
 def test_setup_creates_shortcut_only_after_successful_setup():
     setup = _text(SETUP_SCRIPT)
     call = 'Join-Path $RepoRoot "scripts\\create_windows_desktop_shortcut.ps1"'

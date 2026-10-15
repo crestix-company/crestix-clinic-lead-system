@@ -70,6 +70,8 @@ class PrivilegeCursor:
     def __exit__(self, *args): return False
     def execute(self, sql, params=None):
         self.conn.statements.append((sql, params))
+        if "SELECT current_user" in sql:
+            self._result = self.conn.current_user
         if "has_table_privilege" in sql:
             if len(params) == 2:
                 table, privilege = params
@@ -86,6 +88,7 @@ class PrivilegeConnection:
         self.statements = []
         self.commits = 0
         self.closed = False
+        self.current_user = "clinic_email_target_reader"
     def cursor(self): return PrivilegeCursor(self)
     def commit(self): self.commits += 1
     def close(self): self.closed = True
@@ -123,14 +126,14 @@ def test_verify_read_only_role_fails_closed_for_unsafe_roles(label, privileges):
 def _factory_env(readonly_label):
     return {
         "EMAIL_RESEARCH_DB_URL": "postgresql://email@email.example.net:5432/email",
-        "SUPABASE_RUNTIME_DB_URL": "postgresql://runtime@prod.example.net:5432/clinic",
-        "CLINIC_READONLY_DB_URL": f"postgresql://{readonly_label}@prod.example.net:5432/clinic",
+        "SUPABASE_RUNTIME_DB_URL": "postgresql://runtime@prod.example.net:5432/postgres",
+        "EMAIL_TARGET_READER_DB_URL": f"postgresql://{readonly_label}@prod.example.net:5432/postgres",
     }
 
 
 def test_reader_factory_accepts_properly_scoped_readonly_role():
     conn = PrivilegeConnection(_privileges())
-    env = _factory_env("clinic_readonly")
+    env = _factory_env("clinic_email_target_reader")
     reader = connect_email_target_reader(
         environ=env, connect_fn=lambda url, *, read_only: conn)
     assert isinstance(reader, SupabaseEmailTargetReader)
@@ -145,17 +148,30 @@ def test_reader_factory_accepts_properly_scoped_readonly_role():
 def test_reader_factory_rejects_unsafe_roles_and_closes_connection(readonly_label, privileges):
     conn = PrivilegeConnection(privileges)
     env = _factory_env(readonly_label)
+    calls = []
     with pytest.raises(RuntimeError):
         connect_email_target_reader(
-            environ=env, connect_fn=lambda url, *, read_only: conn)
-    assert conn.closed
+            environ=env, connect_fn=lambda url, *, read_only: calls.append(url) or conn)
+    # Misconfigured role names are rejected before a network connection is opened.
+    assert calls == []
+    assert not conn.closed
 
 
 def test_reader_factory_uses_only_dedicated_read_only_url():
     conn = PrivilegeConnection(_privileges())
     calls = []
-    env = _factory_env("clinic_readonly")
+    env = _factory_env("clinic_email_target_reader")
     reader = connect_email_target_reader(environ=env,
         connect_fn=lambda url, *, read_only: calls.append((url, read_only)) or conn)
     assert isinstance(reader, SupabaseEmailTargetReader)
-    assert calls == [(env["CLINIC_READONLY_DB_URL"], True)]
+    assert calls == [(env["EMAIL_TARGET_READER_DB_URL"], True)]
+
+
+def test_reader_rejects_wrong_authenticated_role_even_if_table_grants_match():
+    conn = PrivilegeConnection(_privileges())
+    conn.current_user = "clinic_readonly"
+    env = _factory_env("clinic_email_target_reader")
+    with pytest.raises(RuntimeError, match="clinic_email_target_reader"):
+        connect_email_target_reader(
+            environ=env, connect_fn=lambda url, *, read_only: conn)
+    assert conn.closed

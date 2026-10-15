@@ -6,6 +6,7 @@ from src.master.email_research_config import EmailResearchConfig
 from src.repository.email_research_repository import email_controller_health
 from datetime import datetime, timedelta, timezone
 import psycopg
+import pytest
 
 
 class Result:
@@ -39,6 +40,25 @@ class Repo:
     def complete_claim(self, **values):
         with self.s.lock: self.s.completed.append(values["clinic_id"])
     def fail_claim(self, **values): raise AssertionError(values)
+
+
+def test_start_records_target_reader_stage_without_attempting_sync_or_run_creation():
+    class StartRepo:
+        def sync_targets(self, _targets):
+            raise AssertionError("sync must not run after target reader failure")
+        def create_auto_run(self, **_kwargs):
+            raise AssertionError("run must not be created after target reader failure")
+
+    def failed_target_reader():
+        raise psycopg.OperationalError("password authentication failed for redacted-role")
+
+    runner = EmailAutoRunner(lambda: StartRepo(), lambda *_args: Result(),
+                             target_reader=failed_target_reader,
+                             config=EmailResearchConfig(workers=1))
+    with pytest.raises(psycopg.OperationalError):
+        runner.start()
+    assert runner.last_start_stage == "target_reader"
+    assert not runner.running()
 
 
 def test_multiple_workers_never_duplicate_claim_and_checkpoint_each_clinic():
@@ -396,6 +416,127 @@ st.session_state["hp_run"]=hp_run
     next(button for button in app.button if button.label == "メール自動調査を開始").click().run()
     assert app.session_state["repo"].run["status"] == "RUNNING"
     assert app.session_state["hp_run"] == {"run_id":"hp-current-unchanged","status":"RUNNING","claims":7}
+
+
+def test_email_start_auth_failure_is_explicit_persistent_and_secret_free():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string('''
+import os
+import psycopg
+from types import SimpleNamespace
+import src.email_research_ui as ui
+class Repo:
+    def available(self): return True
+    def summary(self): return dict(total=1,processed=0,remaining=1,primary=0,email_obtained=0,
+      true=0,candidate_review=0,no_email_found=0,error=0,found=0,elapsed_seconds=0,
+      search_query_count=0,http_attempts=0,retry_count=0,timeout_count=0,query1_called=0,
+      query2_called=0,search_0_count=0)
+    def latest_auto_run(self): return dict(run_id="old",status="COMPLETED",metrics={})
+class Human:
+    def available(self): return True
+    def summary(self): return dict(unreviewed=0,unreviewed_clinics=0,reviewed=0)
+class Runner:
+    last_start_stage="target_reader"
+    def start(self):
+        raise psycopg.OperationalError("password authentication failed host=must-not-leak")
+class Store: is_supabase_runtime=True
+repo=Repo()
+orig_repo=ui.email_repositories_for_ui; orig_runner=ui._auto_runner
+orig_target_status=ui.email_target_reader_status
+os.environ["EMAIL_AUTO_RUN_ENABLED"]="true"
+ui.email_repositories_for_ui=lambda:SimpleNamespace(email_research=repo,email_human_review=Human())
+ui.email_target_reader_status=lambda:SimpleNamespace(ready=True,message="")
+ui._auto_runner=lambda:Runner()
+try: ui.email_auto_research_card(Store())
+finally: ui.email_repositories_for_ui=orig_repo; ui.email_target_reader_status=orig_target_status; ui._auto_runner=orig_runner
+''')
+    app.run()
+    next(button for button in app.button if button.label == "メール自動調査を開始").click().run()
+    assert not app.exception
+    assert any("開始失敗（FULL対象取得）" in error.value for error in app.error)
+    assert all("must-not-leak" not in error.value for error in app.error)
+    # A timer/fragment rerun must not erase the actionable error immediately.
+    app.run()
+    assert any("DB認証に失敗" in error.value for error in app.error)
+
+
+def test_email_start_commit_outcome_unknown_does_not_claim_run_was_not_created():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string('''
+import os
+import psycopg
+from types import SimpleNamespace
+import src.email_research_ui as ui
+class Repo:
+    def available(self): return True
+    def summary(self): return dict(total=1,processed=0,remaining=1,primary=0,email_obtained=0,
+      true=0,candidate_review=0,no_email_found=0,error=0,found=0,elapsed_seconds=0,
+      search_query_count=0,http_attempts=0,retry_count=0,timeout_count=0,query1_called=0,
+      query2_called=0,search_0_count=0)
+    def latest_auto_run(self): return dict(run_id="possibly-created",status="COMPLETED",metrics={})
+class Human:
+    def available(self): return True
+    def summary(self): return dict(unreviewed=0,unreviewed_clinics=0,reviewed=0)
+class Runner:
+    last_start_stage="create_auto_run"
+    def start(self):
+        # Simulate the client losing the response after the database committed.
+        raise psycopg.OperationalError("connection lost after commit; secret=must-not-leak")
+class Store: is_supabase_runtime=True
+repo=Repo()
+orig_repo=ui.email_repositories_for_ui; orig_runner=ui._auto_runner
+orig_target_status=ui.email_target_reader_status
+os.environ["EMAIL_AUTO_RUN_ENABLED"]="true"
+ui.email_repositories_for_ui=lambda:SimpleNamespace(email_research=repo,email_human_review=Human())
+ui.email_target_reader_status=lambda:SimpleNamespace(ready=True,message="")
+ui._auto_runner=lambda:Runner()
+try: ui.email_auto_research_card(Store())
+finally: ui.email_repositories_for_ui=orig_repo; ui.email_target_reader_status=orig_target_status; ui._auto_runner=orig_runner
+''')
+    app.run()
+    next(button for button in app.button if button.label == "メール自動調査を開始").click().run()
+    assert not app.exception
+    messages = [error.value for error in app.error]
+    assert any("開始結果を確認できません" in message for message in messages)
+    assert any("再実行せず" in message and "Run一覧を再読込" in message for message in messages)
+    assert all("新規Runは作成されていません" not in message for message in messages)
+    assert all("must-not-leak" not in message for message in messages)
+
+
+def test_email_start_runner_busy_is_not_silent():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string('''
+import os
+from types import SimpleNamespace
+import src.email_research_ui as ui
+class Repo:
+    def available(self): return True
+    def summary(self): return dict(total=1,processed=1,remaining=0,primary=0,email_obtained=0,
+      true=0,candidate_review=0,no_email_found=1,error=0,found=0,elapsed_seconds=0,
+      search_query_count=0,http_attempts=0,retry_count=0,timeout_count=0,query1_called=0,
+      query2_called=0,search_0_count=0)
+    def latest_auto_run(self): return dict(run_id="old",status="COMPLETED",metrics={})
+class Human:
+    def available(self): return True
+    def summary(self): return dict(unreviewed=0,unreviewed_clinics=0,reviewed=0)
+class Runner:
+    last_start_stage="already_running"
+    def start(self): return False
+class Store: is_supabase_runtime=True
+repo=Repo()
+orig_repo=ui.email_repositories_for_ui; orig_runner=ui._auto_runner
+orig_target_status=ui.email_target_reader_status
+os.environ["EMAIL_AUTO_RUN_ENABLED"]="true"
+ui.email_repositories_for_ui=lambda:SimpleNamespace(email_research=repo,email_human_review=Human())
+ui.email_target_reader_status=lambda:SimpleNamespace(ready=True,message="")
+ui._auto_runner=lambda:Runner()
+try: ui.email_auto_research_card(Store())
+finally: ui.email_repositories_for_ui=orig_repo; ui.email_target_reader_status=orig_target_status; ui._auto_runner=orig_runner
+''')
+    app.run()
+    next(button for button in app.button if button.label == "メール自動調査を開始").click().run()
+    assert not app.exception
+    assert any("前回Runの終了処理" in error.value for error in app.error)
 
 
 def test_email_top_kpis_and_japanese_tooltips_render_offline():

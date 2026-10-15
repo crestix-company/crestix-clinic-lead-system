@@ -9,10 +9,12 @@ from src.repository.email_database import (
 PRODUCTION = "postgresql://runtime:secret@prod.example.net:5432/clinic"
 EMAIL = "postgresql://email:secret@email.example.net:5432/email_state"
 READONLY = "postgresql://reader:secret@prod.example.net:5432/clinic"
+EMAIL_TARGET_READER = "postgresql://clinic_email_target_reader@prod.example.net:5432/postgres"
 
 def safe_env():
     return {"EMAIL_RESEARCH_DB_URL": EMAIL, "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
-            "CLINIC_READONLY_DB_URL": READONLY}
+            "CLINIC_READONLY_DB_URL": READONLY,
+            "EMAIL_TARGET_READER_DB_URL": EMAIL_TARGET_READER}
 
 
 def test_email_db_missing_fails_closed_without_runtime_fallback():
@@ -31,7 +33,7 @@ def test_same_database_target_fails_closed_without_opening_connection():
     called = []
     bundle, status = build_email_repositories(
         environ={"EMAIL_RESEARCH_DB_URL": PRODUCTION, "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
-                 "CLINIC_READONLY_DB_URL": READONLY},
+                 "EMAIL_TARGET_READER_DB_URL": EMAIL_TARGET_READER},
         connect_fn=lambda *a, **k: called.append((a, k)),
     )
     assert bundle is None
@@ -45,7 +47,7 @@ def test_same_supabase_project_direct_and_pooler_urls_are_rejected():
     status = email_database_status({
         "EMAIL_RESEARCH_DB_URL": f"postgresql://postgres.{project}:secret@aws-0-us-west-1.pooler.supabase.com:6543/postgres",
         "SUPABASE_RUNTIME_DB_URL": f"postgresql://postgres:secret@db.{project}.supabase.co:5432/postgres",
-        "CLINIC_READONLY_DB_URL": f"postgresql://reader:secret@db.{project}.supabase.co:5432/postgres",
+        "EMAIL_TARGET_READER_DB_URL": f"postgresql://clinic_email_target_reader:secret@db.{project}.supabase.co:5432/postgres",
     })
     assert not status.ready
     assert "Production Schema適用前" in status.message
@@ -55,7 +57,7 @@ def test_uncomparable_database_identity_fails_closed():
     status = email_database_status({
         "EMAIL_RESEARCH_DB_URL": "not-a-postgres-url",
         "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
-        "CLINIC_READONLY_DB_URL": READONLY,
+        "EMAIL_TARGET_READER_DB_URL": EMAIL_TARGET_READER,
     })
     assert not status.ready
     assert "分離を確認できない" in status.message
@@ -122,23 +124,23 @@ def test_password_is_never_in_safety_message():
     status = email_database_status({
         "EMAIL_RESEARCH_DB_URL": EMAIL,
         "SUPABASE_RUNTIME_DB_URL": EMAIL,
-        "CLINIC_READONLY_DB_URL": READONLY,
+        "EMAIL_TARGET_READER_DB_URL": EMAIL_TARGET_READER,
     })
     assert "secret" not in status.message
 
 
 def test_missing_read_only_source_fails_closed():
     status = email_target_reader_status({"EMAIL_RESEARCH_DB_URL": EMAIL,
-                                         "CLINIC_READONLY_DB_URL": ""})
+                                         "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
+                                         "CLINIC_READONLY_DB_URL": READONLY})
     assert not status.ready
-    assert "READ ONLY接続が未設定" in status.message
+    assert "Email Target Reader接続が未設定" in status.message
 
 
 def test_email_db_matching_read_only_source_is_rejected():
     status = email_database_status({"EMAIL_RESEARCH_DB_URL": PRODUCTION,
                                     "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
-        "CLINIC_READONLY_DB_URL": READONLY,
-                                    "CLINIC_READONLY_DB_URL": READONLY})
+                                    "EMAIL_TARGET_READER_DB_URL": EMAIL_TARGET_READER})
     assert not status.ready
     assert "Production Schema適用前" in status.message
 
@@ -147,7 +149,30 @@ def test_read_only_target_url_must_match_clinic_runtime_source():
     status = email_target_reader_status({
         "EMAIL_RESEARCH_DB_URL": EMAIL,
         "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
-        "CLINIC_READONLY_DB_URL": "postgresql://reader@other.example.net:5432/clinic",
+        "EMAIL_TARGET_READER_DB_URL": "postgresql://clinic_email_target_reader@other.example.net:5432/postgres",
     })
     assert not status.ready
     assert "一致しません" in status.message
+
+
+def test_target_reader_rejects_old_shared_readonly_url_even_when_present():
+    status = email_target_reader_status({
+        "EMAIL_RESEARCH_DB_URL": EMAIL,
+        "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
+        "CLINIC_READONLY_DB_URL": READONLY,
+    })
+    assert not status.ready
+    assert "未設定" in status.message
+
+
+def test_target_reader_requires_the_named_email_role_and_postgres_database():
+    for url in (
+        "postgresql://clinic_readonly@prod.example.net:5432/postgres",
+        "postgresql://clinic_email_target_reader@prod.example.net:5432/clinic",
+    ):
+        status = email_target_reader_status({
+            "EMAIL_RESEARCH_DB_URL": EMAIL,
+            "SUPABASE_RUNTIME_DB_URL": PRODUCTION,
+            "EMAIL_TARGET_READER_DB_URL": url,
+        })
+        assert not status.ready

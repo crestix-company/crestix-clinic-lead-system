@@ -44,6 +44,10 @@ class EmailAutoRunner:
         self._last_target_sync = 0.0
         self.controller_id = f"{socket.gethostname()}:{uuid.uuid4().hex}"
         self._controller_lost = Event()
+        # Safe, non-secret diagnostic state consumed by the Streamlit UI.  This is
+        # deliberately a stage code rather than an exception/message: DB exception
+        # text can contain endpoint or connection details.
+        self.last_start_stage = "idle"
 
     @staticmethod
     def _is_connection_error(exc):
@@ -70,22 +74,31 @@ class EmailAutoRunner:
 
     def start(self, run_id=None):
         with self._lock:
+            self.last_start_stage = "running_check"
             if self.running():
+                self.last_start_stage = "already_running"
                 return False
             repo = None
             try:
                 if run_id is None:
+                    self.last_start_stage = "email_repository"
                     repo = self.repository_factory()
                     if self.target_reader is None or not hasattr(repo, "sync_targets"):
                         raise RuntimeError("Email Research Target Readerが設定されていません。")
+                    self.last_start_stage = "target_reader"
+                    targets = self.target_reader()
                     sync_started = time.monotonic()
-                    repo.sync_targets(self.target_reader())
+                    self.last_start_stage = "sync_targets"
+                    repo.sync_targets(targets)
                     self._initial_target_sync_ms = (time.monotonic() - sync_started) * 1000
                     self._last_target_sync = time.monotonic()
+                    self.last_start_stage = "create_auto_run"
                     run_id = repo.create_auto_run(
                         workers=self.config.workers, timeout=self.config.read_timeout_seconds,
                         retries=self.config.retry_count, search_limit=self.config.search_query_limit,
                     )
+                else:
+                    self.last_start_stage = "recover_existing_run"
             finally:
                 self._close_repo(repo)
             self._stop.clear()
@@ -93,6 +106,7 @@ class EmailAutoRunner:
             self._thread = Thread(target=self.run, args=(run_id,), daemon=True,
                                   name=f"email-auto-{run_id[:8]}")
             self._thread.start()
+            self.last_start_stage = "started"
             return run_id
 
     def stop(self):

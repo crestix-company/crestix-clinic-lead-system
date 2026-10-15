@@ -30,6 +30,7 @@ def test_private_email_config_accepts_autorun_disabled(tmp_path, monkeypatch):
     email_config.write_text(
         "EMAIL_AUTO_RUN_ENABLED=false\n"
         "EMAIL_RESEARCH_DB_URL=postgresql://email@example.invalid/email\n"
+        "EMAIL_TARGET_READER_DB_URL=postgresql://clinic_email_target_reader@example.invalid/postgres\n"
         "CLINIC_READONLY_DB_URL=postgresql://reader@example.invalid/clinic\n",
         encoding="utf-8",
     )
@@ -38,6 +39,7 @@ def test_private_email_config_accepts_autorun_disabled(tmp_path, monkeypatch):
     load_runtime_env(tmp_path)
 
     assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
+    assert os.environ["EMAIL_TARGET_READER_DB_URL"].startswith("postgresql://clinic_email_target_reader")
 
 
 def test_autorun_defaults_disabled_when_unset(monkeypatch):
