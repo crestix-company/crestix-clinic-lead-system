@@ -84,6 +84,11 @@ def _email_auto_start_error_message(*, stage: str, category: str) -> str:
     }
     stage_label = stage_labels.get(stage, "開始前処理")
     detail = category_labels.get(category, category_labels["other"])
+    if stage == "create_auto_run":
+        return (
+            f"メール自動調査の開始結果を確認できません（{stage_label}）：{detail} "
+            "Run作成の応答が失われた可能性があります。再実行せず、Run一覧を再読込してください。"
+        )
     return f"メール自動調査の開始失敗（{stage_label}）：{detail} 新規Runは作成されていません。"
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 
 
-CLINIC_READONLY_DB_URL_ENV_VAR = "CLINIC_READONLY_DB_URL"
+EMAIL_TARGET_READER_DB_URL_ENV_VAR = "EMAIL_TARGET_READER_DB_URL"
 
 # Pooled connections (Supabase pgbouncer/Supavisor) do not reliably honor
 # session-level `-c default_transaction_read_only=on` or `SET` -- state can
@@ -19,6 +19,12 @@ FORBIDDEN_WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE")
 
 def _verify_read_only_role(conn):
     with conn.cursor() as cur:
+        cur.execute("SELECT current_user")
+        current_user = str(cur.fetchone()[0] or "").strip().casefold()
+        if current_user != "clinic_email_target_reader":
+            raise RuntimeError(
+                "Email Target Reader接続ロールがclinic_email_target_readerではありません。"
+            )
         for table in REQUIRED_SELECT_TABLES:
             cur.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
             if not cur.fetchone()[0]:
@@ -89,9 +95,9 @@ def connect_email_target_reader(*, environ=None, connect_fn=None):
     source_safety = email_target_reader_status(env)
     if not source_safety.ready:
         raise RuntimeError(source_safety.message)
-    url = (env.get(CLINIC_READONLY_DB_URL_ENV_VAR) or "").strip()
+    url = (env.get(EMAIL_TARGET_READER_DB_URL_ENV_VAR) or "").strip()
     if not url:
-        raise RuntimeError("Clinic/HP READ ONLY接続が未設定です。")
+        raise RuntimeError("Email Target Reader接続が未設定です。")
     if connect_fn is None:
         import psycopg
         conn = psycopg.connect(url, connect_timeout=20)

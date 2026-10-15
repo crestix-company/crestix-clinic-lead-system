@@ -15,6 +15,7 @@ import threading
 EMAIL_RESEARCH_DB_URL_ENV_VAR = "EMAIL_RESEARCH_DB_URL"
 RUNTIME_DB_URL_ENV_VAR = "SUPABASE_RUNTIME_DB_URL"
 CLINIC_READONLY_DB_URL_ENV_VAR = "CLINIC_READONLY_DB_URL"
+EMAIL_TARGET_READER_DB_URL_ENV_VAR = "EMAIL_TARGET_READER_DB_URL"
 EMAIL_RESEARCH_DB_MODE_ENV_VAR = "EMAIL_RESEARCH_DB_MODE"
 CROSS_DATABASE_MODE = "cross_database"
 SAME_DATABASE_MODE = "same_database"
@@ -100,10 +101,10 @@ def email_database_status(environ=None) -> EmailDatabaseStatus:
 def email_target_reader_status(environ=None) -> EmailDatabaseStatus:
     env = os.environ if environ is None else environ
     email_url = (env.get(EMAIL_RESEARCH_DB_URL_ENV_VAR) or "").strip()
-    read_url = (env.get(CLINIC_READONLY_DB_URL_ENV_VAR) or "").strip()
+    read_url = (env.get(EMAIL_TARGET_READER_DB_URL_ENV_VAR) or "").strip()
     runtime_url = (env.get(RUNTIME_DB_URL_ENV_VAR) or "").strip()
     if not read_url:
-        return EmailDatabaseStatus(False, "Clinic/HP READ ONLY接続が未設定です。")
+        return EmailDatabaseStatus(False, "Email Target Reader接続が未設定です。")
     email_identity = _database_identity(email_url)
     read_identity = _database_identity(read_url)
     runtime_identity = _database_identity(runtime_url)
@@ -111,6 +112,23 @@ def email_target_reader_status(environ=None) -> EmailDatabaseStatus:
         return EmailDatabaseStatus(False, "Clinic/HP READ ONLY接続先との分離を確認できません。")
     if read_identity != runtime_identity:
         return EmailDatabaseStatus(False, "Clinic/HP READ ONLY接続先がClinic/HP DBと一致しません。")
+    try:
+        parsed = urlsplit(read_url)
+        username = unquote(parsed.username or "").strip().casefold()
+        hostname = (parsed.hostname or "").casefold()
+        if hostname.endswith(".pooler.supabase.com"):
+            project_match = re.search(r"(?:^|\.)([a-z0-9]{20,})$", username)
+            valid_role = bool(project_match and username ==
+                              f"clinic_email_target_reader.{project_match.group(1)}")
+        else:
+            valid_role = username == "clinic_email_target_reader"
+        if not valid_role:
+            return EmailDatabaseStatus(
+                False, "Email Target Reader接続には専用ロールを指定してください。")
+        if unquote(parsed.path.lstrip("/")).casefold() != "postgres":
+            return EmailDatabaseStatus(False, "Email Target ReaderのDB名が一致しません。")
+    except (TypeError, ValueError):
+        return EmailDatabaseStatus(False, "Email Target Reader接続設定を確認できません。")
     if email_identity == read_identity and email_research_db_mode(env) != SAME_DATABASE_MODE:
         return EmailDatabaseStatus(False, "ProductionとEmailのDB接続先が同一のため開始できません。")
     return EmailDatabaseStatus(True, "Clinic/HPをREAD ONLYで参照できます。")

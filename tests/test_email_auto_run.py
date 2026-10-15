@@ -460,6 +460,49 @@ finally: ui.email_repositories_for_ui=orig_repo; ui.email_target_reader_status=o
     assert any("DB認証に失敗" in error.value for error in app.error)
 
 
+def test_email_start_commit_outcome_unknown_does_not_claim_run_was_not_created():
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_string('''
+import os
+import psycopg
+from types import SimpleNamespace
+import src.email_research_ui as ui
+class Repo:
+    def available(self): return True
+    def summary(self): return dict(total=1,processed=0,remaining=1,primary=0,email_obtained=0,
+      true=0,candidate_review=0,no_email_found=0,error=0,found=0,elapsed_seconds=0,
+      search_query_count=0,http_attempts=0,retry_count=0,timeout_count=0,query1_called=0,
+      query2_called=0,search_0_count=0)
+    def latest_auto_run(self): return dict(run_id="possibly-created",status="COMPLETED",metrics={})
+class Human:
+    def available(self): return True
+    def summary(self): return dict(unreviewed=0,unreviewed_clinics=0,reviewed=0)
+class Runner:
+    last_start_stage="create_auto_run"
+    def start(self):
+        # Simulate the client losing the response after the database committed.
+        raise psycopg.OperationalError("connection lost after commit; secret=must-not-leak")
+class Store: is_supabase_runtime=True
+repo=Repo()
+orig_repo=ui.email_repositories_for_ui; orig_runner=ui._auto_runner
+orig_target_status=ui.email_target_reader_status
+os.environ["EMAIL_AUTO_RUN_ENABLED"]="true"
+ui.email_repositories_for_ui=lambda:SimpleNamespace(email_research=repo,email_human_review=Human())
+ui.email_target_reader_status=lambda:SimpleNamespace(ready=True,message="")
+ui._auto_runner=lambda:Runner()
+try: ui.email_auto_research_card(Store())
+finally: ui.email_repositories_for_ui=orig_repo; ui.email_target_reader_status=orig_target_status; ui._auto_runner=orig_runner
+''')
+    app.run()
+    next(button for button in app.button if button.label == "メール自動調査を開始").click().run()
+    assert not app.exception
+    messages = [error.value for error in app.error]
+    assert any("開始結果を確認できません" in message for message in messages)
+    assert any("再実行せず" in message and "Run一覧を再読込" in message for message in messages)
+    assert all("新規Runは作成されていません" not in message for message in messages)
+    assert all("must-not-leak" not in message for message in messages)
+
+
 def test_email_start_runner_busy_is_not_silent():
     from streamlit.testing.v1 import AppTest
     app = AppTest.from_string('''
