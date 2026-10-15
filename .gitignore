@@ -36,3 +36,7 @@ node_modules/
 /data/manifests/
 /data/research_worker/
 .venv_research/
+
+# Outreach Phase 1-2 contains clinic identities and approved recipient addresses.
+/artifacts/outreach_phase12_*/
+/artifacts/outreach_phase2_*/

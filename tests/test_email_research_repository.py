@@ -472,13 +472,13 @@ def test_status_for_ids_bulk_lookup_single_query():
 def test_primary_listing_returns_clinic_unit_rows_not_candidate_count():
     conn = DispatchConn(
         {"to_regclass": (1, 1, 1),
-         "SELECT s.clinic_id, t.clinic_name": [
-            (1, "サンプル医院", "東京都", "千代田区", "info@sample.example", "GENERAL",
+         "SELECT s.clinic_id, p.candidate_id": [
+            (1, 101, "サンプル医院", "東京都", "千代田区", "info@sample.example", "GENERAL",
              "CLINIC_OWNED", "CLINIC_OWNED", "OFFICIAL_HP", "OFFICIAL_CLINIC",
              "https://sample.example/", "HIGH", [], True, "2026-10-11T00:00:00+00:00"),
         ]},
-        descriptions={"SELECT s.clinic_id, t.clinic_name": [
-            "clinic_id", "clinic_name", "prefecture", "city", "email", "role", "ownership",
+        descriptions={"SELECT s.clinic_id, p.candidate_id": [
+            "clinic_id", "candidate_id", "clinic_name", "prefecture", "city", "email", "role", "ownership",
             "email_ownership", "discovery_source", "source_owner_type", "source_url",
             "confidence", "hard_block_codes", "final_sales_eligible", "updated_at",
         ]},

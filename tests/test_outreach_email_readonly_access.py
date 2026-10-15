@@ -103,10 +103,18 @@ def test_empty_clinic_ids_returns_empty_without_query():
     assert conn.cursor_obj.last_sql == ""  # クエリ自体を発行しない
 
 
+def test_candidate_provenance_query_requires_sales_eligible_and_no_hard_blocks():
+    conn = FakeConn({"SELECT"}, rows=[(10, 42, "info@example.jp")])
+    result = EmailReadOnlyReader(conn).primary_candidates_by_clinic_id([10])
+    assert result == {10: {"candidate_id": "42", "email": "info@example.jp"}}
+    assert "final_sales_eligible = true" in conn.cursor_obj.last_sql
+    assert "cardinality(p.hard_block_codes) = 0" in conn.cursor_obj.last_sql
+
+
 # --- 書き込みメソッド不在の確認(設計の安全性の直接的な証跡) ---
 def test_reader_has_no_write_methods():
     public_methods = {name for name in dir(EmailReadOnlyReader) if not name.startswith("_")}
-    assert public_methods == {"primary_emails_by_clinic_id"}
+    assert public_methods == {"primary_emails_by_clinic_id", "primary_candidates_by_clinic_id"}
 
 
 def test_open_reader_sets_transaction_read_only_and_returns_reader():
