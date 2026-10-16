@@ -2,7 +2,7 @@
 """Continue Mynavi CSV article audits safely. CSV-only. No Google browser scraping.
 
 Sources: latest updated CSV plus optional previously verified clinic URL CSV.
-Optional URL discovery: SerpAPI via SERPAPI_KEY environment variable.
+Optional URL discovery: Brave Search API via BRAVE_SEARCH_API_KEY environment variable.
 Run only when target-site automated access is permitted. Never bypass CAPTCHA.
 """
 import argparse
@@ -59,16 +59,16 @@ def read_known(paths):
 def search_api(name,address,key):
     pref,city=pref_city(address)
     query="site:clinic.mynavi.jp/clinic/ "+simple_name(name)+" "+pref+" "+city
-    url="https://serpapi.com/search.json?"+urllib.parse.urlencode({"engine":"google","q":query,"hl":"ja","gl":"jp","num":10,"api_key":key})
-    req=urllib.request.Request(url,headers={"Accept":"application/json","User-Agent":"Crestix-Mynavi-Canary/1.0"})
+    url="https://api.search.brave.com/res/v1/web/search?"+urllib.parse.urlencode({"q":query,"country":"jp","search_lang":"ja","count":10})
+    req=urllib.request.Request(url,headers={"Accept":"application/json","X-Subscription-Token":key,"User-Agent":"Crestix-Mynavi-Canary/1.0"})
     import json
     with urllib.request.urlopen(req,timeout=20) as r:
         payload=json.load(r)
-    if payload.get("error"): raise RuntimeError("SerpAPI: "+str(payload["error"]))
+    if payload.get("error"): raise RuntimeError("Brave API: "+str(payload["error"]))
     return list(dict.fromkeys(
         match.group().rstrip("/")+"/"
-        for entry in payload.get("organic_results",[])
-        for match in URL_FIND.finditer(entry.get("link",""))
+        for entry in payload.get("web",{}).get("results",[])
+        for match in URL_FIND.finditer(entry.get("url",""))
     ))[:5]
 async def verify_candidate(page,url,name,address):
     try:
@@ -85,7 +85,7 @@ async def main(args):
     fields,rows=load(Path(args.input))
     known=read_known([Path(p) for p in args.reference])
     audit=[]
-    key=os.getenv("SERPAPI_KEY","").strip()
+    key=os.getenv("BRAVE_SEARCH_API_KEY","").strip()
     processed=0
     api_calls=0
     async with async_playwright() as p:
@@ -103,7 +103,7 @@ async def main(args):
                 api_calls+=1
                 try:
                     urls=await asyncio.to_thread(search_api,row[COL_NAME],row[COL_ADDR],key)
-                    source="SerpAPI"
+                    source="Brave API"
                 except Exception as e:
                     audit.append([cid,row[COL_NAME],"確認待ち","検索APIエラー: "+type(e).__name__,""])
                     continue
@@ -133,7 +133,7 @@ async def main(args):
                 decision="更新"
             else:
                 decision="確認待ち"
-            audit.append([cid,row[COL_NAME],decision,source+" / "+result["確認理由"]+(" / 検索候補は住所番地の目視照合後に確定" if source=="SerpAPI" else ""),url])
+            audit.append([cid,row[COL_NAME],decision,source+" / "+result["確認理由"]+(" / 検索候補は住所番地の目視照合後に確定" if source=="Brave API" else ""),url])
             print(f"{processed}: {cid} {row[COL_NAME]} -> {decision} {status}",flush=True)
             await asyncio.sleep(args.delay)
         await browser.close()
@@ -141,7 +141,7 @@ async def main(args):
         w=csv.DictWriter(f,fieldnames=fields);w.writeheader();w.writerows(rows)
     with open(args.audit,"w",encoding="utf-8-sig",newline="") as f:
         w=csv.writer(f);w.writerow(["clinic_id","クリニック名","処理結果","根拠・理由","医院詳細URL候補"]);w.writerows(audit)
-    print("対象:",processed,"SerpAPI検索回数:",api_calls,"処理内訳:",dict(Counter(r[2] for r in audit)))
+    print("対象:",processed,"Brave検索回数:",api_calls,"処理内訳:",dict(Counter(r[2] for r in audit)))
     print("残り未確認:",sum(r[COL_STATUS].strip()=="未確認" for r in rows))
     print("出力:",args.output,"監査:",args.audit)
 if __name__=="__main__":
@@ -153,5 +153,5 @@ if __name__=="__main__":
     ap.add_argument("--limit",type=int,default=10,help="0 = all unchecked")
     ap.add_argument("--delay",type=float,default=2.5)
     ap.add_argument("--headed",action="store_true")
-    ap.add_argument("--max-api-calls",type=int,default=10,help="maximum SerpAPI searches; protects remaining credits")
+    ap.add_argument("--max-api-calls",type=int,default=10,help="maximum Brave searches; protects remaining credits")
     asyncio.run(main(ap.parse_args()))
