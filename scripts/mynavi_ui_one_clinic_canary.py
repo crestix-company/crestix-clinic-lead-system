@@ -32,15 +32,30 @@ async def run(args):
             step="医院名入力"
             await search.fill(args.name,timeout=15000)
             step="検索実行"
-            await page.get_by_role("main").get_by_role("button",name="検索する").click(timeout=15000)
-            await page.wait_for_load_state("domcontentloaded",timeout=15000)
+            report["keyword_before_search"]=await search.input_value()
+            report["url_before_search"]=page.url
+            await search.press("Enter",timeout=15000)
+            try:
+                await page.wait_for_url(lambda u: str(u).rstrip("/")!="https://clinic.mynavi.jp",timeout=10000)
+            except PlaywrightTimeoutError:
+                report["url_after_enter"]=page.url
+                await page.get_by_role("main").get_by_role("button",name="検索する").click(timeout=15000)
+                try:
+                    await page.wait_for_url(lambda u: str(u).rstrip("/")!="https://clinic.mynavi.jp",timeout=10000)
+                except PlaywrightTimeoutError:
+                    report["reason"]="検索フォーム送信後もトップページのまま。検索条件・サイト応答を目視確認"
+                    report["url_after_submit"]=page.url
             step="検索結果の確認"
-            details=page.get_by_role("link",name="詳細情報を見る")
-            count=await details.count()
-            report["detail_result_count"]=count
-            if count!=1:
-                report["reason"]=f"検索結果に詳細情報リンクが{count}件。目視で候補を選ぶ必要あり"
+            if report["reason"]:
+                report["detail_result_count"]=0
             else:
+                await page.wait_for_load_state("domcontentloaded",timeout=15000)
+            details=page.get_by_role("link",name="詳細情報を見る")
+            count=await details.count() if not report["reason"] else 0
+            report["detail_result_count"]=count
+            if count!=1 and not report["reason"]:
+                report["reason"]=f"検索結果に詳細情報リンクが{count}件。目視で候補を選ぶ必要あり"
+            elif count==1:
                 step="医院詳細を開く"
                 await details.click(timeout=15000)
                 await page.wait_for_load_state("domcontentloaded",timeout=15000)
