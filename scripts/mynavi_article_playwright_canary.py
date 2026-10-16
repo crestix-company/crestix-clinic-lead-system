@@ -64,12 +64,18 @@ async def inspect(page, row):
             else:
                 out["確認理由"] = "構造未確認"
             return out
+        # Links can live in nested wrappers, not immediate heading siblings.
+        # Traverse document order between this section heading and the next
+        # heading of equal or higher rank, excluding unrelated recommendations.
         urls = await section.evaluate("""h => {
-          let result=[]; let node=h.nextElementSibling;
-          while (node && !/^H[1-3]$/.test(node.tagName)) {
-            for (const a of node.querySelectorAll('a[href]')) result.push(a.href);
-            if (node.matches('a[href]')) result.push(node.href);
-            node=node.nextElementSibling;
+          const rank = Number(h.tagName.slice(1));
+          const candidates = [...document.querySelectorAll('h1,h2,h3,h4,h5,h6,a[href]')];
+          const start = candidates.indexOf(h);
+          const result = [];
+          for (let i = start + 1; i < candidates.length; i++) {
+            const el = candidates[i];
+            if (/^H[1-6]$/.test(el.tagName) && Number(el.tagName.slice(1)) <= rank) break;
+            if (el.matches('a[href]')) result.push(el.href);
           }
           return result;
         }""")
