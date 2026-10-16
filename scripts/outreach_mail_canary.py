@@ -150,7 +150,8 @@ def main(argv=None, *, connect_fn=None, email_reader=read_emails):
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "canary_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     (args.out / "canary_results.csv").write_bytes(
-        to_csv_bytes(results, settings.staff, settings.generation_batch_id))
+        to_csv_bytes(results, settings.staff, settings.generation_batch_id,
+                     calendar_confirmed=settings.calendar_confirmed))
     print(json.dumps({k: v for k, v in report.items() if k != "issues"}, ensure_ascii=False, indent=2))
     return 0 if report["passed"] else 1
 

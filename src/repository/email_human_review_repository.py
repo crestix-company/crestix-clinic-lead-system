@@ -7,6 +7,7 @@ import threading
 from psycopg.types.json import Jsonb
 
 from src.master.email_sales_eligibility import evaluate_sales_eligibility
+from src.repository.connection_diagnostics import retryable_read_connection_error
 from src.repository.email_research_repository import _retry_closed_read_connection
 
 
@@ -36,11 +37,7 @@ class SupabaseEmailHumanReviewRepository:
         return bool(getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False))
 
     def _is_retryable_connection_error(self, exc) -> bool:
-        try:
-            import psycopg
-        except ImportError:
-            return False
-        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+        return retryable_read_connection_error(exc)
 
     def _safe_rollback(self) -> None:
         try:
@@ -49,9 +46,11 @@ class SupabaseEmailHumanReviewRepository:
         except Exception:
             pass
 
-    def _reconnect_read(self) -> None:
+    def _reconnect_read(self, *, expected_conn=None, force=False) -> None:
         with self._reconnect_lock:
-            if not self._connection_is_dead():
+            if expected_conn is not None and self._conn is not expected_conn:
+                return
+            if not force and not self._connection_is_dead():
                 return
             # Deliberately never call old_conn.close() here: another thread may still
             # hold its own local reference to this same object mid-query (Streamlit
@@ -67,10 +66,15 @@ class SupabaseEmailHumanReviewRepository:
             connect_fn = self._connect_fn
             if connect_fn is None:
                 from src.repository.supabase_adapter import connect as connect_fn
-            new_conn = connect_fn(url, autocommit=False)
-            with new_conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            new_conn.commit()
+            try:
+                new_conn = connect_fn(url, autocommit=False)
+                with new_conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                new_conn.commit()
+            except Exception as exc:
+                from src.repository.email_database import note_email_database_connection_error
+                note_email_database_connection_error(exc)
+                raise
             self._conn = new_conn
 
     def _ensure_read_connection(self) -> None:
@@ -103,7 +107,7 @@ class SupabaseEmailHumanReviewRepository:
             if not self._is_retryable_connection_error(exc):
                 raise
             try:
-                self._reconnect_read()
+                self._reconnect_read(expected_conn=self._conn, force=True)
             except Exception:
                 return False
             try:

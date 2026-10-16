@@ -22,15 +22,16 @@ ARTICLE_STATUS_LABELS = {
 }
 
 TEMPLATE_LISTED = "LISTED_FIXED_V1"
-TEMPLATE_RECOMMEND = "RECOMMEND_PROVISIONAL_V1"
+TEMPLATE_RECOMMEND = "RECOMMEND_RELATED_V2"
 
 # A/Bテスト・送信トラッキングは未実装（今回のスコープ外）。将来の集計をCSV単位で可能にするため、
 # テンプレート名を id/version に分解した対応表のみ用意しておく。新テンプレート追加時はここに追記する。
-TEMPLATE_IDS = {TEMPLATE_LISTED: "LISTED_FIXED", TEMPLATE_RECOMMEND: "RECOMMEND_PROVISIONAL"}
-TEMPLATE_VERSIONS = {TEMPLATE_LISTED: "v1", TEMPLATE_RECOMMEND: "v1"}
+TEMPLATE_IDS = {TEMPLATE_LISTED: "LISTED_FIXED", TEMPLATE_RECOMMEND: "RECOMMEND_RELATED"}
+TEMPLATE_VERSIONS = {TEMPLATE_LISTED: "v1", TEMPLATE_RECOMMEND: "v2"}
 
 CALLED_LINE = "本日、貴院へお電話させていただき、ご対応いただいた方よりメールにてお送りするよう伺いましたので、ご連絡いたしました。"
-NOT_CALLED_LINE = "突然のご連絡にて失礼いたします。"
+NOT_CALLED_LINE = "この度、マイナビクリニックナビにて公開されている記事について、貴院の診療科目や地域に関連する内容がございましたので、ご紹介のためご連絡いたしました。"
+NEUTRAL_SUBJECT = "【マイナビクリニックナビの関連記事について】株式会社Crestix {staff}"
 
 
 def _line(label: str, value: str) -> str:
@@ -51,13 +52,16 @@ def _article_url(value: str) -> str:
     return value
 
 
-def format_schedule(dates: tuple[date, ...], start: str, end: str) -> str:
+def format_schedule(dates: tuple[date, ...], start: str, end: str, *,
+                    not_before: date | None = None) -> str:
     if not dates:
         raise DraftValidationError("日程候補が指定されていません")
     if any(not isinstance(day, date) for day in dates):
         raise DraftValidationError("日程候補に不正な日付が含まれています")
     if len(set(dates)) != len(dates):
         raise DraftValidationError("日程候補が重複しています")
+    if not_before is not None and any(day < not_before for day in dates):
+        raise DraftValidationError("日程候補に過去の日付が含まれています")
     start, end = _line("開始時刻", start), _line("終了時刻", end)
     def parse_clock(label, value):
         try:
@@ -88,7 +92,7 @@ def _header(recipient: Recipient, staff: str, called: bool) -> str:
     if any(c in name for c in "\r\n"):
         raise DraftValidationError("宛名に改行が含まれています")
     role = (recipient.role or "院長").strip()
-    addressee = f"{role} {name} 様" if name else f"{role}先生"
+    addressee = f"{role} {name} 様" if name else ("ご担当者様" if role == "ご担当者" else f"{role}先生")
     return f"""{clinic}
 {addressee}
 
@@ -98,8 +102,9 @@ def _header(recipient: Recipient, staff: str, called: bool) -> str:
 {CALLED_LINE if called else NOT_CALLED_LINE}"""
 
 
-def subject_for(staff: str) -> str:
-    return SUBJECT.format(staff=_line("IS担当者", staff))
+def subject_for(staff: str, *, called: bool = True) -> str:
+    staff = _line("IS担当者", staff)
+    return (SUBJECT if called else NEUTRAL_SUBJECT).format(staff=staff)
 
 
 def render_listed(recipient: Recipient, *, staff: str, example_url: str, listed_url: str,
@@ -131,25 +136,24 @@ def render_listed(recipient: Recipient, *, staff: str, example_url: str, listed_
 
 def render_recommend(recipient: Recipient, *, staff: str, article_title: str, article_url: str,
                      schedule: str, called: bool) -> str:
-    """記事なし／未確認: 掲載済みと誤認させない、おすすめ記事紹介型の暫定テンプレート。"""
+    """記事なし／未確認: 掲載済みと誤認させない関連記事紹介型テンプレート。"""
     staff = _line("IS担当者", staff)
-    title, url = _line("記事タイトル", article_title), _article_url(article_url)
+    _line("記事タイトル", article_title)  # CSV/監査用。本文は承認済み仕様どおりURLのみを掲載する。
+    url = _article_url(article_url)
     return f"""{_header(recipient, staff, called)}
 
-マイナビが運営するクリニック紹介メディアにて、地域・診療科目ごとのおすすめクリニックを紹介する記事を展開しております。
-貴院の所在地域・診療科目に関連する記事として、下記をご紹介させていただきます。
-
-【おすすめ記事】
-{title}
+【関連記事】
 {url}
 
-本記事の内容や、貴院のご紹介に関するご案内について、ご説明のお時間を頂戴できればと考えております。
+今回、記事の内容やマイナビクリニックナビでの情報発信について、貴院にもご参考いただける情報を共有できればと考えております。
 
-恐れ入りますが、ご都合のよろしい日時を下記よりお知らせいただけますでしょうか。
+可能でしたら、院長先生にもご参加いただく形で、オンラインにて20分～30分ほどお時間を頂戴できますと幸いです。
 
+【候補日時】
 {schedule}
 
-上記よりオンラインにて20分～30分ほど頂戴できますと幸いです。
+ご都合のよい日時がございましたら、お知らせいただけますと幸いです。
+
 何卒よろしくお願い申し上げます。
 
 {SIGNATURE}"""

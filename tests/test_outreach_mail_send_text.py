@@ -7,16 +7,21 @@ import pytest
 from src.outreach.article_adapter import ArticleLink
 from src.outreach.article_recommender import Article
 from src.outreach.compose import (
-    ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED, CALLED_LINE, TEMPLATE_LISTED,
+    ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED, CALLED_LINE, NOT_CALLED_LINE, TEMPLATE_LISTED,
     TEMPLATE_RECOMMEND, Recipient, format_schedule, render_listed,
 )
 from src.outreach.email_template import (
     DraftInput, DraftValidationError, SIGNATURE, five_weekdays, render_draft,
 )
 from src.outreach.generation import (
-    CSV_COLUMNS, FAILED, NEEDS_REVIEW, READY, GenerationSettings, generate_batch, summarize, to_csv_bytes,
+    CSV_COLUMNS, EXPECTED_GMAIL_ACCOUNT, FAILED, NEEDS_REVIEW, READY, SCHEDULE_UNSET,
+    GenerationSettings, generate_batch, summarize, to_csv_bytes,
 )
-from src.outreach.targets import ArticleState, ClinicTarget, classify_article, select_targets
+from src.outreach.targets import (
+    DIRECTOR_MANAGER_CONFIRMED, DIRECTOR_MISSING, DIRECTOR_OWNER_CONFIRMED,
+    DIRECTOR_OWNER_UNVERIFIED, ArticleState, ClinicTarget, classify_article, select_targets,
+    target_from_record,
+)
 
 ARTICLES = [
     Article("世田谷区のペインクリニックおすすめ10選", "https://clinic.mynavi.jp/article/setagaya_pain-clinic/", "世田谷 ペインクリニック", "1"),
@@ -38,8 +43,12 @@ def target(uuid="uuid-001", article=ArticleState(ARTICLE_LISTED, LISTED_URL, LIS
     return ClinicTarget(**values)
 
 
-def settings(called=()):
-    return GenerationSettings(staff="前田", dates=DATES, called_uuids=frozenset(called))
+def settings(called=(), *, calendar_confirmed=True, provisional_approved=True):
+    return GenerationSettings(
+        staff="前田", dates=DATES, called_uuids=frozenset(called),
+        calendar_confirmed=calendar_confirmed,
+        provisional_template_approved=provisional_approved,
+    )
 
 
 def run(t, called=()):
@@ -61,9 +70,22 @@ def test_listed_uses_fixed_shukai_template_identical_to_v1():
 
 def test_listed_without_call_never_claims_phone_call():
     result = run(target())
-    assert result.status == READY
-    assert "お電話" not in result.body and "本日" not in result.body
-    assert "掲載させていただいている" in result.body
+    assert result.status == READY and result.template == TEMPLATE_LISTED
+    assert NOT_CALLED_LINE in result.body and CALLED_LINE not in result.body
+    assert result.subject == "【マイナビクリニックナビの関連記事について】株式会社Crestix 前田"
+
+
+def test_calendar_is_content_gate_and_template_approval_is_gmail_gate():
+    listed = generate_batch([target()], ARTICLES, settings(called=("uuid-001",), calendar_confirmed=False))[0]
+    assert listed.status == NEEDS_REVIEW
+    assert "候補日時がGoogleカレンダーまたは本人予定と未照合" in listed.reasons
+    provisional = generate_batch(
+        [target(article=ArticleState(ARTICLE_NOT_LISTED))], ARTICLES,
+        settings(provisional_approved=False),
+    )[0]
+    assert provisional.status == READY
+    assert provisional.gmail_ready is False
+    assert "関連記事紹介型テンプレートの保存前最終確認が未完了" in provisional.gmail_blockers
 
 
 def test_listed_url_missing_from_master_is_downgraded():
@@ -82,6 +104,9 @@ def test_not_listed_uses_recommend_template_without_listing_claim():
         assert phrase not in result.body
     assert result.first.article.url == "https://clinic.mynavi.jp/article/setagaya_internal/"
     assert result.first.article.url in result.body
+    assert "【関連記事】" in result.body and "【候補日時】" in result.body
+    assert NOT_CALLED_LINE in result.body
+    assert result.subject == "【マイナビクリニックナビの関連記事について】株式会社Crestix 前田"
     assert 1 <= len(result.recommendations) <= 3
 
 
@@ -90,9 +115,10 @@ def test_treatment_match_is_first_recommendation():
     assert result.first.article.url == "https://clinic.mynavi.jp/article/setagaya_endoscopy/"
 
 
-def test_no_matching_article_fails_instead_of_inventing():
+def test_no_matching_article_needs_review_instead_of_inventing():
     result = run(target(article=ArticleState(ARTICLE_NOT_LISTED), departments=("皮膚科",)))
-    assert result.status == FAILED and result.body == ""
+    assert result.status == NEEDS_REVIEW and result.body == ""
+    assert "地域・標榜科目・治療に一致する推奨記事なし" in result.reasons
 
 
 def test_region_mismatch_needs_review():
@@ -102,10 +128,10 @@ def test_region_mismatch_needs_review():
 
 
 # --- 記事未確認 ---
-def test_unconfirmed_is_safe_and_needs_review():
+def test_unconfirmed_is_safe_and_can_be_content_ready():
     result = run(target(article=ArticleState(ARTICLE_UNCONFIRMED, reason="記事マスターとの紐付けなし")),
                  called=("uuid-001",))
-    assert result.status == NEEDS_REVIEW
+    assert result.status == READY
     assert result.template == TEMPLATE_RECOMMEND
     assert "掲載いただいている" not in result.body
     assert CALLED_LINE in result.body  # 電話事実が確認済みの医院のみ
@@ -115,7 +141,8 @@ def test_unconfirmed_is_safe_and_needs_review():
 def test_signature_and_asterisk_rules_in_every_body():
     for state in (ArticleState(ARTICLE_LISTED, LISTED_URL, LISTED_URL), ArticleState(ARTICLE_NOT_LISTED),
                   ArticleState(ARTICLE_UNCONFIRMED)):
-        body = run(target(article=state)).body
+        called = ("uuid-001",) if state.status == ARTICLE_LISTED else ()
+        body = run(target(article=state), called=called).body
         assert body.endswith(SIGNATURE)
         assert body.count("******************************************") == 2
 
@@ -123,8 +150,53 @@ def test_signature_and_asterisk_rules_in_every_body():
 def test_missing_email_and_director_need_review():
     result = run(target(email="", email_status="MISSING", director_name=""))
     assert result.status == NEEDS_REVIEW
-    assert "院長先生" in result.body
+    assert result.body.startswith("州会クリニック\n院長先生\n")
     assert {"宛先メール未取得", "院長名未確認（院長先生宛てで生成）"} <= set(result.reasons)
+
+
+def test_approved_general_addressee_can_replace_missing_director():
+    clinic = target(email="info@example.jp", director_name="", director_name_confirmed=False)
+    configured = GenerationSettings(
+        staff="前田", dates=DATES, calendar_confirmed=True,
+        approved_general_addressee_uuids=frozenset({clinic.clinic_uuid}),
+    )
+    result = generate_batch([clinic], ARTICLES, configured)[0]
+    assert result.status == READY
+    assert result.general_addressee_approved is True
+    assert result.body.startswith("州会クリニック\nご担当者様\n")
+
+
+def test_missing_schedule_is_review_not_inferred_availability():
+    configured = GenerationSettings(staff="前田", dates=(), calendar_confirmed=False)
+    result = generate_batch([target(article=ArticleState(ARTICLE_UNCONFIRMED))], ARTICLES, configured)[0]
+    assert result.status == NEEDS_REVIEW
+    assert result.candidate_schedule == SCHEDULE_UNSET
+    assert SCHEDULE_UNSET in result.body
+    assert "候補日時が未設定" in result.reasons
+
+
+def test_gmail_preflight_requires_exact_account_duplicate_check_and_final_approval():
+    clinic = target(article=ArticleState(ARTICLE_NOT_LISTED))
+    wrong = GenerationSettings(
+        staff="前田", dates=DATES, calendar_confirmed=True, provisional_template_approved=True,
+        authenticated_gmail_account="other@example.jp", duplicate_check_complete=True,
+    )
+    wrong_result = generate_batch([clinic], ARTICLES, wrong)[0]
+    assert wrong_result.status == READY and wrong_result.gmail_ready is False
+    assert "指定GmailアカウントのOAuth一致確認が未完了" in wrong_result.gmail_blockers
+
+    correct = GenerationSettings(
+        staff="前田", dates=DATES, calendar_confirmed=True, provisional_template_approved=True,
+        authenticated_gmail_account=EXPECTED_GMAIL_ACCOUNT, duplicate_check_complete=True,
+    )
+    assert generate_batch([clinic], ARTICLES, correct)[0].gmail_ready is True
+
+
+def test_unresolved_template_variable_never_ready(monkeypatch):
+    monkeypatch.setattr("src.outreach.generation.render_recommend", lambda *args, **kwargs: "本文 {article_url}")
+    result = run(target(article=ArticleState(ARTICLE_NOT_LISTED)))
+    assert result.status == NEEDS_REVIEW
+    assert "件名または本文に未置換変数あり" in result.reasons
 
 
 def test_duplicate_uuid_fails():
@@ -133,7 +205,7 @@ def test_duplicate_uuid_fails():
 
 
 def test_schedule_inserted_and_validated():
-    body = run(target()).body
+    body = run(target(), called=("uuid-001",)).body
     assert "10月19日（月）9:00～21:00" in body and "10月23日（金）9:00～21:00" in body
     with pytest.raises(DraftValidationError):
         format_schedule((date(2026, 10, 24),), "9:00", "21:00")  # 土曜
@@ -143,7 +215,9 @@ def test_schedule_inserted_and_validated():
         format_schedule(DATES, "21:00", "9:00")
     with pytest.raises(DraftValidationError, match="不正な日付"):
         format_schedule((date(2026, 10, 19), "2026-10-20"), "9:00", "21:00")
-    assert run(target()).status == READY
+    with pytest.raises(DraftValidationError, match="過去"):
+        format_schedule((date(2026, 10, 19),), "9:00", "21:00", not_before=date(2026, 10, 20))
+    assert run(target(), called=("uuid-001",)).status == READY
     assert generate_batch([target()], ARTICLES, GenerationSettings(staff="", dates=DATES))[0].status == FAILED
 
 
@@ -155,12 +229,32 @@ def test_recipient_newline_rejected():
 
 def test_csv_contains_identity_article_mail_and_status():
     results = generate_batch([target(), target("uuid-002", article=ArticleState(ARTICLE_NOT_LISTED))],
-                             ARTICLES, settings())
+                             ARTICLES, settings(called=("uuid-001",)))
     rows = list(csv.DictReader(io.StringIO(to_csv_bytes(results, "前田").decode("utf-8-sig"))))
     assert list(rows[0]) == CSV_COLUMNS
     assert rows[0]["clinic_uuid"] == "uuid-001" and rows[0]["status"] == READY
+    assert rows[0]["comdesk_uuid"] == ""
     assert rows[1]["recommended_url"] in URLS and rows[1]["article_status"] == "記事なし"
     assert summarize(results) == {"total": 2, READY: 2, NEEDS_REVIEW: 0, FAILED: 0}
+
+
+def test_csv_contains_email_candidate_provenance_and_calendar_gate():
+    result = target(email_candidate_id="12345")
+    row = list(csv.DictReader(io.StringIO(to_csv_bytes(
+        [generate_batch([result], ARTICLES, settings(called=("uuid-001",)))[0]],
+        "前田", calendar_confirmed=True,
+    ).decode("utf-8-sig"))))[0]
+    assert row["email_candidate_id"] == "12345"
+    assert row["calendar_confirmed"] == "TRUE"
+    assert row["candidate_schedule"] == "\n".join(
+        f"{d.month}月{d.day}日（{'月火水木金土日'[d.weekday()]}）9:00～21:00" for d in DATES
+    )
+    assert row["phone_history_status"] == "VERIFIED_TODAY"
+    assert row["content_ready"] == "TRUE"
+    assert row["gmail_ready"] == "FALSE"
+    assert list(row)[:5] == ["clinic_id", "clinic_uuid", "outreach_id", "campaign_id", "generation_batch_id"]
+    assert row["email_candidate_id"] == "12345"
+    assert "clinic_name" in row and "prefecture" in row and "to_email" in row
 
 
 # --- 判定・抽出 ---
@@ -171,6 +265,8 @@ def link(uuid, status="LISTED", verified=True):
 def test_classify_article_states():
     assert classify_article("u1", [link("u1")]).status == ARTICLE_LISTED
     assert classify_article("u1", [link("u1", "NOT_LISTED")]).status == ARTICLE_NOT_LISTED
+    no_evidence = ArticleLink("u1", "NOT_LISTED", "", "", "", "", "", True)
+    assert classify_article("u1", [no_evidence]).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", [link("u1", verified=False)]).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", []).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", [link("u2", "NOT_LISTED")]).status == ARTICLE_UNCONFIRMED  # JOIN未登録≠記事なし
@@ -205,6 +301,53 @@ def test_select_targets_email_and_article_filters():
     sel = select_targets(records, email_lookup=lambda ids: {}, links=[link("uuid-004")],
                          article_filter=(ARTICLE_LISTED,))
     assert [t.clinic_id for t in sel.targets] == [4]
+
+
+def test_owner_name_is_not_assumed_to_be_director_without_verified_provenance():
+    clinic = target_from_record(record(
+        1, manager_name="", owner_name="医療法人テスト会 開設者 佐藤 花子",
+    ), email="info@example.jp")
+    assert clinic.owner_name == "医療法人テスト会 開設者 佐藤 花子"
+    assert clinic.director_name == ""
+    assert clinic.director_name_source == DIRECTOR_OWNER_UNVERIFIED
+    assert clinic.director_name_confirmed is False
+
+    result = generate_batch(
+        [clinic], ARTICLES, settings(calendar_confirmed=True, provisional_approved=True),
+    )[0]
+    assert result.status == NEEDS_REVIEW
+    assert "開設者名はあるが院長本人との同一性が未確認" in result.reasons
+
+
+def test_missing_director_name_is_not_guessed():
+    clinic = target_from_record(record(1, manager_name="", owner_name=""), email="info@example.jp")
+    assert clinic.director_name == ""
+    assert clinic.director_name_source == DIRECTOR_MISSING
+    assert clinic.director_name_confirmed is False
+
+    result = generate_batch(
+        [clinic], ARTICLES, settings(calendar_confirmed=True, provisional_approved=True),
+    )[0]
+    assert result.status == NEEDS_REVIEW
+    assert "院長名未確認（院長先生宛てで生成）" in result.reasons
+
+
+def test_confirmed_manager_name_is_preserved_as_director():
+    clinic = target_from_record(record(
+        1, manager_name="山田 太郎", owner_name="医療法人テスト会 開設者 佐藤 花子",
+    ), email="info@example.jp")
+    assert clinic.director_name == "山田 太郎"
+    assert clinic.director_name_source == DIRECTOR_MANAGER_CONFIRMED
+    assert clinic.director_name_confirmed is True
+
+
+def test_owner_name_requires_explicit_same_person_verification_to_be_director():
+    clinic = target_from_record(record(
+        1, manager_name="", owner_name="佐藤 花子", owner_is_director_verified=True,
+    ), email="info@example.jp")
+    assert clinic.director_name == "佐藤 花子"
+    assert clinic.director_name_source == DIRECTOR_OWNER_CONFIRMED
+    assert clinic.director_name_confirmed is True
 
 
 def test_sidebar_has_single_mail_send_text_menu():

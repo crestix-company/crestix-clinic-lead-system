@@ -125,5 +125,6 @@ def test_supabase_runtime_retries_one_read_after_operational_disconnect(monkeypa
     store = SupabaseRuntimeStore()
 
     assert store.metrics() == {"全マスター": 456}
-    assert first_conn.closed is True
+    # Don't close a connection that another Streamlit fragment may still be using.
+    assert first_conn.closed is False
     assert store.repositories is second

@@ -99,6 +99,31 @@ class EmailReadOnlyReader:
             rows = cur.fetchall()
         return {int(clinic_id): str(email or "").strip() for clinic_id, email in rows}
 
+    def primary_candidates_by_clinic_id(self, clinic_ids: list[int]) -> dict[int, dict[str, str]]:
+        """Return the approved Primary Email plus its immutable Candidate provenance id."""
+        ids = [int(cid) for cid in clinic_ids]
+        if not ids:
+            return {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT s.clinic_id, p.candidate_id, p.email
+                FROM email_research.clinic_email_status s
+                JOIN email_research.email_candidates p
+                  ON p.clinic_id = s.clinic_id AND p.candidate_id = s.primary_email_candidate_id
+                WHERE s.primary_email_candidate_id IS NOT NULL
+                  AND s.clinic_id = ANY(%s::bigint[])
+                  AND p.final_sales_eligible = true
+                  AND cardinality(p.hard_block_codes) = 0
+                """,
+                (ids,),
+            )
+            rows = cur.fetchall()
+        return {
+            int(clinic_id): {"candidate_id": str(candidate_id), "email": str(email or "").strip()}
+            for clinic_id, candidate_id, email in rows
+        }
+
 
 def open_readonly_email_reader(environ=None, connect_fn=None):
     """Returns (reader, conn). Closes the connection and raises if not provably read-only."""

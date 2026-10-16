@@ -34,6 +34,10 @@ EMAIL_ENV_KEYS = {
     "EMAIL_RESEARCH_IDLE_POLL_SECONDS",
     "EMAIL_RESEARCH_TARGET_SYNC_INTERVAL_SECONDS",
     "EMAIL_RESEARCH_PRIMARY_MINIMUM_CONFIDENCE",
+    "OUTREACH_GMAIL_DRAFTS_ENABLED",
+    "OUTREACH_GMAIL_EXPECTED_ACCOUNT",
+    "OUTREACH_GMAIL_OAUTH_CLIENT_JSON",
+    "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
 }
 
 
@@ -71,16 +75,17 @@ def load_runtime_env(root):
             raise RuntimeError("EMAIL_AUTO_RUN_ENABLEDはtrueまたはfalseで指定してください。")
         email_db_config["EMAIL_AUTO_RUN_ENABLED"] = auto_run_value
     parsed.update(email_db_config)
-    selected_write = os.environ.get("CLINIC_WRITE_BACKEND", parsed.get("CLINIC_WRITE_BACKEND", "sqlite"))
-    runtime_url = os.environ.get("SUPABASE_RUNTIME_DB_URL", parsed.get("SUPABASE_RUNTIME_DB_URL", ""))
+    selected_write = (os.environ.get("CLINIC_WRITE_BACKEND") or parsed.get("CLINIC_WRITE_BACKEND", "sqlite")).strip()
+    runtime_url = (os.environ.get("SUPABASE_RUNTIME_DB_URL") or parsed.get("SUPABASE_RUNTIME_DB_URL", "")).strip()
     if selected_write.strip().lower() == "supabase" and not runtime_url:
         raise RuntimeError("Supabase WRITEにはSUPABASE_RUNTIME_DB_URLが必要です。admin URLへのfallbackは行いません。")
     for key, value in parsed.items():
         if key == "EMAIL_AUTO_RUN_ENABLED":
             # The private local config is the explicit fail-closed switch.
             os.environ[key] = value
-        else:
-            os.environ.setdefault(key, value)
+        elif not (os.environ.get(key) or "").strip():
+            # An explicitly exported but empty variable must not shadow the private config.
+            os.environ[key] = value
     return bool(parsed)
 
 

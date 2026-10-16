@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from functools import wraps
+import threading
 
 from src.io.output_writer import csv_bytes, xlsx_bytes
 from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS
@@ -16,6 +17,7 @@ from src.master.filters import Filters
 
 
 from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_target_predicate
+from src.repository.connection_diagnostics import retryable_read_connection_error
 
 
 def _verified_email_map(rows):
@@ -51,12 +53,13 @@ def _retry_closed_read_connection(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         self._ensure_read_connection()
+        failed_conn = self._conn
         try:
             return method(self, *args, **kwargs)
         except Exception as exc:
             if not self._is_retryable_connection_error(exc):
                 raise
-            self._reconnect_read()
+            self._reconnect_read(expected_conn=failed_conn, force=True)
             return method(self, *args, **kwargs)
     return wrapped
 
@@ -67,40 +70,39 @@ class SupabaseRuntimeStore:
 
     def __init__(self, repositories=None):
         self._owns_runtime_connection = repositories is None
+        self._reconnect_lock = threading.Lock()
         if repositories is None:
             from src.repository.backend import build_repositories
             repositories = build_repositories("supabase")
         self.repositories = repositories
         self._conn = repositories.clinics._conn
 
-    def _reconnect_read(self):
+    def _reconnect_read(self, *, expected_conn=None, force=False):
         if not getattr(self, "_owns_runtime_connection", False):
             return
-        old_conn = self._conn
-        from src.repository.backend import build_repositories
-        repositories = build_repositories("supabase")
-        self.repositories = repositories
-        self._conn = repositories.clinics._conn
-        try:
-            if old_conn is not None and not getattr(old_conn, "closed", False):
-                old_conn.close()
-        except Exception:
-            pass
+        with self._reconnect_lock:
+            old_conn = self._conn
+            if expected_conn is not None and old_conn is not expected_conn:
+                return
+            if not force and old_conn is not None and not (
+                getattr(old_conn, "closed", False) or getattr(old_conn, "broken", False)
+            ):
+                return
+            from src.repository.backend import build_repositories
+            repositories = build_repositories("supabase")
+            self.repositories = repositories
+            self._conn = repositories.clinics._conn
 
     def _ensure_read_connection(self):
         if not getattr(self, "_owns_runtime_connection", False):
             return
         if getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False):
-            self._reconnect_read()
+            self._reconnect_read(expected_conn=self._conn)
 
     def _is_retryable_connection_error(self, exc):
         if not getattr(self, "_owns_runtime_connection", False):
             return False
-        try:
-            import psycopg
-        except ImportError:
-            return False
-        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+        return retryable_read_connection_error(exc)
 
     @property
     def path(self):
@@ -116,6 +118,9 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         return self.repositories.clinics.query(filters, limit, offset, as_of)
+    @_retry_closed_read_connection
+    def records_by_ids(self, clinic_ids, *, page_size=500):
+        return self.repositories.clinics.records_by_ids(clinic_ids, page_size=page_size)
     @_retry_closed_read_connection
     def count(self, filters=None, as_of=None): return self.repositories.clinics.count(filters, as_of)
     @_retry_closed_read_connection
@@ -141,6 +146,8 @@ class SupabaseRuntimeStore:
     def templates(self): return self.repositories.provenance.templates()
     @_retry_closed_read_connection
     def reviews(self, limit=100): return self.repositories.provenance.reviews(limit)
+    @_retry_closed_read_connection
+    def comdesk_linkage_state(self): return self.repositories.provenance.comdesk_linkage_state()
     @_retry_closed_read_connection
     def setting(self, key, default=None): return self.repositories.settings.get(key, default)
 

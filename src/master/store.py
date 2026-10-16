@@ -661,6 +661,31 @@ class ClinicStore:
         with self.connect() as c:
             return [dict(r) for r in c.execute("SELECT m.*,s.record_json,s.source,s.match_reason,s.match_score FROM match_reviews m JOIN source_records s ON s.id=m.source_record_id WHERE m.status='PENDING' ORDER BY m.id LIMIT ?",(limit,))]
 
+    def comdesk_linkage_state(self):
+        """Return every clinic with Comdesk import history and every pending Comdesk candidate."""
+        imported_ids = set()
+        held_ids = set()
+        with self.connect() as c:
+            for row in c.execute(
+                "SELECT clinic_id FROM source_records WHERE source='コムデスク' AND clinic_id IS NOT NULL"
+            ):
+                imported_ids.add(int(row[0]))
+            for row in c.execute(
+                "SELECT clinic_id FROM comdesk_original_rows WHERE clinic_id IS NOT NULL"
+            ):
+                imported_ids.add(int(row[0]))
+            rows = c.execute(
+                "SELECT s.clinic_id,s.record_json,m.candidates_json "
+                "FROM match_reviews m JOIN source_records s ON s.id=m.source_record_id "
+                "WHERE m.status='PENDING' AND s.source='コムデスク'"
+            )
+            for row in rows:
+                if row["clinic_id"] is not None:
+                    held_ids.add(int(row["clinic_id"]))
+                candidates = json.loads(row["candidates_json"] or "[]")
+                held_ids.update(int(value) for value in candidates)
+        return {"imported_clinic_ids": imported_ids, "held_clinic_ids": held_ids}
+
     def reintegrate_existing(self):
         from src.master.reintegration import reintegrate_existing
         return reintegrate_existing(self)

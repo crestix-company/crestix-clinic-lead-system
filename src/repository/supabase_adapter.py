@@ -336,6 +336,26 @@ class SupabaseClinicRepository:
         page_ids = ids[offset:offset + limit]
         return self._batch_get(page_ids)  # P0-2: batched, preserves page_ids order
 
+    def records_by_ids(self, clinic_ids, *, page_size=500):
+        """Fetch exact, active and nonmerged/unheld Clinic Master IDs in READ ONLY batches."""
+        ids = list(dict.fromkeys(int(cid) for cid in clinic_ids if int(cid) > 0))
+        if not ids:
+            return []
+        excluded = set(self._excluded_clinic_ids())
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM public.clinics WHERE id=ANY(%s) AND active=true "
+                "AND merged_into IS NULL AND merge_hold=false ORDER BY id",
+                (ids,),
+            )
+            eligible_ids = [int(row[0]) for row in cur.fetchall() if int(row[0]) not in excluded]
+        output = {}
+        for start in range(0, len(eligible_ids), max(1, min(int(page_size), 500))):
+            batch = eligible_ids[start:start + max(1, min(int(page_size), 500))]
+            for record in self._batch_get(batch):
+                output[int(record["id"])] = record
+        return [output[cid] for cid in ids if cid in output]
+
     def funnel(self, filters, as_of=None):
         sf.raise_if_unsupported(filters)
         conditions = ["merged_into IS NULL", "merge_hold=false"]
@@ -501,6 +521,35 @@ class SupabaseProvenanceRepository:
                 if not isinstance(item[key], str):
                     item[key] = json.dumps(item[key], ensure_ascii=False)
         return output
+
+    def comdesk_linkage_state(self):
+        """Read all imported clinic IDs and unresolved Comdesk match candidates."""
+        imported_ids = set()
+        held_ids = set()
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT clinic_id FROM provenance.source_records "
+                "WHERE source='コムデスク' AND clinic_id IS NOT NULL"
+            )
+            imported_ids.update(int(row[0]) for row in cur.fetchall())
+            cur.execute(
+                "SELECT clinic_id FROM provenance.comdesk_original_rows WHERE clinic_id IS NOT NULL"
+            )
+            imported_ids.update(int(row[0]) for row in cur.fetchall())
+            cur.execute(
+                "SELECT s.clinic_id,m.candidates_json "
+                "FROM provenance.match_reviews m "
+                "JOIN provenance.source_records s ON s.id=m.source_record_id "
+                "WHERE m.status='PENDING' AND s.source='コムデスク'"
+            )
+            for clinic_id, raw_candidates in cur.fetchall():
+                if clinic_id is not None:
+                    held_ids.add(int(clinic_id))
+                candidates = raw_candidates or []
+                if isinstance(candidates, str):
+                    candidates = json.loads(candidates)
+                held_ids.update(int(value) for value in candidates)
+        return {"imported_clinic_ids": imported_ids, "held_clinic_ids": held_ids}
 
 
 class SupabaseSettingsRepository:

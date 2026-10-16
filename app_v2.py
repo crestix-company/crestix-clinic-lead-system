@@ -1,16 +1,20 @@
 """第一営業部向けローカルアプリ。importだけでは画面/DB/ネットを動かさない。"""
 from pathlib import Path
 from dataclasses import asdict, replace
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import pandas as pd
 import streamlit as st
 from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
-from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
 from src.master.fixed_export import fixed_row
+from src.io.output_writer import csv_bytes
 from src.enrichment.kouseikyoku_source import load_master
 from src.enrichment.doctor_license import DoctorLicenseCache,parse_license_html
 from src.enrichment.profiles import estimate_profile_age
@@ -25,6 +29,9 @@ from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.master.hp_auto_state import controller_lease_health
 from src.repository.write_backend import write_repositories_for
+from src.repository.connection_diagnostics import (
+    connection_error_category, is_database_connection_exception, safe_connection_message,
+)
 from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
 from src.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
 from src.email_research_ui import (
@@ -46,6 +53,7 @@ from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL
 from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
+_STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
@@ -80,8 +88,19 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
     "FETCH_FAILED": "Webサイト調査失敗",
     "NOT_RESEARCHED": "Webサイト未調査",
 }
-@st.cache_resource
-def store_for(path=None):
+def runtime_store_cache_key():
+    """Key the process-wide Store cache to backend/credential changes without exposing them."""
+    values = [
+        os.environ.get("CLINIC_DATA_BACKEND", ""),
+        os.environ.get("CLINIC_WRITE_BACKEND", ""),
+        os.environ.get("SUPABASE_RUNTIME_DB_URL", ""),
+    ]
+    payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
+    return hmac.new(_STORE_CACHE_SALT, payload, hashlib.sha256).hexdigest()
+
+
+@st.cache_resource(max_entries=2)
+def store_for(path=None, runtime_config_key=None):
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     if active_backend() == BACKEND_SUPABASE:
         from src.repository.runtime_store import SupabaseRuntimeStore
@@ -125,7 +144,7 @@ def show_web_research_metrics(store):
 
 def show_email_research_metrics(store):
     """Compact operational Email KPIs; values are intentionally distinct from raw candidates."""
-    from src.repository.email_database import email_repositories_for_ui, email_database_status
+    from src.repository.email_database import email_repositories_for_ui, email_database_ui_status
 
     repositories = email_repositories_for_ui()
     labels = [
@@ -140,7 +159,7 @@ def show_email_research_metrics(store):
         columns = st.columns(4)
         for column, (label, _, definition) in zip(columns, labels):
             column.metric(label, "未接続", help=definition)
-        st.caption(email_database_status().message)
+        st.caption(email_database_ui_status().message)
         return
     summary = repo.summary()
     human_summary = human_repo.summary() if human_repo is not None and human_repo.available() else {}
@@ -828,7 +847,10 @@ def simple_workflow_ui(store, demo):
     metrics = store.metrics()
 
     st.header("上から順に進めるだけ")
-    st.caption("普段使う操作だけを4ステップにまとめました。細かい設定・手動修正は「詳細設定」にあります。")
+    st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
+
+    st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
+    import_ui_comdesk_step(store, demo)
 
     st.subheader("現在のデータ状況")
     cols = st.columns(2)
@@ -846,11 +868,11 @@ def simple_workflow_ui(store, demo):
             report_import(result)
             st.rerun()
 
-    st.subheader("1. 厚生局データを取り込む")
+    st.subheader("Step2：厚生局データを取り込む")
 
-    st.subheader("2. 別途の拡張機能（Google Maps Collector）で、1.で取り込んだデータを入れる（手動）")
+    st.subheader("Step3：Google Maps Collector")
 
-    st.subheader("3. 拡張機能で抽出したデータを戻す")
+    st.subheader("Step4：Google Maps結果を取り込む")
 
     maps_upload = st.file_uploader(
         "③ Google Maps収集結果CSVをアップロード",
@@ -873,7 +895,7 @@ def simple_workflow_ui(store, demo):
             )
             st.rerun()
 
-    st.subheader("4. HP内容を自動調査")
+    st.subheader("Step5：HP・Email自動調査")
     if getattr(store, "is_supabase_runtime", False):
         prefs = store.prefectures()
     else:
@@ -993,6 +1015,14 @@ def simple_workflow_ui(store, demo):
     email_human_review_card(store)
     email_auto_research_card(store, demo=demo)
 
+    st.subheader("Step6：Comdesk未連携医院CSVを出力")
+    st.caption("Clinic MasterのComdesk取込履歴・照合保留・紐付け状態を確認し、未連携が確定した営業対象医院だけを出力します。")
+    render_unlinked_comdesk_export(store, demo)
+
+    st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
+    st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
+    import_ui_comdesk_step(store, demo, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
+
     if current:
         st.write("現在の調査")
         st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
@@ -1035,9 +1065,77 @@ def simple_workflow_ui(store, demo):
                 st.rerun()
 
     st.caption(
-        "営業対象の確認・Comdesk出力は「営業対象・出力」、"
-        "UUID付きComdeskデータの取込は「詳細設定」から行えます。"
+        "営業対象・Comdesk出力は従来どおり「営業対象・出力」から利用できます。"
     )
+
+
+def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=demo)
+    if not upload:
+        return
+    table = upload_table(upload, key_prefix)
+    inferred = infer_comdesk_columns(table)
+    labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+              "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
+              "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
+    mapping = {}
+    with st.expander("列の対応を確認", expanded=False):
+        st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+        for field, label in labels.items():
+            choices = [None]+list(range(len(table.headers)))
+            selected = inferred.get(field)
+            mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
+                format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
+        preview = table.data.head(5).copy()
+        preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
+        st.dataframe(preview, hide_index=True)
+    if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
+        with st.spinner("Comdeskデータを照合・登録しています…"):
+            result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+        report_import(result)
+
+
+def render_unlinked_comdesk_export(store, demo):
+    candidates = unlinked_comdesk_candidates(store)
+    st.metric("Comdesk未連携確定医院", f"{len(candidates):,}件", help="Comdesk取込履歴・照合保留・紐付け状態を確認し、営業対象外と分類不能の医院を除きます。")
+    with st.expander("未連携医院一覧", expanded=False):
+        st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
+    signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, store.revision()], ensure_ascii=False)
+    if st.button(f"未連携確定 {len(candidates):,}件をComdesk CSVで出力", key="simple_unlinked_comdesk_export", disabled=demo or not candidates, use_container_width=True):
+        rows = [new_export_row(r, COMDESK_HEADERS, {"clinic_name":2,"phone":9,"prefecture":5,"address":6}) for r in candidates]
+        if hasattr(store, "_attach_export_metadata"):
+            rows = store._attach_export_metadata(candidates, rows)
+        else:
+            rows = [
+                [*row, str(clinic.get("effective_hp_rank") or "").strip().upper()
+                 if str(clinic.get("effective_hp_rank") or "").strip().upper() in {"A", "B", "C", "D"} else "", ""]
+                for clinic, row in zip(candidates, rows)
+            ]
+        st.session_state["simple_unlinked_comdesk_output"] = {"signature":signature,"content":csv_bytes(COMDESK_EXPORT_HEADERS, rows)}
+    output = st.session_state.get("simple_unlinked_comdesk_output")
+    if output and output["signature"] == signature:
+        st.download_button("未連携医院CSVをダウンロード", output["content"], "comdesk_unlinked_clinics.csv", mime="text/csv", key="simple_unlinked_comdesk_download")
+
+
+def unlinked_comdesk_candidates(store, page_size=50000):
+    # Restrict output to explicitly sales-eligible tiers. Missing classification fails closed.
+    filters = Filters(active_only=False, hp_only=False, sales_tiers=["A", "B", "C"])
+    total = store.count(filters)
+    clinics = []
+    for offset in range(0, total, page_size):
+        clinics.extend(store.query(filters, limit=page_size, offset=offset))
+
+    linkage = store.comdesk_linkage_state()
+    imported_ids = set(linkage["imported_clinic_ids"])
+    held_ids = set(linkage["held_clinic_ids"])
+    held_ids.update(int(r["id"]) for r in clinics if r.get("merge_hold"))
+    candidates = [
+        r for r in clinics
+        if not str(r.get("uuid") or "").strip()
+        and int(r["id"]) not in imported_ids
+        and int(r["id"]) not in held_ids
+    ]
+    return candidates
 
 def simple_sales_ui(store, demo=False):
     st.header("営業対象・Comdesk出力")
@@ -1355,6 +1453,12 @@ def settings_ui(store):
             st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
 
 
+def _show_supabase_startup_error(exc):
+    st.error(safe_connection_message(exc, service="Clinic/HP"))
+    st.caption("設定読込を統一するため、scripts/launch_v2.py またはOS別の正式ランチャーから起動してください。")
+    st.stop()
+
+
 def main():
     st.set_page_config(page_title="クリニック営業マスター", page_icon="📋", layout="wide")
     st.title("クリニック営業マスター")
@@ -1372,6 +1476,7 @@ def main():
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
     if demo:
         path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
     elif active_backend() != BACKEND_SUPABASE:
@@ -1381,8 +1486,17 @@ def main():
             st.stop()
     else:
         path = None
-    store = store_for(str(path) if path is not None else None)
-    write_repositories_for(store).clinics.refresh_age_model()
+    if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
+        required_keys = ("CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL")
+        if any(not os.environ.get(key, "").strip() for key in required_keys):
+            _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
+    try:
+        store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
+        write_repositories_for(store).clinics.refresh_age_model()
+    except Exception as exc:
+        if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
+            _show_supabase_startup_error(exc)
+        raise
 
     hp_human_review_sidebar(store)
     email_research_sidebar_status(store)
@@ -1423,6 +1537,10 @@ if __name__=="__main__":
     except sqlite3.OperationalError:
         st.error("データファイルが使用中か、保存先に書き込めません。別ウィンドウの処理が終わってから再操作してください。")
     except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        st.error(f"処理を完了できませんでした。ファイル形式・入力列・保存先を確認してください。エラー詳細: {user_error_text(exc)}")
+        if is_database_connection_exception(exc):
+            st.error(safe_connection_message(exc, service="Clinic/HP"))
+        else:
+            # Driver exceptions may embed host, user, or credential fragments. Do not
+            # print tracebacks or interpolate raw errors into the Streamlit page.
+            category = connection_error_category(exc)
+            st.error(f"処理を完了できませんでした（{category}）。接続状態と操作内容を確認してください。")
