@@ -67,17 +67,19 @@ async def inspect(page, row):
         # Links can live in nested wrappers, not immediate heading siblings.
         # Traverse document order between this section heading and the next
         # heading of equal or higher rank, excluding unrelated recommendations.
+        # The article cards are nested beside the header, not necessarily its
+        # direct siblings. Choose the nearest bounded container; never scan
+        # unrelated page-wide recommendations.
         urls = await section.evaluate("""h => {
-          const rank = Number(h.tagName.slice(1));
-          const candidates = [...document.querySelectorAll('h1,h2,h3,h4,h5,h6,a[href]')];
-          const start = candidates.indexOf(h);
-          const result = [];
-          for (let i = start + 1; i < candidates.length; i++) {
-            const el = candidates[i];
-            if (/^H[1-6]$/.test(el.tagName) && Number(el.tagName.slice(1)) <= rank) break;
-            if (el.matches('a[href]')) result.push(el.href);
+          let node = h.parentElement;
+          for (let depth = 0; depth < 5 && node; depth++, node = node.parentElement) {
+            const links = [...node.querySelectorAll('a[href*="/article/"]')]
+              .map(a => new URL(a.getAttribute('href'), location.origin).href);
+            const unique = [...new Set(links)];
+            if (unique.length >= 1 && unique.length <= 6) return unique;
+            if (unique.length > 6) return [];
           }
-          return result;
+          return [];
         }""")
         seen = list(dict.fromkeys(u.split("?")[0] for u in urls if ARTICLE.fullmatch(u.split("?")[0])))
         if seen:
