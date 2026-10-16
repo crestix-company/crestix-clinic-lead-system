@@ -13,7 +13,7 @@ from .article_adapter import ArticleLink, lookup_article
 from .compose import ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED
 
 DEFAULT_LIMIT = 50
-LIMIT_OPTIONS = (10, 50, 100, 200, 500, 1000)  # UI選択肢。CLIやテストの既定値は変更しない。
+LIMIT_OPTIONS = (10, 50, 100, 200, 500, 1000)  # API互換。画面では要件どおり500までを選択可能。
 MAX_LIMIT = max(LIMIT_OPTIONS)
 EMAIL_FOUND = "FOUND"
 EMAIL_MISSING = "MISSING"
@@ -30,6 +30,9 @@ class ArticleState:
     listed_url: str = ""
     example_url: str = ""
     reason: str = ""
+    evidence: str = ""
+    checked_at: str = ""
+    processing_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,8 @@ class ClinicTarget:
     director_name_source: str = DIRECTOR_MANAGER_CONFIRMED
     director_name_confirmed: bool = True
     owner_name: str = ""
+    comdesk_uuid: str = ""
+    clinic_address: str = ""
     article: ArticleState = field(default_factory=lambda: ArticleState(ARTICLE_UNCONFIRMED))
     duplicate_uuid: bool = False
 
@@ -67,11 +72,17 @@ def classify_article(clinic_uuid: str, links: list[ArticleLink]) -> ArticleState
     """
     looked = lookup_article(clinic_uuid, links)
     if looked.status == "READY" and looked.record is not None:
-        return ArticleState(ARTICLE_LISTED, looked.record.listing_url, looked.record.example_article_url)
+        return ArticleState(ARTICLE_LISTED, looked.record.listing_url, looked.record.example_article_url,
+                            evidence=looked.record.evidence or looked.record.source_row,
+                            checked_at=looked.record.checked_at,
+                            processing_version=looked.record.processing_version)
     key = (clinic_uuid or "").strip().lower()
     rows = [r for r in links if r.clinic_uuid.strip().lower() == key]
-    if rows and all(r.listing_status == "NOT_LISTED" and r.verified for r in rows):
-        return ArticleState(ARTICLE_NOT_LISTED, reason="記事JOINで未掲載確認済み")
+    if rows and all(r.listing_status == "NOT_LISTED" and r.verified and (r.evidence or r.source_row) for r in rows):
+        return ArticleState(ARTICLE_NOT_LISTED, reason="記事JOINで未掲載確認済み",
+                            evidence=" / ".join(dict.fromkeys(r.evidence or r.source_row for r in rows)),
+                            checked_at=" / ".join(dict.fromkeys(r.checked_at for r in rows if r.checked_at)),
+                            processing_version=" / ".join(dict.fromkeys(r.processing_version for r in rows if r.processing_version)))
     return ArticleState(ARTICLE_UNCONFIRMED, reason=looked.reason or "記事掲載状況が未確認")
 
 
@@ -104,7 +115,8 @@ def _email_fields(value) -> tuple[str, str]:
 
 
 def target_from_record(record: dict, *, email: str | dict | tuple = "",
-                       links: list[ArticleLink] | None = None) -> ClinicTarget:
+                       links: list[ArticleLink] | None = None,
+                       comdesk_uuid: str = "") -> ClinicTarget:
     from src.normalizer.address import extract_municipality
     from src.normalizer.clinic_name import person_from_owner
     uuid = _text(record.get("uuid"))
@@ -138,6 +150,8 @@ def target_from_record(record: dict, *, email: str | dict | tuple = "",
         director_name_source=director_source,
         director_name_confirmed=director_confirmed,
         owner_name=owner,
+        comdesk_uuid=_text(comdesk_uuid or record.get("comdesk_uuid")),
+        clinic_address=_text(record.get("address")),
         article=classify_article(uuid, links or []),
     )
 
@@ -153,10 +167,16 @@ class Selection:
 
 def select_targets(records: Iterable[dict], *, email_lookup: Callable[[list[int]], dict[int, object]],
                    links: list[ArticleLink], email_filter: str = "指定なし",
-                   article_filter: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT) -> Selection:
-    """Select rows and flag duplicate UUIDs for FAILED generation, capped at 1000."""
+                   article_filter: tuple[str, ...] = (), limit: int = DEFAULT_LIMIT,
+                   eligible_clinic_ids: set[int] | None = None,
+                   withheld_clinic_ids: set[int] | None = None) -> Selection:
+    """Select only explicit eligible IDs; withheld history is never treated as clear."""
     records = list(records)
-    limit = min(MAX_LIMIT, max(1, int(limit)))
+    limit = max(1, int(limit))
+    eligible = None if eligible_clinic_ids is None else {int(x) for x in eligible_clinic_ids}
+    withheld = {int(x) for x in (withheld_clinic_ids or set())}
+    records = [r for r in records if int(r.get("id") or 0) in eligible] if eligible is not None else records
+    records = [r for r in records if int(r.get("id") or 0) not in withheld]
     emails = email_lookup([int(r.get("id") or 0) for r in records]) if records else {}
     seen, output = {}, []
     no_uuid = duplicate = 0

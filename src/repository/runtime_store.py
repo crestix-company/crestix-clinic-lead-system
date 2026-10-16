@@ -119,6 +119,9 @@ class SupabaseRuntimeStore:
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         return self.repositories.clinics.query(filters, limit, offset, as_of)
     @_retry_closed_read_connection
+    def records_by_ids(self, clinic_ids, *, page_size=500):
+        return self.repositories.clinics.records_by_ids(clinic_ids, page_size=page_size)
+    @_retry_closed_read_connection
     def count(self, filters=None, as_of=None): return self.repositories.clinics.count(filters, as_of)
     @_retry_closed_read_connection
     def funnel(self, filters, as_of=None): return self.repositories.clinics.funnel(filters, as_of)

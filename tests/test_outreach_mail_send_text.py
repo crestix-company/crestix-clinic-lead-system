@@ -233,6 +233,7 @@ def test_csv_contains_identity_article_mail_and_status():
     rows = list(csv.DictReader(io.StringIO(to_csv_bytes(results, "前田").decode("utf-8-sig"))))
     assert list(rows[0]) == CSV_COLUMNS
     assert rows[0]["clinic_uuid"] == "uuid-001" and rows[0]["status"] == READY
+    assert rows[0]["comdesk_uuid"] == ""
     assert rows[1]["recommended_url"] in URLS and rows[1]["article_status"] == "記事なし"
     assert summarize(results) == {"total": 2, READY: 2, NEEDS_REVIEW: 0, FAILED: 0}
 
@@ -262,6 +263,8 @@ def link(uuid, status="LISTED", verified=True):
 def test_classify_article_states():
     assert classify_article("u1", [link("u1")]).status == ARTICLE_LISTED
     assert classify_article("u1", [link("u1", "NOT_LISTED")]).status == ARTICLE_NOT_LISTED
+    no_evidence = ArticleLink("u1", "NOT_LISTED", "", "", "", "", "", True)
+    assert classify_article("u1", [no_evidence]).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", [link("u1", verified=False)]).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", []).status == ARTICLE_UNCONFIRMED
     assert classify_article("u1", [link("u2", "NOT_LISTED")]).status == ARTICLE_UNCONFIRMED  # JOIN未登録≠記事なし

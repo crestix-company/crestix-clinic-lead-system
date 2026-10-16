@@ -810,6 +810,50 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
+    @_retry_closed_read_connection
+    def formal_sales_eligible_page(self, *, page: int = 1, after_clinic_id: int | None = None,
+                                   page_size: int = 500) -> dict:
+        """Stable page of the canonical email-research sales-eligible cohort.
+
+        This mirrors the Email Research listing's final_sales_eligible=true gate and is
+        intentionally read-only. The result includes Clinic IDs and exact emails only.
+        """
+        page_size = max(1, min(int(page_size), 500))
+        if not self.available():
+            raise RuntimeError("Email Research未接続のため正式対象を取得できません")
+        base = (
+            " FROM email_research.clinic_email_status s"
+            " JOIN email_research.email_candidates p"
+            " ON p.clinic_id=s.clinic_id AND p.candidate_id=s.primary_email_candidate_id"
+            " WHERE s.primary_email_candidate_id IS NOT NULL AND p.final_sales_eligible=true"
+        )
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT count(*)" + base)
+                total = int(cur.fetchone()[0] or 0)
+                pages = max(1, -(-total // page_size))
+                page = max(1, min(int(page), pages))
+                if after_clinic_id is None:
+                    cur.execute(
+                        "SELECT s.clinic_id,p.email " + base
+                        + " ORDER BY s.clinic_id ASC LIMIT %s OFFSET %s",
+                        (page_size, (page - 1) * page_size),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT s.clinic_id,p.email " + base
+                        + " AND s.clinic_id>%s ORDER BY s.clinic_id ASC LIMIT %s",
+                        (int(after_clinic_id), page_size),
+                    )
+                rows = [(int(row[0]), str(row[1] or "").strip()) for row in cur.fetchall()]
+            self._conn.commit()
+            return {"rows": rows, "total": total, "page": page,
+                    "page_size": page_size, "pages": pages,
+                    "next_after_clinic_id": rows[-1][0] if rows else after_clinic_id}
+        except Exception:
+            self._safe_rollback()
+            raise
+
     PRIMARY_LISTING_FILTER_VALUES = {
         "research_status": ("NOT_RESEARCHED", "RUNNING", "FOUND", "NO_EMAIL_FOUND", "REVIEW", "ERROR"),
         "auto_decision": ("AUTO_TRUE", "AUTO_FALSE", "REVIEW"),

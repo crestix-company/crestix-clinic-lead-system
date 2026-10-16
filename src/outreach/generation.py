@@ -209,19 +209,21 @@ def summarize(results: list[OutreachResult]) -> dict[str, int]:
 
 
 CSV_COLUMNS = [
-    "clinic_uuid", "email_candidate_id", "clinic_name", "prefecture", "to_email",
-    "article_status", "template", "recommended_title", "example_article_url", "listed_article_url",
-    "recommend_reason", "subject", "body", "phone_history_status", "director_name_source",
-    "candidate_schedule", "status", "blocker_reasons",
-    "content_ready", "gmail_ready", "gmail_blockers", "clinic_id", "municipality", "departments", "hp_rank",
-    "recipient", "director_name_confirmed", "general_addressee_approved", "is_staff", "phone_called",
-    "calendar_confirmed", "recommended_url", "candidate_2_url", "candidate_3_url", "review_reasons",
-    "template_id", "template_version", "generation_batch_id",
+    "clinic_id", "clinic_uuid", "outreach_id", "campaign_id", "generation_batch_id", "comdesk_uuid",
+    "gmail_draft_id", "gmail_message_id", "sent_at", "owner", "source", "outreach_status",
+    "clinic_name", "clinic_address", "prefecture", "municipality", "departments", "hp_rank",
+    "to_email", "email_candidate_id", "recipient", "director_name_source", "director_name_confirmed",
+    "general_addressee_approved", "is_staff", "phone_called", "phone_history_status", "calendar_confirmed",
+    "article_status", "article_evidence", "article_checked_at", "article_processing_version",
+    "template", "listed_article_url", "example_article_url", "recommended_title", "recommended_url",
+    "recommend_reason", "candidate_2_url", "candidate_3_url", "subject", "body", "candidate_schedule",
+    "status", "blocker_reasons", "review_reasons", "content_ready", "gmail_ready", "gmail_blockers",
+    "template_id", "template_version",
 ]
 
 
-def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id: str = "", *,
-                 calendar_confirmed: bool = False) -> bytes:
+def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id: str = "",
+                 campaign_id: str = "", *, calendar_confirmed: bool = False) -> bytes:
     """``generation_batch_id`` is optional metadata only (see GenerationSettings) -- no A/B
     selection or send-tracking is implemented; this only lets a future analysis group rows
     that came from the same 一括生成 run.
@@ -233,9 +235,16 @@ def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id:
         t, recs = r.target, r.recommendations
         writer.writerow({
             "clinic_id": t.clinic_id, "clinic_uuid": t.clinic_uuid,
-            "email_candidate_id": t.email_candidate_id, "clinic_name": t.clinic_name,
-            "prefecture": t.prefecture, "municipality": t.municipality, "departments": "、".join(t.departments),
+            "outreach_id": uuid.uuid5(uuid.NAMESPACE_URL,
+                                       f"clinic-outreach:{t.clinic_id}:{campaign_id}").hex if campaign_id else "",
+            "campaign_id": campaign_id, "generation_batch_id": generation_batch_id,
+            "comdesk_uuid": t.comdesk_uuid, "clinic_name": t.clinic_name,
+            "gmail_draft_id": "", "gmail_message_id": "", "sent_at": "", "owner": staff,
+            "source": "generation_csv", "outreach_status": "GENERATED" if r.status == READY else "HOLD",
+            "clinic_address": t.clinic_address, "prefecture": t.prefecture, "municipality": t.municipality,
+            "departments": "、".join(t.departments),
             "hp_rank": t.hp_rank, "to_email": t.email if t.email_status == EMAIL_FOUND else "",
+            "email_candidate_id": t.email_candidate_id,
             "recipient": f"院長 {t.director_name} 様" if t.director_name else "院長先生",
             "director_name_source": t.director_name_source,
             "director_name_confirmed": "TRUE" if t.director_name_confirmed and t.director_name else "FALSE",
@@ -244,6 +253,9 @@ def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id:
             "phone_history_status": "VERIFIED_TODAY" if r.called else "UNVERIFIED",
             "calendar_confirmed": "TRUE" if calendar_confirmed else "FALSE",
             "article_status": ARTICLE_STATUS_LABELS.get(t.article.status, t.article.status),
+            "article_evidence": t.article.evidence or t.article.reason,
+            "article_checked_at": t.article.checked_at,
+            "article_processing_version": t.article.processing_version,
             "template": r.template, "listed_article_url": r.listed_url, "example_article_url": r.example_url,
             "recommended_title": recs[0].article.title if recs else "",
             "recommended_url": recs[0].article.url if recs else "",
@@ -257,7 +269,6 @@ def to_csv_bytes(results: list[OutreachResult], staff: str, generation_batch_id:
             "gmail_ready": "TRUE" if r.gmail_ready else "FALSE",
             "gmail_blockers": " / ".join(r.gmail_blockers),
             "template_id": TEMPLATE_IDS.get(r.template, ""), "template_version": TEMPLATE_VERSIONS.get(r.template, ""),
-            "generation_batch_id": generation_batch_id,
         })
     return buffer.getvalue().encode("utf-8-sig")
 

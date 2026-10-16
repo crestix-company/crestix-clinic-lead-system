@@ -25,6 +25,9 @@ class ArticleLink:
     source_row: str
     article_id: str
     verified: bool
+    evidence: str = ""
+    checked_at: str = ""
+    processing_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -101,5 +104,8 @@ def load_article_links_csv(path: str | Path) -> list[ArticleLink]:
                 source_row=(row["source_row"] or "").strip(),
                 article_id=(row["article_id"] or "").strip(),
                 verified=flag == "true",
+                evidence=(row.get("evidence") or "").strip(),
+                checked_at=(row.get("checked_at") or "").strip(),
+                processing_version=(row.get("processing_version") or "").strip(),
             ))
     return rows

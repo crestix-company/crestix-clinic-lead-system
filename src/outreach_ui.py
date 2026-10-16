@@ -21,10 +21,11 @@ from src.outreach.compose import (
     ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_STATUS_LABELS, ARTICLE_UNCONFIRMED,
 )
 from src.outreach.generation import (
-    FAILED, NEEDS_REVIEW, READY, REQUIRED_STAFF, STATUS_LABELS, GenerationSettings, generate_batch,
+    FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
     summarize, to_csv_bytes,
 )
-from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, LIMIT_OPTIONS, select_targets
+from src.outreach.staff import load_staff
+from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, LIMIT_OPTIONS, select_targets, valid_email
 from src.utils.date_utils import today_japan
 
 ARTICLE_MASTER_ENV = "OUTREACH_ARTICLE_MASTER_CSV"
@@ -32,7 +33,6 @@ ARTICLE_JOIN_ENV = "OUTREACH_ARTICLE_JOIN_CSV"
 ARTICLE_COLUMNS = {"clinic_uuid", "listing_status", "example_article_url", "listing_url",
                    "listing_kind", "source_row", "article_id", "verified"}
 HP_RANK_OPTIONS = {"指定なし": [], "A+B": ["A", "B"], "A": ["A"], "B": ["B"], "C": ["C"], "D": ["D"]}
-SCAN_POOL = 300  # 上限医院数ぶんの走査余地（重複・フィルタ除外を見込んで最低4倍は確保する）
 K = "outreach_"  # session_state key prefix (既存画面のキーと衝突させない)
 
 
@@ -78,6 +78,8 @@ def _load_links(source) -> list[ArticleLink]:
         example_article_url=(r["example_article_url"] or "").strip(), listing_url=(r["listing_url"] or "").strip(),
         listing_kind=(r["listing_kind"] or "").strip(), source_row=(r["source_row"] or "").strip(),
         article_id=(r["article_id"] or "").strip(), verified=_bool(r["verified"]),
+        evidence=(r.get("evidence") or "").strip(), checked_at=(r.get("checked_at") or "").strip(),
+        processing_version=(r.get("processing_version") or "").strip(),
     ) for r in reader]
 
 
@@ -88,33 +90,94 @@ def _prefectures(store):
         return [r[0] for r in c.execute("SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture")]
 
 
-def _email_lookup(ids):
-    """Email調査のPrimary Email（Ownership guard通過分のみ）をREAD ONLYで1クエリ取得。"""
+def _formal_email_page(page=1, after_clinic_id=None):
+    """Canonical formal eligibility only; any connection/query failure stops extraction."""
     st.session_state.pop(K + "email_error", None)
-    if not ids:
-        return {}
     try:
         from src.repository.email_database import email_repositories_for_ui
         bundle = email_repositories_for_ui()
         repo = bundle.email_research if bundle is not None else None
         if repo is None or not repo.available():
-            st.session_state[K + "email_error"] = "未接続"
-            return {}
-        wanted = set(ids)
-        return {int(r["clinic_id"]): {
-                    "email": str(r.get("email") or "").strip(),
-                    "candidate_id": str(r.get("candidate_id") or "").strip(),
-                }
-                for r in repo.primary_listing(limit=1_000_000)
-                if int(r["clinic_id"]) in wanted and r.get("final_sales_eligible") is not False}
+            raise RuntimeError("Email Research未接続")
+        return repo.formal_sales_eligible_page(page=page, after_clinic_id=after_clinic_id, page_size=500)
     except Exception as exc:  # Email DB未接続でも画面は止めない（未取得扱い）
         st.session_state[K + "email_error"] = type(exc).__name__
-        return {}
+        raise
+
+
+def _all_formal_email_rows():
+    rows, after, page, seen_ids = [], None, 1, set()
+    first = _formal_email_page(page, after_clinic_id=after)
+    rows.extend(first["rows"])
+    seen_ids.update(int(row[0]) for row in first["rows"])
+    after = first.get("next_after_clinic_id")
+    while len(rows) < int(first["total"]):
+        page += 1
+        current = _formal_email_page(page, after_clinic_id=after)
+        if int(current["total"]) != int(first["total"]):
+            raise RuntimeError("Email Researchの対象件数が取得中に変化しました。再抽出してください")
+        if not current["rows"] or current.get("next_after_clinic_id") == after:
+            raise RuntimeError("Email Researchページング中に対象を取りこぼしました")
+        rows.extend(current["rows"])
+        after = current["next_after_clinic_id"]
+        batch_ids = [int(row[0]) for row in current["rows"]]
+        if len(set(batch_ids)) != len(batch_ids) or seen_ids.intersection(batch_ids):
+            raise RuntimeError("Email Researchページングで重複clinic_idを検出しました")
+        seen_ids.update(batch_ids)
+    if len(rows) != int(first["total"]):
+        raise RuntimeError("Email Researchの総件数と取得件数が一致しません")
+    return int(first["total"]), rows
+
+
+def _clinic_records_for_ids(store, ids):
+    """Fetch eligible clinic IDs in stable ID order through bounded READ ONLY pages."""
+    if getattr(store, "is_supabase_runtime", False):
+        return store.repositories.clinics.records_by_ids(sorted(ids), page_size=500)
+    if hasattr(store, "records_by_ids"):
+        return store.records_by_ids(sorted(ids), page_size=500)
+    from src.master.filters import Filters
+    wanted = set(int(x) for x in ids)
+    filters = Filters(active_only=False, hp_only=False)
+    found, offset = {}, 0
+    while wanted - found.keys():
+        page = store.query(filters, limit=500, offset=offset)
+        if not page:
+            break
+        for row in page:
+            cid = int(row.get("id") or 0)
+            if cid in wanted:
+                found[cid] = row
+        offset += len(page)
+        if len(page) < 500:
+            break
+    return [found[cid] for cid in sorted(wanted & found.keys())]
 
 
 # ---------- tabs ----------
 
-def _tab_targets(store, demo):
+def _tab_targets(store, demo, formal_email_page=None):
+    formal_email_page = formal_email_page or _formal_email_page
+    formal_count = st.session_state.get(K + "formal_count")
+    try:
+        formal_count = int(formal_email_page(1)["total"])
+        st.session_state[K + "formal_count"] = formal_count
+    except Exception:
+        st.error("Email Researchの正式利用可能数を取得できません。接続・権限・状態を確認するまで抽出を停止します。")
+        return
+    st.metric("正式なEmail営業利用可能数（動的）", f"{formal_count:,}")
+    ledger = None
+    ledger_path = (os.environ.get("OUTREACH_STATE_DB_PATH") or "").strip()
+    if ledger_path:
+        try:
+            from src.outreach.history import OutreachLedger
+            ledger = OutreachLedger(ledger_path)
+            counts = ledger.counts()
+            st.metric("下書き済み", counts.get("DRAFTED", 0))
+            st.metric("送付済み", counts.get("SENT", 0))
+        except Exception:
+            st.error("明示設定された別管理の送付履歴台帳を開けません。履歴操作を停止します。")
+    else:
+        st.caption("送付履歴台帳: 未設定（ローカル自動作成・DBフォールバックなし）。")
     st.markdown("#### 記事データ（READ ONLY）")
     st.caption(f"アップロードがない場合は環境変数 {ARTICLE_MASTER_ENV} / {ARTICLE_JOIN_ENV} のCSVを読み取ります。原本は変更しません。")
     cols = st.columns(2)
@@ -133,41 +196,77 @@ def _tab_targets(store, demo):
                f"記事JOIN: {len(links):,}行{f'（{join_name}）' if join_name else '（任意・未読込）'}")
     st.caption("記事あり＝掲載確認済み／記事なし＝未掲載確認済み（いずれも記事JOIN CSVの検証済み行のみ）／"
                "それ以外は未確認。JOIN CSVがなくても、未確認として地域・標榜科目から記事例を選び安全な文面で生成します"
-               "（掲載済みとは記載しません）。JOINに無いだけで記事なしとは判定しません。")
+               "（未確認はNEEDS_REVIEW）。JOINに無いだけで記事なしとは判定しません。")
 
-    st.markdown("#### 絞り込み（Clinic Master・READ ONLY）")
-    prefs = _prefectures(store)
-    from src.normalizer.departments import DEPARTMENTS
-    c1, c2 = st.columns(2)
-    pref = c1.multiselect("都道府県", prefs, default=["東京都"] if "東京都" in prefs else [], key=K + "pref")
-    city_text = c2.text_input("市区町村（複数は読点区切り）", key=K + "city")
-    deps = c1.multiselect("標榜診療科", DEPARTMENTS, key=K + "deps")
-    rank_label = c2.selectbox("HPランク（HP ABC判定）", list(HP_RANK_OPTIONS), index=0 if demo else 1, key=K + "rank")
-    email_filter = c1.radio("メール", ["指定なし", "取得済み", "未取得"], horizontal=True, key=K + "email_filter")
-    article_filter = c2.multiselect(
-        "記事", [ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED],
-        format_func=ARTICLE_STATUS_LABELS.get, key=K + "article_filter")
-    limit = st.selectbox("生成件数（上限医院数）", LIMIT_OPTIONS,
-                         index=LIMIT_OPTIONS.index(DEFAULT_LIMIT), key=K + "limit")
-
-    if st.button("対象医院を抽出", type="primary", key=K + "select"):
-        from src.master.filters import Filters
-        from src.master.scope import SCOPE_ALL
-        filters = Filters(
-            active_only=True, hp_only=False, prefectures=pref,
-            municipalities=[x.strip() for x in city_text.replace("、", ",").split(",") if x.strip()],
-            departments=deps, effective_ranks=HP_RANK_OPTIONS[rank_label], scope=SCOPE_ALL,
-        )
-        # 重複・フィルタ除外を見込み、選んだ件数ぶんの余地を持って走査する（最低SCAN_POOL件）。
-        scan_pool = max(SCAN_POOL, int(limit) * 4)
+    from src.outreach.history import HistoryInputError, parse_history_csv
+    st.markdown("#### 外部履歴（標準CSV契約・未提供は全件保留）")
+    st.caption("既存スプレッドシート/Gmailの実データ構造は推測しません。標準列に明示変換した履歴CSVを照合してください。未照合は新規候補にしません。")
+    history_upload = st.file_uploader("照合済み履歴CSV（任意・標準列）", type=["csv"], key=K + "history")
+    campaign_id = st.text_input("Campaign ID（正確な履歴照合に必要）", key=K + "campaign_id").strip()
+    history_rows = []
+    history_verified = False
+    if history_upload:
         try:
-            records = store.query(filters, limit=scan_pool)  # READ ONLY
+            history_rows = parse_history_csv(history_upload.getvalue())
+            history_verified = True
+            st.success(f"履歴 {len(history_rows):,}行を標準列で読込済み")
+        except HistoryInputError as exc:
+            st.error(f"履歴CSVを照合できません: {exc}")
+    if history_verified and campaign_id:
+        campaign_rows = [row for row in history_rows if row.campaign_id == campaign_id]
+        known_statuses = [row.status for row in campaign_rows]
+        cols = st.columns(3)
+        cols[0].metric("未送付（履歴で未着手）", sum(status in {"NOT_STARTED", "ARTICLE_VERIFIED"} for status in known_statuses))
+        cols[1].metric("下書き済み", sum(status == "DRAFTED" for status in known_statuses))
+        cols[2].metric("送付済み", sum(status == "SENT" for status in known_statuses))
+    st.markdown("#### 抽出条件（正式Email利用可医院から）")
+    limit = st.selectbox("抽出件数", (10, 50, 100, 200, 500),
+                         index=LIMIT_OPTIONS.index(DEFAULT_LIMIT), key=K + "limit")
+    if st.button("対象医院を抽出", type="primary", key=K + "select"):
+        try:
+            first = formal_email_page(1, after_clinic_id=None)
+            email_rows = list(first["rows"])
+            seen_ids = {int(row[0]) for row in first["rows"]}
+            after = first.get("next_after_clinic_id")
+            while len(email_rows) < int(first["total"]):
+                page_num = len(email_rows) // max(1, int(first["page_size"])) + 1
+                page_data = formal_email_page(page_num, after_clinic_id=after)
+                if int(page_data["total"]) != int(first["total"]):
+                    raise RuntimeError("Email Researchの対象件数が取得中に変化しました")
+                email_rows.extend(page_data["rows"])
+                if not page_data["rows"] or page_data.get("next_after_clinic_id") == after:
+                    raise RuntimeError("Email Researchページングで取りこぼしが発生しました")
+                after = page_data["next_after_clinic_id"]
+                batch_ids = [int(row[0]) for row in page_data["rows"]]
+                if len(set(batch_ids)) != len(batch_ids) or seen_ids.intersection(batch_ids):
+                    raise RuntimeError("Email Researchページングで重複clinic_idを検出しました")
+                seen_ids.update(batch_ids)
+            if len(email_rows) != int(first["total"]):
+                raise RuntimeError("Email Researchの総件数と取得件数が一致しません")
+            total = int(first["total"])
+            email_by_id = {cid: email for cid, email in email_rows if valid_email(email)}
+            records = _clinic_records_for_ids(store, email_by_id)
         except Exception as exc:
-            st.error(f"Clinic Masterの取得に失敗しました: {exc}")
+            st.error(f"正式Email対象またはClinic Masterの取得に失敗しました。抽出を停止しました（{type(exc).__name__}）。")
             return
-        selection = select_targets(records, email_lookup=_email_lookup, links=links,
-                                   email_filter=email_filter, article_filter=tuple(article_filter),
-                                   limit=int(limit))
+        from src.outreach.history import email_collisions, reconcile_history
+        blocked = set()
+        if history_verified:
+            uuid_by_id = {int(record.get("id") or 0): str(record.get("uuid") or "") for record in records}
+            blocked = {cid for cid, _email in email_rows
+                       if reconcile_history(cid, uuid_by_id.get(cid, ""), campaign_id, history_rows)[0]
+                       not in {"NOT_STARTED", "ARTICLE_VERIFIED"}}
+            blocked |= email_collisions(email_rows)
+            if ledger is not None:
+                blocked |= {cid for cid, status in ledger.campaign_statuses(campaign_id).items()
+                            if status in {"DRAFTED", "SENT", "REPLY_RECEIVED", "APPOINTMENT", "EXCLUDED", "HOLD", "GENERATED"}}
+        else:
+            blocked = {cid for cid, _email in email_rows}
+        if not campaign_id:
+            blocked = set(email_by_id)
+        selection = select_targets(records, email_lookup=lambda ids: {cid: email_by_id[cid] for cid in ids if cid in email_by_id},
+                                   links=links, limit=int(limit), eligible_clinic_ids=set(email_by_id),
+                                   withheld_clinic_ids=blocked)
         st.session_state[K + "selection"] = selection
         st.session_state[K + "requested_limit"] = int(limit)
         st.session_state.pop(K + "results", None)
@@ -176,14 +275,15 @@ def _tab_targets(store, demo):
     if selection is None:
         return
     requested = st.session_state.get(K + "requested_limit", DEFAULT_LIMIT)
-    if st.session_state.get(K + "email_error"):
-        st.caption("Email調査DBに接続できないため、メールは全件「未取得」扱いです。")
-    st.success(f"対象 {len(selection.targets)}医院（走査 {selection.scanned}件／UUIDなし除外 {selection.skipped_no_uuid}件"
+    if not history_verified or not campaign_id:
+        st.warning("履歴照合CSVとCampaign IDの両方が必要です。未照合医院は新規候補にしません。")
+    st.success(f"対象 {len(selection.targets)}医院（正式Email対象走査 {selection.scanned}件／UUIDなし除外 {selection.skipped_no_uuid}件"
                f"／UUID重複検出 {selection.skipped_duplicate}件{'／上限で打ち切り' if selection.truncated else ''}）")
     if not selection.truncated and len(selection.targets) < requested:
         st.caption(f"指定件数{requested}件に対し、条件に一致する医院は実際には{len(selection.targets)}件でした。")
     st.dataframe(pd.DataFrame([{
-        "医院名": t.clinic_name, "Clinic UUID": t.clinic_uuid, "都道府県": t.prefecture, "市区町村": t.municipality,
+        "医院名": t.clinic_name, "Clinic UUID": t.clinic_uuid, "Comdesk UUID": t.comdesk_uuid,
+        "都道府県": t.prefecture, "市区町村": t.municipality,
         "標榜科": "、".join(t.departments), "HPランク": t.hp_rank,
         "メール": "取得済み" if t.email_status == EMAIL_FOUND else "未取得",
         "記事": ARTICLE_STATUS_LABELS[t.article.status],
@@ -196,8 +296,17 @@ def _tab_generate():
     if not selection or not selection.targets:
         st.info("先に「① 対象選択」で対象医院を抽出してください。")
         return
-    staff = REQUIRED_STAFF
-    st.text_input("差出人名", staff, disabled=True, key=K + "staff_fixed")
+    campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+    ledger_path = (os.environ.get("OUTREACH_STATE_DB_PATH") or "").strip()
+    if not campaign_id or not ledger_path:
+        st.warning("文章生成にはCampaign IDと明示設定された別管理の履歴台帳が必要です。台帳未設定時は重複防止のため生成を停止します。")
+    staff_config = load_staff()
+    for error in staff_config.errors:
+        st.warning(f"IS担当者設定: {error}")
+    if not staff_config.names:
+        st.caption(f"IS担当者は {staff_config.path.name} に登録すると選択肢に表示されます（コード修正不要）。")
+    choice = st.selectbox("IS担当者", list(staff_config.names) + ["（手入力）"], key=K + "staff_choice")
+    staff = st.text_input("IS担当者名（手入力）", key=K + "staff_manual") if choice == "（手入力）" else choice
 
     st.markdown("##### 日程候補")
     c1, c2, c3 = st.columns(3)
@@ -211,18 +320,9 @@ def _tab_generate():
         cursor += timedelta(days=1)
     dates = st.multiselect("候補日（平日）", weekdays, default=weekdays[:5], key=K + "dates",
                            format_func=lambda d: f"{d.month}/{d.day}（{'月火水木金土日'[d.weekday()]}）")
-    calendar_confirmed = st.checkbox(
-        "候補日時を髙原のGoogleカレンダーまたは本人予定と照合済み",
-        key=K + "calendar_confirmed",
-    )
-    provisional_approved = st.checkbox(
-        "関連記事紹介型テンプレートをGmail保存前の最終確認済み",
-        key=K + "provisional_approved",
-    )
 
     st.markdown("##### 電話連絡の事実")
-    st.caption("ここで選択した医院だけに「本日お電話させていただき…」の文を入れます。"
-               "未選択の医院は電話を示唆しない中立文へ自動分岐します。")
+    st.caption("ここで選択した医院だけに「本日お電話させていただき…」の文を入れます。未選択の医院には記載しません。")
     labels = {t.clinic_uuid: f"{t.clinic_name}（{t.clinic_uuid[:8]}…）" for t in selection.targets}
     called = st.multiselect("本日電話し、メール送付を案内された医院", list(labels), format_func=labels.get, key=K + "called")
 
@@ -230,13 +330,11 @@ def _tab_generate():
     st.caption("記事判定: " + "　".join(f"{ARTICLE_STATUS_LABELS[s]} {n}件" for s, n in counts.items())
                + f"　｜記事原本 {len(articles):,}件から第一推奨1件＋候補最大3件を選定")
     if not articles:
-        st.warning("記事原本CSVが未読込です。推奨記事を選定できない医院はNEEDS_REVIEWになります。")
+        st.warning("記事原本CSVが未読込です。推奨記事を選定できないため、記事あり以外はFAILEDになります。")
     if st.button(f"{len(selection.targets)}医院の文章を一括生成", type="primary", key=K + "generate",
-                 disabled=not (staff or "").strip() or not dates):
+                 disabled=not (staff or "").strip() or not dates or not campaign_id or not ledger_path):
         settings = GenerationSettings(staff=staff.strip(), dates=tuple(sorted(dates)), start_time=start_time,
-                                      end_time=end_time, called_uuids=frozenset(called),
-                                      calendar_confirmed=calendar_confirmed,
-                                      provisional_template_approved=provisional_approved)
+                                      end_time=end_time, called_uuids=frozenset(called))
         total = len(selection.targets)
         progress = st.progress(0, text=f"生成中… 0/{total}件")
 
@@ -245,8 +343,24 @@ def _tab_generate():
 
         results = generate_batch(selection.targets, articles, settings, on_progress=_on_progress)
         progress.empty()
+        ledger_path = (os.environ.get("OUTREACH_STATE_DB_PATH") or "").strip()
+        if ledger_path:
+            try:
+                from src.outreach.history import OutreachLedger
+                ledger = OutreachLedger(ledger_path)
+                for result in results:
+                    if result.status != FAILED:
+                        ledger.record_generation(clinic_id=result.target.clinic_id,
+                                                 clinic_uuid=result.target.clinic_uuid,
+                                                 campaign_id=st.session_state.get(K + "campaign_id", "").strip(),
+                                                 generation_batch_id=settings.generation_batch_id,
+                                                 owner=settings.staff)
+            except Exception as exc:
+                st.error(f"別管理の履歴台帳への記録に失敗しました。CSVを送付済み扱いにはしません（{type(exc).__name__}）。")
         st.session_state[K + "results"] = (settings, results)
         st.success("生成しました。「③ プレビュー」「④ 生成結果」で確認してください。")
+    if not (staff or "").strip():
+        st.caption("IS担当者を指定すると生成できます。")
 
 
 def _highlight(row):
@@ -265,6 +379,7 @@ def _tab_preview():
     shown = [r for r in results if r.status in status_filter]
     frame = pd.DataFrame([{
         "判定": STATUS_LABELS[r.status], "医院名": r.target.clinic_name, "Clinic UUID": r.target.clinic_uuid,
+        "Comdesk UUID": r.target.comdesk_uuid,
         "宛先": r.target.email or "（未取得）", "記事": ARTICLE_STATUS_LABELS[r.target.article.status],
         "おすすめ記事": r.first.article.title if r.first else "", "要確認理由": " / ".join(r.reasons),
     } for r in shown])
@@ -285,9 +400,9 @@ def _tab_preview():
     c1, c2 = st.columns(2)
     c1.text_input("医院名", r.target.clinic_name, disabled=True, key=K + f"pv_name_{uid}")
     c2.text_input("Clinic UUID", uid, disabled=True, key=K + f"pv_uuid_{uid}")
+    c1.text_input("Comdesk UUID", r.target.comdesk_uuid or "（なし）", disabled=True, key=K + f"pv_comdesk_{uid}")
     c1.text_input("宛先メールアドレス", r.target.email or "（未取得・要確認）", disabled=True, key=K + f"pv_to_{uid}")
     c2.text_input("IS担当者", settings.staff, disabled=True, key=K + f"pv_staff_{uid}")
-    c1.text_input("院長名の出典", r.target.director_name_source, disabled=True, key=K + f"pv_director_source_{uid}")
     c1.text_input("記事ステータス", ARTICLE_STATUS_LABELS[r.target.article.status], disabled=True, key=K + f"pv_art_{uid}")
     c2.text_input("電話連絡文", "あり（本日電話済み）" if r.called else "なし", disabled=True, key=K + f"pv_call_{uid}")
     if r.recommendations:
@@ -323,18 +438,44 @@ def _tab_results():
     st.download_button(
         "CSVダウンロード（医院・記事・宛先・件名・本文・判定）",
         to_csv_bytes(results, settings.staff, settings.generation_batch_id,
-                     calendar_confirmed=settings.calendar_confirmed),
+                     st.session_state.get(K + "campaign_id", "").strip()),
         f"mail_send_text_{today_japan():%Y%m%d}.csv", mime="text/csv",
         key=K + "download", use_container_width=True)
     st.caption("CSV出力のみです。Gmail下書き作成・メール送信は行いません。")
+    ledger_path = (os.environ.get("OUTREACH_STATE_DB_PATH") or "").strip()
+    if ledger_path:
+        st.caption("下書き・送付の状態は、Gmail連携を行わず、別管理の台帳へ担当者が取り込んだ事実として記録します。")
+        campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+        if campaign_id:
+            selected = st.selectbox("履歴を更新する医院", range(len(results)),
+                                    format_func=lambda i: f"{results[i].target.clinic_name}（Clinic ID {results[i].target.clinic_id}）",
+                                    key=K + "history_target")
+            c1, c2 = st.columns(2)
+            status = c1.selectbox("送付状態", ["DRAFTED", "SENT", "REPLY_RECEIVED", "APPOINTMENT", "EXCLUDED", "HOLD"], key=K + "history_status")
+            owner = c2.text_input("記録担当者", key=K + "history_owner")
+            c1.text_input("Gmail Draft ID（手入力）", key=K + "gmail_draft_id")
+            c2.text_input("Gmail Message ID（手入力）", key=K + "gmail_message_id")
+            sent_at = st.text_input("送付日時（送付済みの場合・手入力）", key=K + "sent_at")
+            if st.button("別管理台帳へ状態を記録", key=K + "save_history"):
+                result = results[selected]
+                try:
+                    from src.outreach.history import OutreachLedger
+                    OutreachLedger(ledger_path).record_gmail_metadata(
+                        clinic_id=result.target.clinic_id, campaign_id=campaign_id, status=status,
+                        gmail_draft_id=st.session_state.get(K + "gmail_draft_id", "").strip(),
+                        gmail_message_id=st.session_state.get(K + "gmail_message_id", "").strip(),
+                        sent_at=sent_at.strip(), owner=owner.strip(), source="manual_ui")
+                    st.success("状態を記録しました。Gmailへの接続・送信操作は行っていません。")
+                except Exception as exc:
+                    st.error(f"履歴を記録できませんでした（{type(exc).__name__}）。")
 
 
-def outreach_email_page(store, demo=False):
+def outreach_email_page(store, demo=False, *, formal_email_page=None):
     st.header("メール送付文章")
-    st.info("営業メール文章の生成・確認専用です。Gmail下書き作成・メール送信・本番DBへの書き込みは一切行いません。")
+    st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。Gmail下書き作成・メール送信は行いません。")
     tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果"])
     with tabs[0]:
-        _tab_targets(store, demo)
+        _tab_targets(store, demo, formal_email_page=formal_email_page)
     with tabs[1]:
         _tab_generate()
     with tabs[2]:
