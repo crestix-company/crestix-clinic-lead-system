@@ -13,7 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-EXPECTED_GMAIL_ACCOUNT = "kazuma.takahara@crestix-inc.com"
+EXPECTED_GMAIL_ACCOUNT_ENV = "OUTREACH_GMAIL_EXPECTED_ACCOUNT"
+DEFAULT_EXPECTED_GMAIL_ACCOUNT = "info@crestix-inc.com"
+EXPECTED_GMAIL_ACCOUNT = os.environ.get(EXPECTED_GMAIL_ACCOUNT_ENV, DEFAULT_EXPECTED_GMAIL_ACCOUNT).strip()
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
 REQUIRED_SCOPES = (GMAIL_COMPOSE_SCOPE,)
 CLIENT_FILE_ENV = "OUTREACH_GMAIL_OAUTH_CLIENT_JSON"
@@ -27,6 +29,14 @@ class GmailOAuthError(RuntimeError):
 
 class GmailAccountMismatch(GmailOAuthError):
     """The authenticated mailbox is not the explicitly allowed mailbox."""
+
+
+def expected_gmail_account() -> str:
+    """Return the configured allowlist mailbox, defaulting to the approved Workspace account."""
+    account = os.environ.get(EXPECTED_GMAIL_ACCOUNT_ENV, DEFAULT_EXPECTED_GMAIL_ACCOUNT).strip()
+    if not account or account.count("@") != 1 or any(char.isspace() for char in account):
+        raise GmailOAuthError(f"{EXPECTED_GMAIL_ACCOUNT_ENV} is not a valid email address")
+    return account
 
 
 @dataclass(frozen=True)
@@ -102,7 +112,7 @@ def _verified_connection(
     except Exception as exc:
         raise GmailOAuthError("Gmail profile verification failed") from exc
     actual = str(profile.get("emailAddress", "")).strip().casefold()
-    if actual != EXPECTED_GMAIL_ACCOUNT.casefold():
+    if actual != expected_gmail_account().casefold():
         raise GmailAccountMismatch("Authenticated Gmail account is not the required account")
     return GmailConnection(service=service, email_address=actual, scopes=REQUIRED_SCOPES)
 
@@ -148,6 +158,10 @@ def authorize_interactive(*, root: Path | None = None) -> GmailConnection:
     """Run installed-app OAuth and persist only an allowlisted account's token."""
     client_path, token_path = oauth_paths(root=root)
     _reject_unsafe_permissions(client_path, label="OAuth client")
+    if token_path.exists():
+        # Verify the existing token owner first. Never silently reuse or replace another mailbox's token.
+        connect_existing(root=root)
+        raise GmailOAuthError("A verified OAuth token already exists; use status instead of replacing it")
     _Request, _Credentials, InstalledAppFlow, build = _google_dependencies()
     try:
         flow = InstalledAppFlow.from_client_secrets_file(str(client_path), REQUIRED_SCOPES)

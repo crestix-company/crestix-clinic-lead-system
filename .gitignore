@@ -45,3 +45,4 @@ node_modules/
 /.secrets/outreach_gmail/
 /config/gmail_oauth_client.json
 /config/gmail_oauth_token.json
+/config/outreach_email_v2.json

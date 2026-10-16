@@ -19,13 +19,14 @@ from .compose import (
     render_listed, render_recommend, subject_for,
 )
 from .email_template import DraftValidationError
+from .gmail_oauth import expected_gmail_account
 from .targets import DIRECTOR_OWNER_UNVERIFIED, EMAIL_FOUND, ClinicTarget
 from src.utils.date_utils import today_japan
 
 READY, NEEDS_REVIEW, FAILED = "READY", "NEEDS_REVIEW", "FAILED"
 STATUS_LABELS = {READY: "READY", NEEDS_REVIEW: "要確認", FAILED: "失敗"}
 REQUIRED_STAFF = "髙原"
-EXPECTED_GMAIL_ACCOUNT = "kazuma.takahara@crestix-inc.com"
+EXPECTED_GMAIL_ACCOUNT = expected_gmail_account()
 SCHEDULE_UNSET = "（候補日時未設定）"
 _UNRESOLVED_VARIABLE = re.compile(r"\{[^{}\r\n]+\}")
 
@@ -84,7 +85,7 @@ def _finish(result: OutreachResult, settings: GenerationSettings) -> OutreachRes
     blockers: list[str] = []
     if result.status != READY:
         blockers.append("本文生成がREADYではない")
-    if settings.authenticated_gmail_account.strip().casefold() != EXPECTED_GMAIL_ACCOUNT.casefold():
+    if settings.authenticated_gmail_account.strip().casefold() != expected_gmail_account().casefold():
         blockers.append("指定GmailアカウントのOAuth一致確認が未完了")
     if not settings.duplicate_check_complete:
         blockers.append("Gmail既存下書きとの重複検査が未完了")
