@@ -18,10 +18,12 @@ def test_outreach_ledger_migration_is_separate_rls_protected_and_has_no_delete_g
     assert "operation_id uuid not null unique" in sql
     assert "gmail_draft_id" in sql and "gmail_message_id" in sql and "gmail_thread_id" in sql
     assert "enable row level security" in sql and "force row level security" in sql
-    assert "grant select, insert, update on outreach.email_delivery_records to clinic_outreach_runtime" in sql
+    assert "grant select on outreach.email_delivery_records to clinic_outreach_runtime" in sql
+    assert "grant insert (outreach_id, operation_id, idempotency_key" in sql
+    assert "grant update (status, gmail_draft_id, gmail_message_id, gmail_thread_id" in sql
     assert "revoke all on outreach.email_delivery_records from public, anon, authenticated, clinic_runtime" in sql
     assert "grant clinic_outreach_runtime to clinic_runtime" in sql
-    assert "delete" not in sql.split("grant select, insert, update on outreach.email_delivery_records")[1].split(";")[0]
+    assert "grant delete" not in sql and "grant all" not in sql
     assert TABLE in sql and OUTREACH_ROLE in sql and RUNTIME_ROLE in sql
 
 

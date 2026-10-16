@@ -66,8 +66,8 @@ def connect_outreach_database(*, environ=None, connect_fn: Callable[..., Any] | 
             cur.execute(
                 """SELECT current_user, current_role,
                           has_table_privilege(current_user, %s, 'SELECT'),
-                          has_table_privilege(current_user, %s, 'INSERT'),
-                          has_table_privilege(current_user, %s, 'UPDATE'),
+                          has_any_column_privilege(current_user, %s, 'INSERT'),
+                          has_any_column_privilege(current_user, %s, 'UPDATE'),
                           has_table_privilege(current_user, %s, 'DELETE'),
                           has_table_privilege(current_user, %s, 'TRUNCATE'),
                           (SELECT rolbypassrls FROM pg_roles WHERE rolname=current_role),

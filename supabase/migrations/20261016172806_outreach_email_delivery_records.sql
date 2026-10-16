@@ -84,7 +84,15 @@ revoke all on schema outreach from public, anon, authenticated;
 revoke all on schema outreach from clinic_runtime;
 revoke all on outreach.email_delivery_records from public, anon, authenticated, clinic_runtime;
 grant usage on schema outreach to clinic_outreach_runtime;
-grant select, insert, update on outreach.email_delivery_records to clinic_outreach_runtime;
+grant select on outreach.email_delivery_records to clinic_outreach_runtime;
+grant insert (outreach_id, operation_id, idempotency_key, clinic_id, clinic_uuid,
+  clinic_name_snapshot, clinic_address_snapshot, recipient_email, sender_account, staff_name,
+  campaign_id, generation_batch_id, status, listing_status, article_type,
+  example_article_url, listing_article_url, clinic_profile_url, subject, body_sha256, last_error)
+  on outreach.email_delivery_records to clinic_outreach_runtime;
+grant update (status, gmail_draft_id, gmail_message_id, gmail_thread_id,
+  sent_at, scheduled_at, last_synced_at, last_error)
+  on outreach.email_delivery_records to clinic_outreach_runtime;
 
 drop policy if exists clinic_outreach_runtime_email_delivery_select on outreach.email_delivery_records;
 create policy clinic_outreach_runtime_email_delivery_select
