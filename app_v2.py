@@ -12,8 +12,9 @@ import streamlit as st
 from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
-from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
 from src.master.fixed_export import fixed_row
+from src.io.output_writer import csv_bytes
 from src.enrichment.kouseikyoku_source import load_master
 from src.enrichment.doctor_license import DoctorLicenseCache,parse_license_html
 from src.enrichment.profiles import estimate_profile_age
@@ -846,7 +847,10 @@ def simple_workflow_ui(store, demo):
     metrics = store.metrics()
 
     st.header("上から順に進めるだけ")
-    st.caption("普段使う操作だけを4ステップにまとめました。細かい設定・手動修正は「詳細設定」にあります。")
+    st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
+
+    st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
+    import_ui_comdesk_step(store, demo)
 
     st.subheader("現在のデータ状況")
     cols = st.columns(2)
@@ -864,11 +868,11 @@ def simple_workflow_ui(store, demo):
             report_import(result)
             st.rerun()
 
-    st.subheader("1. 厚生局データを取り込む")
+    st.subheader("Step2：厚生局データを取り込む")
 
-    st.subheader("2. 別途の拡張機能（Google Maps Collector）で、1.で取り込んだデータを入れる（手動）")
+    st.subheader("Step3：Google Maps Collector")
 
-    st.subheader("3. 拡張機能で抽出したデータを戻す")
+    st.subheader("Step4：Google Maps結果を取り込む")
 
     maps_upload = st.file_uploader(
         "③ Google Maps収集結果CSVをアップロード",
@@ -891,7 +895,7 @@ def simple_workflow_ui(store, demo):
             )
             st.rerun()
 
-    st.subheader("4. HP内容を自動調査")
+    st.subheader("Step5：HP・Email自動調査")
     if getattr(store, "is_supabase_runtime", False):
         prefs = store.prefectures()
     else:
@@ -1011,6 +1015,14 @@ def simple_workflow_ui(store, demo):
     email_human_review_card(store)
     email_auto_research_card(store, demo=demo)
 
+    st.subheader("Step6：Comdesk未連携医院CSVを出力")
+    st.caption("Clinic MasterのComdesk取込履歴・照合保留・紐付け状態を確認し、未連携が確定した営業対象医院だけを出力します。")
+    render_unlinked_comdesk_export(store, demo)
+
+    st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
+    st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
+    import_ui_comdesk_step(store, demo, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
+
     if current:
         st.write("現在の調査")
         st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
@@ -1053,9 +1065,77 @@ def simple_workflow_ui(store, demo):
                 st.rerun()
 
     st.caption(
-        "営業対象の確認・Comdesk出力は「営業対象・出力」、"
-        "UUID付きComdeskデータの取込は「詳細設定」から行えます。"
+        "営業対象・Comdesk出力は従来どおり「営業対象・出力」から利用できます。"
     )
+
+
+def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=demo)
+    if not upload:
+        return
+    table = upload_table(upload, key_prefix)
+    inferred = infer_comdesk_columns(table)
+    labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+              "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
+              "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
+    mapping = {}
+    with st.expander("列の対応を確認", expanded=False):
+        st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+        for field, label in labels.items():
+            choices = [None]+list(range(len(table.headers)))
+            selected = inferred.get(field)
+            mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
+                format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
+        preview = table.data.head(5).copy()
+        preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
+        st.dataframe(preview, hide_index=True)
+    if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
+        with st.spinner("Comdeskデータを照合・登録しています…"):
+            result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+        report_import(result)
+
+
+def render_unlinked_comdesk_export(store, demo):
+    candidates = unlinked_comdesk_candidates(store)
+    st.metric("Comdesk未連携確定医院", f"{len(candidates):,}件", help="Comdesk取込履歴・照合保留・紐付け状態を確認し、営業対象外と分類不能の医院を除きます。")
+    with st.expander("未連携医院一覧", expanded=False):
+        st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
+    signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, store.revision()], ensure_ascii=False)
+    if st.button(f"未連携確定 {len(candidates):,}件をComdesk CSVで出力", key="simple_unlinked_comdesk_export", disabled=demo or not candidates, use_container_width=True):
+        rows = [new_export_row(r, COMDESK_HEADERS, {"clinic_name":2,"phone":9,"prefecture":5,"address":6}) for r in candidates]
+        if hasattr(store, "_attach_export_metadata"):
+            rows = store._attach_export_metadata(candidates, rows)
+        else:
+            rows = [
+                [*row, str(clinic.get("effective_hp_rank") or "").strip().upper()
+                 if str(clinic.get("effective_hp_rank") or "").strip().upper() in {"A", "B", "C", "D"} else "", ""]
+                for clinic, row in zip(candidates, rows)
+            ]
+        st.session_state["simple_unlinked_comdesk_output"] = {"signature":signature,"content":csv_bytes(COMDESK_EXPORT_HEADERS, rows)}
+    output = st.session_state.get("simple_unlinked_comdesk_output")
+    if output and output["signature"] == signature:
+        st.download_button("未連携医院CSVをダウンロード", output["content"], "comdesk_unlinked_clinics.csv", mime="text/csv", key="simple_unlinked_comdesk_download")
+
+
+def unlinked_comdesk_candidates(store, page_size=50000):
+    # Restrict output to explicitly sales-eligible tiers. Missing classification fails closed.
+    filters = Filters(active_only=False, hp_only=False, sales_tiers=["A", "B", "C"])
+    total = store.count(filters)
+    clinics = []
+    for offset in range(0, total, page_size):
+        clinics.extend(store.query(filters, limit=page_size, offset=offset))
+
+    linkage = store.comdesk_linkage_state()
+    imported_ids = set(linkage["imported_clinic_ids"])
+    held_ids = set(linkage["held_clinic_ids"])
+    held_ids.update(int(r["id"]) for r in clinics if r.get("merge_hold"))
+    candidates = [
+        r for r in clinics
+        if not str(r.get("uuid") or "").strip()
+        and int(r["id"]) not in imported_ids
+        and int(r["id"]) not in held_ids
+    ]
+    return candidates
 
 def simple_sales_ui(store, demo=False):
     st.header("営業対象・Comdesk出力")
