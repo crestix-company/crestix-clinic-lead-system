@@ -89,6 +89,7 @@ async def main(args):
     key=os.getenv("BRAVE_SEARCH_API_KEY","").strip()
     processed=0
     api_calls=0
+    last_search_at=0.0
     async with async_playwright() as p:
         browser=await p.chromium.launch(headless=not args.headed)
         page=await browser.new_page(locale="ja-JP")
@@ -101,14 +102,20 @@ async def main(args):
             urls=[original_url] if URL_RE.fullmatch(original_url) else sorted(known.get(cid,[]))
             source="existing URL" if original_url else "reference CSV"
             if not urls and key and api_calls < args.max_api_calls:
+                # Rate limit from observed API headers: 1 request/second.
+                # Keep a safety margin and never burst.
+                elapsed=time.monotonic()-last_search_at
+                if last_search_at and elapsed < args.api_interval:
+                    await asyncio.sleep(args.api_interval-elapsed)
                 api_calls+=1
+                last_search_at=time.monotonic()
                 try:
                     urls=await asyncio.to_thread(search_api,row[COL_NAME],row[COL_ADDR],key)
                     source="Brave API"
                 except urllib.error.HTTPError as e:
                     audit.append([cid,row[COL_NAME],"確認待ち",f"Brave HTTP {e.code}",""])
                     if e.code in (401,403,429):
-                        print(f"Brave HTTP {e.code}; stopping to avoid wasted searches",flush=True)
+                        print(f"Brave HTTP {e.code}; stopping (check rate limits or account)",flush=True)
                         break
                     continue
                 except Exception as e:
@@ -161,4 +168,5 @@ if __name__=="__main__":
     ap.add_argument("--delay",type=float,default=2.5)
     ap.add_argument("--headed",action="store_true")
     ap.add_argument("--max-api-calls",type=int,default=10,help="maximum Brave searches; protects remaining credits")
+    ap.add_argument("--api-interval",type=float,default=2.1,help="minimum seconds between Brave API calls")
     asyncio.run(main(ap.parse_args()))
