@@ -18,11 +18,11 @@ ticket, a log, or a command.
    `info@crestix-inc.com` as a test user. The test-user list, project audience and
    publishing state must be checked in the Cloud Console; this checkout cannot see them.
 3. In Data Access, request only
-   `https://www.googleapis.com/auth/gmail.compose`. Gmail API draft create/list/get and profile
-   verification support this scope. It is classified as **restricted** and it also permits
-   sending; Google does not provide a Gmail API scope that permits draft creation while denying
-   send. No send operation is implemented in this repository. The token must therefore be
-   protected as a send-capable credential.
+   `https://www.googleapis.com/auth/gmail.compose` and
+   `https://www.googleapis.com/auth/gmail.readonly`. Compose supports draft create/list/get but
+   also permits sending at the OAuth layer; readonly is used to reconcile sent/scheduled
+   messages. Google does not provide a draft-create-only permission. No send operation is
+   implemented in this repository. Protect the token as a send-capable credential.
 4. Create an OAuth client of type **Desktop app** (not Web). The code uses Google's installed-app
    browser flow and a temporary loopback callback at `http://127.0.0.1:<ephemeral-port>`; there
    is no fixed web callback URL to register. Keep the local process running while the browser
@@ -45,7 +45,7 @@ ticket, a log, or a command.
    ```
 
    In the browser, choose `info@crestix-inc.com` explicitly and inspect the requested
-   `gmail.compose` permission before granting. The program calls only Gmail `users.getProfile`
+   both requested Gmail permissions before granting. The program calls only Gmail `users.getProfile`
    during account verification, rejects any other mailbox, and saves a token only after the
    exact account matches. It does not create drafts or send email.
 8. The refresh token is stored at `.secrets/outreach_gmail/token.json` by default, with parent

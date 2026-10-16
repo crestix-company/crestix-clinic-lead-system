@@ -252,7 +252,9 @@ def test_csv_contains_email_candidate_provenance_and_calendar_gate():
     assert row["phone_history_status"] == "VERIFIED_TODAY"
     assert row["content_ready"] == "TRUE"
     assert row["gmail_ready"] == "FALSE"
-    assert list(row)[:5] == ["clinic_uuid", "email_candidate_id", "clinic_name", "prefecture", "to_email"]
+    assert list(row)[:5] == ["clinic_id", "clinic_uuid", "outreach_id", "campaign_id", "generation_batch_id"]
+    assert row["email_candidate_id"] == "12345"
+    assert "clinic_name" in row and "prefecture" in row and "to_email" in row
 
 
 # --- 判定・抽出 ---

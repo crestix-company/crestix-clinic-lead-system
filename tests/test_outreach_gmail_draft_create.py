@@ -290,6 +290,14 @@ def test_send_api_is_not_called_or_required(tmp_path):
 
 
 def test_cli_dry_run_reports_zero_writes_without_oauth_or_ledger(tmp_path, monkeypatch, capsys):
+    # Keep the fixture's call date deterministic as the CLI intentionally uses today's
+    # date when no --as-of override is provided.
+    from src.outreach import gmail_drafts
+    class FixedDate(date):
+        @classmethod
+        def today(cls):
+            return AS_OF
+    monkeypatch.setattr(gmail_drafts, "date", FixedDate)
     request = _request()
     monkeypatch.setattr(draft_cli, "_load_article_master", lambda _path: frozenset({ARTICLE}))
     monkeypatch.setattr(draft_cli, "load_approved_candidates", lambda *_args, **_kwargs: [request])

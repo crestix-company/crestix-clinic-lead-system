@@ -57,7 +57,8 @@ class _CredentialLoader:
 
 def _private_file(path: Path, value: str | None = None) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(value or '{"scopes":["https://www.googleapis.com/auth/gmail.compose"]}', encoding="utf-8")
+    path.write_text(value or '{"scopes":["https://www.googleapis.com/auth/gmail.compose",'
+                    '"https://www.googleapis.com/auth/gmail.readonly"]}', encoding="utf-8")
     path.chmod(0o600)
     return path
 
@@ -70,9 +71,10 @@ def _configure(monkeypatch, tmp_path: Path) -> tuple[Path, Path]:
     return client, token
 
 
-def test_scope_is_minimal_compose_scope_only():
+def test_scopes_are_limited_to_draft_creation_and_mailbox_history_reading():
     assert gmail_oauth.REQUIRED_SCOPES == (
         "https://www.googleapis.com/auth/gmail.compose",
+        "https://www.googleapis.com/auth/gmail.readonly",
     )
 
 
@@ -199,6 +201,7 @@ def test_saved_broader_gmail_scope_is_rejected(monkeypatch, tmp_path):
     token = _private_file(
         tmp_path / "private" / "token.json",
         '{"scopes":["https://www.googleapis.com/auth/gmail.compose",'
+        '"https://www.googleapis.com/auth/gmail.readonly",'
         '"https://www.googleapis.com/auth/gmail.modify"]}',
     )
     monkeypatch.setenv(gmail_oauth.CLIENT_FILE_ENV, str(client))

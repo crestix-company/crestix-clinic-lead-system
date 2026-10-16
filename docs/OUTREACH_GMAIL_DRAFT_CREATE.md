@@ -2,7 +2,8 @@
 
 This feature only creates Gmail drafts. It contains no message-send operation. The
 OAuth `gmail.compose` scope is nevertheless capable of sending mail through other
-code, so protect the OAuth token as a credential and do not broaden this tool.
+code, and `gmail.readonly` is used for history reconciliation, so protect the OAuth
+token as a credential and do not broaden these scopes.
 
 ## Preconditions
 

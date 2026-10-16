@@ -1,7 +1,7 @@
 """Gmail OAuth boundary for outreach draft preparation.
 
-This module deliberately exposes no Gmail send or draft-create operation.  It only
-establishes an account-verified service that other read-only preparation code can use.
+This module deliberately exposes no Gmail send operation. It establishes an
+account-verified service for read-only reconciliation and the separate drafts.create flow.
 """
 from __future__ import annotations
 
@@ -17,7 +17,10 @@ EXPECTED_GMAIL_ACCOUNT_ENV = "OUTREACH_GMAIL_EXPECTED_ACCOUNT"
 DEFAULT_EXPECTED_GMAIL_ACCOUNT = "info@crestix-inc.com"
 EXPECTED_GMAIL_ACCOUNT = os.environ.get(EXPECTED_GMAIL_ACCOUNT_ENV, DEFAULT_EXPECTED_GMAIL_ACCOUNT).strip()
 GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose"
-REQUIRED_SCOPES = (GMAIL_COMPOSE_SCOPE,)
+GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+# Draft creation plus mailbox history reconciliation. There is intentionally no
+# drafts.send/messages.send call anywhere in the application workflow.
+REQUIRED_SCOPES = (GMAIL_COMPOSE_SCOPE, GMAIL_READONLY_SCOPE)
 CLIENT_FILE_ENV = "OUTREACH_GMAIL_OAUTH_CLIENT_JSON"
 TOKEN_FILE_ENV = "OUTREACH_GMAIL_OAUTH_TOKEN_JSON"
 DEFAULT_TOKEN_FILE = Path(".secrets/outreach_gmail/token.json")

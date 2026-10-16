@@ -33,6 +33,8 @@ class ArticleState:
     evidence: str = ""
     checked_at: str = ""
     processing_version: str = ""
+    article_type: str = "UNKNOWN"
+    clinic_profile_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,10 @@ def classify_article(clinic_uuid: str, links: list[ArticleLink]) -> ArticleState
         return ArticleState(ARTICLE_LISTED, looked.record.listing_url, looked.record.example_article_url,
                             evidence=looked.record.evidence or looked.record.source_row,
                             checked_at=looked.record.checked_at,
-                            processing_version=looked.record.processing_version)
+                            processing_version=looked.record.processing_version,
+                            article_type=looked.record.article_type
+                                if looked.record.article_type in {"NORMAL", "PR", "SUPERVISED"} else "UNKNOWN",
+                            clinic_profile_url=looked.record.clinic_profile_url)
     key = (clinic_uuid or "").strip().lower()
     rows = [r for r in links if r.clinic_uuid.strip().lower() == key]
     if rows and all(r.listing_status == "NOT_LISTED" and r.verified and (r.evidence or r.source_row) for r in rows):

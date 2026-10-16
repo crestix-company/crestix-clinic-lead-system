@@ -28,6 +28,10 @@ class ArticleLink:
     evidence: str = ""
     checked_at: str = ""
     processing_version: str = ""
+    # These are optional adapter fields until the upstream article system publishes them.
+    # Missing values remain UNKNOWN/blank; they are never inferred from URL text.
+    article_type: str = "UNKNOWN"
+    clinic_profile_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -107,5 +111,7 @@ def load_article_links_csv(path: str | Path) -> list[ArticleLink]:
                 evidence=(row.get("evidence") or "").strip(),
                 checked_at=(row.get("checked_at") or "").strip(),
                 processing_version=(row.get("processing_version") or "").strip(),
+                article_type=(row.get("article_type") or "UNKNOWN").strip().upper(),
+                clinic_profile_url=(row.get("clinic_profile_url") or "").strip(),
             ))
     return rows

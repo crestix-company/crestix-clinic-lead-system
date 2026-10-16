@@ -33,6 +33,13 @@ from .gmail_oauth import (
 )
 
 DRAFT_KEY_HEADER = "X-Clinic-Lead-Draft-Key"
+OUTREACH_ID_HEADER = "X-Clinic-Lead-Outreach-ID"
+OPERATION_ID_HEADER = "X-Clinic-Lead-Operation-ID"
+CLINIC_ID_HEADER = "X-Clinic-Lead-Clinic-ID"
+CLINIC_UUID_HEADER = "X-Clinic-Lead-Clinic-UUID"
+CAMPAIGN_ID_HEADER = "X-Clinic-Lead-Campaign-ID"
+CLINIC_NAME_HEADER = "X-Clinic-Lead-Clinic-Name"
+CLINIC_ADDRESS_HEADER = "X-Clinic-Lead-Clinic-Address"
 DEFAULT_DRAFT_LEDGER = DEFAULT_TOKEN_FILE.with_name("draft_ledger.jsonl")
 CANARY_ACCOUNT = "info@crestix-inc.com"
 CANARY_CONFIRMATION = "I_APPROVE_ONE_CANARY_DRAFT_TO_INFO"
@@ -57,6 +64,27 @@ class ExistingDraft:
     draft_key: str
     recipients: tuple[str, ...]
     subject: str
+    clinic_id: str = ""
+    clinic_uuid: str = ""
+    outreach_id: str = ""
+    campaign_id: str = ""
+    message_id: str = ""
+    thread_id: str = ""
+
+
+@dataclass(frozen=True)
+class ExistingMessage:
+    message_id: str
+    thread_id: str
+    recipients: tuple[str, ...]
+    subject: str
+    sent_at: str = ""
+    clinic_id: str = ""
+    clinic_uuid: str = ""
+    outreach_id: str = ""
+    campaign_id: str = ""
+    clinic_name: str = ""
+    clinic_address: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,7 +193,10 @@ def list_existing_drafts(service: Any) -> list[ExistingDraft]:
             userId="me",
             id=draft_id,
             format="metadata",
-            metadataHeaders=["To", "Subject", DRAFT_KEY_HEADER],
+            metadataHeaders=["To", "Subject", "Message-ID", "Date", DRAFT_KEY_HEADER,
+                             OUTREACH_ID_HEADER, OPERATION_ID_HEADER, CLINIC_ID_HEADER,
+                             CLINIC_UUID_HEADER, CAMPAIGN_ID_HEADER, CLINIC_NAME_HEADER,
+                             CLINIC_ADDRESS_HEADER],
         ).execute()
         headers = _headers(item.get("message", {}))
         result.append(ExistingDraft(
@@ -173,6 +204,52 @@ def list_existing_drafts(service: Any) -> list[ExistingDraft]:
             draft_key=headers.get(DRAFT_KEY_HEADER.casefold(), ""),
             recipients=_recipients(headers.get("to", "")),
             subject=headers.get("subject", ""),
+            clinic_id=headers.get(CLINIC_ID_HEADER.casefold(), ""),
+            clinic_uuid=headers.get(CLINIC_UUID_HEADER.casefold(), ""),
+            outreach_id=headers.get(OUTREACH_ID_HEADER.casefold(), ""),
+            campaign_id=headers.get(CAMPAIGN_ID_HEADER.casefold(), ""),
+            message_id=str(item.get("message", {}).get("id") or ""),
+            thread_id=str(item.get("message", {}).get("threadId") or ""),
+        ))
+    return result
+
+
+def list_existing_messages(service: Any, *, query: str) -> list[ExistingMessage]:
+    """List message metadata only. Never fetch a sent message body."""
+    api = service.users().messages()
+    ids: list[tuple[str, str]] = []
+    page_token: str | None = None
+    while True:
+        kwargs: dict[str, Any] = {"userId": "me", "q": query, "maxResults": 500}
+        if page_token:
+            kwargs["pageToken"] = page_token
+        page = api.list(**kwargs).execute()
+        ids.extend((str(item["id"]), str(item.get("threadId") or ""))
+                   for item in page.get("messages", []) if item.get("id"))
+        page_token = page.get("nextPageToken")
+        if not page_token:
+            break
+    result = []
+    metadata_headers = ["To", "Subject", "Message-ID", "Date", DRAFT_KEY_HEADER,
+                        OUTREACH_ID_HEADER, OPERATION_ID_HEADER, CLINIC_ID_HEADER,
+                        CLINIC_UUID_HEADER, CAMPAIGN_ID_HEADER, CLINIC_NAME_HEADER,
+                        CLINIC_ADDRESS_HEADER]
+    for message_id, listed_thread_id in ids:
+        message = api.get(userId="me", id=message_id, format="metadata",
+                          metadataHeaders=metadata_headers).execute()
+        headers = _headers(message)
+        result.append(ExistingMessage(
+            message_id=message_id,
+            thread_id=str(message.get("threadId") or listed_thread_id),
+            recipients=_recipients(headers.get("to", "")),
+            subject=headers.get("subject", ""),
+            sent_at=headers.get("date", ""),
+            clinic_id=headers.get(CLINIC_ID_HEADER.casefold(), ""),
+            clinic_uuid=headers.get(CLINIC_UUID_HEADER.casefold(), ""),
+            outreach_id=headers.get(OUTREACH_ID_HEADER.casefold(), ""),
+            campaign_id=headers.get(CAMPAIGN_ID_HEADER.casefold(), ""),
+            clinic_name=headers.get(CLINIC_NAME_HEADER.casefold(), ""),
+            clinic_address=headers.get(CLINIC_ADDRESS_HEADER.casefold(), ""),
         ))
     return result
 
