@@ -336,6 +336,26 @@ class SupabaseClinicRepository:
         page_ids = ids[offset:offset + limit]
         return self._batch_get(page_ids)  # P0-2: batched, preserves page_ids order
 
+    def records_by_ids(self, clinic_ids, *, page_size=500):
+        """Fetch exact, active and nonmerged/unheld Clinic Master IDs in READ ONLY batches."""
+        ids = list(dict.fromkeys(int(cid) for cid in clinic_ids if int(cid) > 0))
+        if not ids:
+            return []
+        excluded = set(self._excluded_clinic_ids())
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM public.clinics WHERE id=ANY(%s) AND active=true "
+                "AND merged_into IS NULL AND merge_hold=false ORDER BY id",
+                (ids,),
+            )
+            eligible_ids = [int(row[0]) for row in cur.fetchall() if int(row[0]) not in excluded]
+        output = {}
+        for start in range(0, len(eligible_ids), max(1, min(int(page_size), 500))):
+            batch = eligible_ids[start:start + max(1, min(int(page_size), 500))]
+            for record in self._batch_get(batch):
+                output[int(record["id"])] = record
+        return [output[cid] for cid in ids if cid in output]
+
     def funnel(self, filters, as_of=None):
         sf.raise_if_unsupported(filters)
         conditions = ["merged_into IS NULL", "merge_hold=false"]
