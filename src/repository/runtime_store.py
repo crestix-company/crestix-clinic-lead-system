@@ -142,6 +142,8 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def reviews(self, limit=100): return self.repositories.provenance.reviews(limit)
     @_retry_closed_read_connection
+    def comdesk_linkage_state(self): return self.repositories.provenance.comdesk_linkage_state()
+    @_retry_closed_read_connection
     def setting(self, key, default=None): return self.repositories.settings.get(key, default)
 
     @_retry_closed_read_connection

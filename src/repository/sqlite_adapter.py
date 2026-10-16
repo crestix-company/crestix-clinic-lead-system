@@ -121,6 +121,9 @@ class SqliteProvenanceRepository:
     def reviews(self, limit=100):
         return self._store.reviews(limit)
 
+    def comdesk_linkage_state(self):
+        return self._store.comdesk_linkage_state()
+
 
 class SqliteSettingsRepository:
     def __init__(self, store: ClinicStore):
