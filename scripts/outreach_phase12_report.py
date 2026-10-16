@@ -24,7 +24,7 @@ from scripts.launch_v2 import load_runtime_env  # noqa: E402
 from scripts.validate_recommender_against_history import validate as validate_history  # noqa: E402
 from src.outreach.article_recommender import read_master  # noqa: E402
 from src.outreach.generation import (  # noqa: E402
-    FAILED, NEEDS_REVIEW, READY, REQUIRED_STAFF, GenerationSettings, generate_batch, summarize,
+    EXPECTED_GMAIL_ACCOUNT, FAILED, NEEDS_REVIEW, READY, REQUIRED_STAFF, GenerationSettings, generate_batch, summarize,
     to_csv_bytes,
 )
 from src.outreach.secure_artifacts import (  # noqa: E402
@@ -203,7 +203,7 @@ def run(args) -> dict:
         "generated_at_date": args.as_of.isoformat(),
         "phase": "1-2",
         "gmail": {
-            "expected_account": "kazuma.takahara@crestix-inc.com",
+            "expected_account": EXPECTED_GMAIL_ACCOUNT,
             "oauth_implemented": False,
             "authenticated_account": None,
             "draft_writes": 0,

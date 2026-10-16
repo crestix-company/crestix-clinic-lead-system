@@ -76,6 +76,13 @@ def test_scope_is_minimal_compose_scope_only():
     )
 
 
+def test_default_expected_account_is_info_and_is_configurable(monkeypatch):
+    monkeypatch.delenv(gmail_oauth.EXPECTED_GMAIL_ACCOUNT_ENV, raising=False)
+    assert gmail_oauth.expected_gmail_account() == "info@crestix-inc.com"
+    monkeypatch.setenv(gmail_oauth.EXPECTED_GMAIL_ACCOUNT_ENV, "sales@example.com")
+    assert gmail_oauth.expected_gmail_account() == "sales@example.com"
+
+
 def test_connect_existing_accepts_only_expected_account(monkeypatch, tmp_path):
     _configure(monkeypatch, tmp_path)
     monkeypatch.setattr(
@@ -85,6 +92,18 @@ def test_connect_existing_accepts_only_expected_account(monkeypatch, tmp_path):
     )
     connection = gmail_oauth.connect_existing(root=tmp_path)
     assert connection.email_address == gmail_oauth.EXPECTED_GMAIL_ACCOUNT
+
+
+def test_connect_existing_rejects_old_takahara_account(monkeypatch, tmp_path):
+    _configure(monkeypatch, tmp_path)
+    monkeypatch.delenv(gmail_oauth.EXPECTED_GMAIL_ACCOUNT_ENV, raising=False)
+    monkeypatch.setattr(
+        gmail_oauth,
+        "_google_dependencies",
+        lambda: (object, _CredentialLoader, object, lambda *a, **k: _Service("kazuma.takahara@crestix-inc.com")),
+    )
+    with pytest.raises(gmail_oauth.GmailAccountMismatch):
+        gmail_oauth.connect_existing(root=tmp_path)
 
 
 def test_interactive_account_mismatch_refuses_and_does_not_save(monkeypatch, tmp_path):
@@ -110,6 +129,31 @@ def test_interactive_account_mismatch_refuses_and_does_not_save(monkeypatch, tmp
     with pytest.raises(gmail_oauth.GmailAccountMismatch):
         gmail_oauth.authorize_interactive(root=tmp_path)
     assert not token.exists()
+
+
+def test_existing_wrong_account_token_blocks_authorization_without_replacement(monkeypatch, tmp_path):
+    _client, token = _configure(monkeypatch, tmp_path)
+    original = token.read_bytes()
+    monkeypatch.delenv(gmail_oauth.EXPECTED_GMAIL_ACCOUNT_ENV, raising=False)
+
+    class ForbiddenInstalledFlow:
+        @staticmethod
+        def from_client_secrets_file(*args, **kwargs):
+            pytest.fail("interactive flow must not start when existing token belongs to another account")
+
+    monkeypatch.setattr(
+        gmail_oauth,
+        "_google_dependencies",
+        lambda: (
+            object,
+            _CredentialLoader,
+            ForbiddenInstalledFlow,
+            lambda *a, **k: _Service("kazuma.takahara@crestix-inc.com"),
+        ),
+    )
+    with pytest.raises(gmail_oauth.GmailAccountMismatch):
+        gmail_oauth.authorize_interactive(root=tmp_path)
+    assert token.read_bytes() == original
 
 
 def test_interactive_saves_private_token_after_account_verification(monkeypatch, tmp_path):

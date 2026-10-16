@@ -10,10 +10,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.outreach.gmail_oauth import (  # noqa: E402
-    EXPECTED_GMAIL_ACCOUNT,
     GmailOAuthError,
     authorize_interactive,
     connect_existing,
+    expected_gmail_account,
 )
 from src.outreach.gmail_drafts import (  # noqa: E402
     DraftIdentity,
@@ -66,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
     except GmailOAuthError as exc:
-        print(f"status=REFUSED expected_account={EXPECTED_GMAIL_ACCOUNT} reason={exc}", file=sys.stderr)
+        expected = expected_gmail_account()
+        print(f"status=REFUSED expected_account={expected} reason={exc}", file=sys.stderr)
         return 2
     print(
         f"status=CONNECTED account={connection.email_address} "
