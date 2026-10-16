@@ -26,11 +26,11 @@ COL_ADDR="住所"
 COL_STATUS="掲載判定（記入欄）"
 COL_ARTICLE="実掲載記事URL（記入欄）"
 COL_CLINIC="医院詳細URL（参考）"
-URL_RE=re.compile(r"^https://clinic\\.mynavi\\.jp/clinic/[A-Za-z0-9]+/?$")
-URL_FIND=re.compile(r"https?://clinic\\.mynavi\\.jp/clinic/[A-Za-z0-9]+/?")
+URL_RE=re.compile(r"^https://clinic\.mynavi\.jp/clinic/[A-Za-z0-9]+/?$")
+URL_FIND=re.compile(r"https?://clinic\.mynavi\.jp/clinic/[A-Za-z0-9]+/?")
 REMOVE=re.compile(r"(?:医療法人社団|医療法人財団|医療法人|一般社団法人|公益社団法人)")
 def normalize(s):
-    return re.sub(r"[\\s\\-ー・,.、。()（）　]", "", unicodedata.normalize("NFKC",s or "").lower())
+    return re.sub(r"[\s\-ー・,.、。()（）　]", "", unicodedata.normalize("NFKC",s or "").lower())
 def simple_name(s):
     return REMOVE.sub("",s).strip()
 def pref_city(address):
@@ -123,7 +123,7 @@ async def main(args):
                     audit.append([cid,row[COL_NAME],"確認待ち","検索APIエラー: "+type(e).__name__,""])
                     continue
             if not urls:
-                audit.append([cid,row[COL_NAME],"未確認","URL候補なし（検索APIキー未設定または候補なし）",""])
+                audit.append([cid,row[COL_NAME],"未確認","URL候補なし（"+("Brave検索結果に医院URLなし" if key else "検索APIキー未設定")+"）",""])
                 continue
             valid=[]
             for url in urls:
