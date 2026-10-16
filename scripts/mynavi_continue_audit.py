@@ -14,6 +14,7 @@ import time
 import unicodedata
 import urllib.parse
 import urllib.request
+import urllib.error
 from collections import Counter
 from pathlib import Path
 from playwright.async_api import async_playwright
@@ -59,7 +60,7 @@ def read_known(paths):
 def search_api(name,address,key):
     pref,city=pref_city(address)
     query="site:clinic.mynavi.jp/clinic/ "+simple_name(name)+" "+pref+" "+city
-    url="https://api.search.brave.com/res/v1/web/search?"+urllib.parse.urlencode({"q":query,"country":"jp","search_lang":"ja","count":10})
+    url="https://api.search.brave.com/res/v1/web/search?"+urllib.parse.urlencode({"q":query,"country":"jp","search_lang":"jp","count":10})
     req=urllib.request.Request(url,headers={"Accept":"application/json","X-Subscription-Token":key,"User-Agent":"Crestix-Mynavi-Canary/1.0"})
     import json
     with urllib.request.urlopen(req,timeout=20) as r:
@@ -104,6 +105,12 @@ async def main(args):
                 try:
                     urls=await asyncio.to_thread(search_api,row[COL_NAME],row[COL_ADDR],key)
                     source="Brave API"
+                except urllib.error.HTTPError as e:
+                    audit.append([cid,row[COL_NAME],"確認待ち",f"Brave HTTP {e.code}",""])
+                    if e.code in (401,403,429):
+                        print(f"Brave HTTP {e.code}; stopping to avoid wasted searches",flush=True)
+                        break
+                    continue
                 except Exception as e:
                     audit.append([cid,row[COL_NAME],"確認待ち","検索APIエラー: "+type(e).__name__,""])
                     continue
