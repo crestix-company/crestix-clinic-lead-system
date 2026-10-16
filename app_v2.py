@@ -1,8 +1,11 @@
 """第一営業部向けローカルアプリ。importだけでは画面/DB/ネットを動かさない。"""
 from pathlib import Path
 from dataclasses import asdict, replace
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import sqlite3
 import pandas as pd
 import streamlit as st
@@ -25,6 +28,9 @@ from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.master.hp_auto_state import controller_lease_health
 from src.repository.write_backend import write_repositories_for
+from src.repository.connection_diagnostics import (
+    connection_error_category, is_database_connection_exception, safe_connection_message,
+)
 from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
 from src.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
 from src.email_research_ui import (
@@ -46,6 +52,7 @@ from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL
 from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
+_STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
@@ -80,8 +87,19 @@ TREATMENT_STATUS_DISPLAY_LABELS = {
     "FETCH_FAILED": "Webサイト調査失敗",
     "NOT_RESEARCHED": "Webサイト未調査",
 }
-@st.cache_resource
-def store_for(path=None):
+def runtime_store_cache_key():
+    """Key the process-wide Store cache to backend/credential changes without exposing them."""
+    values = [
+        os.environ.get("CLINIC_DATA_BACKEND", ""),
+        os.environ.get("CLINIC_WRITE_BACKEND", ""),
+        os.environ.get("SUPABASE_RUNTIME_DB_URL", ""),
+    ]
+    payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
+    return hmac.new(_STORE_CACHE_SALT, payload, hashlib.sha256).hexdigest()
+
+
+@st.cache_resource(max_entries=2)
+def store_for(path=None, runtime_config_key=None):
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     if active_backend() == BACKEND_SUPABASE:
         from src.repository.runtime_store import SupabaseRuntimeStore
@@ -125,7 +143,7 @@ def show_web_research_metrics(store):
 
 def show_email_research_metrics(store):
     """Compact operational Email KPIs; values are intentionally distinct from raw candidates."""
-    from src.repository.email_database import email_repositories_for_ui, email_database_status
+    from src.repository.email_database import email_repositories_for_ui, email_database_ui_status
 
     repositories = email_repositories_for_ui()
     labels = [
@@ -140,7 +158,7 @@ def show_email_research_metrics(store):
         columns = st.columns(4)
         for column, (label, _, definition) in zip(columns, labels):
             column.metric(label, "未接続", help=definition)
-        st.caption(email_database_status().message)
+        st.caption(email_database_ui_status().message)
         return
     summary = repo.summary()
     human_summary = human_repo.summary() if human_repo is not None and human_repo.available() else {}
@@ -1355,6 +1373,12 @@ def settings_ui(store):
             st.download_button("バックアップをダウンロード",st.session_state["db_backup"],f"clinics_backup_{today_japan().isoformat()}.sqlite3")
 
 
+def _show_supabase_startup_error(exc):
+    st.error(safe_connection_message(exc, service="Clinic/HP"))
+    st.caption("設定読込を統一するため、scripts/launch_v2.py またはOS別の正式ランチャーから起動してください。")
+    st.stop()
+
+
 def main():
     st.set_page_config(page_title="クリニック営業マスター", page_icon="📋", layout="wide")
     st.title("クリニック営業マスター")
@@ -1372,6 +1396,7 @@ def main():
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
+    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
     if demo:
         path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
     elif active_backend() != BACKEND_SUPABASE:
@@ -1381,8 +1406,17 @@ def main():
             st.stop()
     else:
         path = None
-    store = store_for(str(path) if path is not None else None)
-    write_repositories_for(store).clinics.refresh_age_model()
+    if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
+        required_keys = ("CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL")
+        if any(not os.environ.get(key, "").strip() for key in required_keys):
+            _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
+    try:
+        store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
+        write_repositories_for(store).clinics.refresh_age_model()
+    except Exception as exc:
+        if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
+            _show_supabase_startup_error(exc)
+        raise
 
     hp_human_review_sidebar(store)
     email_research_sidebar_status(store)
@@ -1423,6 +1457,10 @@ if __name__=="__main__":
     except sqlite3.OperationalError:
         st.error("データファイルが使用中か、保存先に書き込めません。別ウィンドウの処理が終わってから再操作してください。")
     except Exception as exc:
-        import traceback
-        traceback.print_exc()
-        st.error(f"処理を完了できませんでした。ファイル形式・入力列・保存先を確認してください。エラー詳細: {user_error_text(exc)}")
+        if is_database_connection_exception(exc):
+            st.error(safe_connection_message(exc, service="Clinic/HP"))
+        else:
+            # Driver exceptions may embed host, user, or credential fragments. Do not
+            # print tracebacks or interpolate raw errors into the Streamlit page.
+            category = connection_error_category(exc)
+            st.error(f"処理を完了できませんでした（{category}）。接続状態と操作内容を確認してください。")

@@ -11,6 +11,7 @@ import unicodedata
 import uuid
 
 from psycopg.types.json import Jsonb
+from src.repository.connection_diagnostics import retryable_read_connection_error
 
 from src.master.email_sales_eligibility import (
     RULE_VERSION,
@@ -43,13 +44,23 @@ def _retry_closed_read_connection(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         self._ensure_read_connection()
+        failed_conn = self._conn
         try:
-            return method(self, *args, **kwargs)
+            result = method(self, *args, **kwargs)
         except Exception as exc:
             if not self._is_retryable_connection_error(exc):
                 raise
-            self._reconnect_read()
-            return method(self, *args, **kwargs)
+            from src.repository.email_database import note_email_database_connection_error
+            note_email_database_connection_error(exc)
+            try:
+                self._reconnect_read(expected_conn=failed_conn, force=True)
+            except Exception as reconnect_exc:
+                note_email_database_connection_error(reconnect_exc)
+                raise
+            result = method(self, *args, **kwargs)
+        from src.repository.email_database import clear_email_database_connection_error
+        clear_email_database_connection_error()
+        return result
     return wrapped
 
 
@@ -128,11 +139,7 @@ class SupabaseEmailResearchRepository:
         return bool(getattr(self._conn, "closed", False) or getattr(self._conn, "broken", False))
 
     def _is_retryable_connection_error(self, exc) -> bool:
-        try:
-            import psycopg
-        except ImportError:
-            return False
-        return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
+        return retryable_read_connection_error(exc)
 
     def _safe_rollback(self) -> None:
         """Never let a rollback on an already-dead connection mask the real error."""
@@ -150,14 +157,16 @@ class SupabaseEmailResearchRepository:
         except Exception:
             pass
 
-    def _reconnect_read(self) -> None:
+    def _reconnect_read(self, *, expected_conn=None, force=False) -> None:
         """Rebuild self._conn from the configured Email Research DB URL.
 
         Secrets are never logged: the URL is read once from the environment, handed
         straight to the connector, and never captured in an exception message or log line.
         """
         with self._reconnect_lock:
-            if not self._connection_is_dead():
+            if expected_conn is not None and self._conn is not expected_conn:
+                return
+            if not force and not self._connection_is_dead():
                 return
             # Deliberately never call old_conn.close() here: another thread may still
             # hold its own local reference to this same object mid-query (Streamlit
@@ -173,10 +182,15 @@ class SupabaseEmailResearchRepository:
             connect_fn = self._connect_fn
             if connect_fn is None:
                 from src.repository.supabase_adapter import connect as connect_fn
-            new_conn = connect_fn(url, autocommit=False)
-            with new_conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            new_conn.commit()
+            try:
+                new_conn = connect_fn(url, autocommit=False)
+                with new_conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                new_conn.commit()
+            except Exception as exc:
+                from src.repository.email_database import note_email_database_connection_error
+                note_email_database_connection_error(exc)
+                raise
             self._conn = new_conn
 
     def _ensure_read_connection(self) -> None:
@@ -199,7 +213,7 @@ class SupabaseEmailResearchRepository:
             if not self._is_retryable_connection_error(exc):
                 raise
             try:
-                self._reconnect_read()
+                self._reconnect_read(expected_conn=self._conn, force=True)
             except Exception:
                 return False
             try:

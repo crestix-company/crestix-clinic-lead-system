@@ -7,7 +7,11 @@ import streamlit as st
 
 from src.master.email_human_review import DECISION_LABELS, true_positive_allowed
 from src.normalizer.address import extract_municipality
-from src.repository.email_database import email_repositories_for_ui
+from src.repository.email_database import (
+    email_database_ui_status,
+    email_repositories_for_ui,
+    note_email_database_connection_error,
+)
 
 
 EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE = (
@@ -48,6 +52,7 @@ def _fail_soft_on_reconnect_failure(render_unavailable):
             except Exception as exc:
                 import psycopg
                 if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
+                    note_email_database_connection_error(exc)
                     return render_unavailable(*args, **kwargs)
                 raise
         return wrapped
@@ -64,7 +69,9 @@ def email_human_review_card(store):
     # branches show the same fixed, non-leaking message (matches _render_one's existing
     # st.warning behavior for this same pair of conditions).
     if repo is None or not repo.available():
-        st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE)
+        status = email_database_ui_status()
+        detail = f" {status.message}" if not status.ready else ""
+        st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE + detail)
         return
     summary = repo.summary()
     st.markdown("#### ✉️ Email要確認")
@@ -78,7 +85,9 @@ def email_human_review_card(store):
 
 def _sidebar_unavailable(store):
     with st.sidebar:
-        st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE)
+        status = email_database_ui_status()
+        detail = f" {status.message}" if not status.ready else ""
+        st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE + detail)
 
 
 @_fail_soft_on_reconnect_failure(_sidebar_unavailable)
@@ -87,7 +96,9 @@ def email_human_review_sidebar(store):
     # See email_human_review_card() for why both conditions share one message.
     if repo is None or not repo.available():
         with st.sidebar:
-            st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE)
+            status = email_database_ui_status()
+            detail = f" {status.message}" if not status.ready else ""
+            st.caption(EMAIL_HUMAN_REVIEW_UNAVAILABLE_MESSAGE + detail)
         return
     summary = repo.summary()
     with st.sidebar:
