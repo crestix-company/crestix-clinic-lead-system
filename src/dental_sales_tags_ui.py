@@ -1,8 +1,10 @@
 """Streamlit UI for dental sales priority tags and Human Review."""
 from __future__ import annotations
 
+import io
 import json
 import os
+import zipfile
 
 import pandas as pd
 import streamlit as st
@@ -22,6 +24,21 @@ PRIORITY_LABELS = {
     8: "⑧ 自費入れ歯・親知らず・根管治療",
     9: "⑨ 一般歯科・クリーニング・定期検診・虫歯治療",
 }
+
+
+CATEGORY_EXPORTS = (
+    ("01", "① マウスピース矯正 / インビザライン", "01_マウスピース_インビザライン.csv"),
+    ("02", "② 矯正歯科全般", "02_矯正歯科全般.csv"),
+    ("03", "③ All-on-4", "03_All-on-4.csv"),
+    ("04", "④ インプラント全般", "04_インプラント全般.csv"),
+    ("05", "⑤ セラミック治療", "05_セラミック治療.csv"),
+    ("06", "⑥ 審美歯科全般", "06_審美歯科全般.csv"),
+    ("07a", "⑦ 口腔外科", "07a_口腔外科.csv"),
+    ("07b", "⑦ 審美系（ホワイトニング・ジルコニア・ラミネートベニア）", "07b_審美系.csv"),
+    ("08", "⑧ 入れ歯・義歯（自費）・親知らず・根管治療", "08_入れ歯_親知らず_根管治療.csv"),
+    ("09", "⑨ 一般歯科・クリーニング・定期検診・虫歯治療", "09_一般歯科.csv"),
+)
+CATEGORY_LABEL_BY_KEY = {key: label for key, label, _filename in CATEGORY_EXPORTS}
 
 HUMAN_DECISION_LABELS = {
     "CONFIRMED": "✅ 正しいタグ",
@@ -61,6 +78,106 @@ def _sales_frame(rows):
         }
         for row in rows
     ])
+
+
+def _effective_codes(row):
+    raw = str(row.get("codes") or "")
+    return {item.strip() for item in raw.split("/") if item.strip()}
+
+
+def _exclusive_category_key(row):
+    """Assign each dental clinic to exactly one sales category in the approved ①→⑨ order."""
+    codes = _effective_codes(row)
+    if "ALIGNER_INVISALIGN" in codes:
+        return "01"
+    if "ORTHODONTICS_GENERAL" in codes:
+        return "02"
+    if "ALL_ON_4" in codes:
+        return "03"
+    if "IMPLANT_GENERAL" in codes:
+        return "04"
+    if "CERAMIC" in codes:
+        return "05"
+    aesthetic_specific = {"WHITENING", "ZIRCONIA", "LAMINATE_VENEER"}
+    if "AESTHETIC_GENERAL" in codes and not (codes & aesthetic_specific):
+        return "06"
+    if "ORAL_SURGERY" in codes:
+        return "07a"
+    if codes & aesthetic_specific:
+        return "07b"
+    if codes & {"PRIVATE_DENTURE", "WISDOM_TOOTH", "ROOT_CANAL"}:
+        return "08"
+    return "09"
+
+
+def _category_evidence_labels(row, category_key):
+    codes = _effective_codes(row)
+    by_category = {
+        "01": ("ALIGNER_INVISALIGN",),
+        "02": ("ORTHODONTICS_GENERAL",),
+        "03": ("ALL_ON_4",),
+        "04": ("IMPLANT_GENERAL",),
+        "05": ("CERAMIC",),
+        "06": ("AESTHETIC_GENERAL",),
+        "07a": ("ORAL_SURGERY",),
+        "07b": ("WHITENING", "ZIRCONIA", "LAMINATE_VENEER"),
+        "08": ("PRIVATE_DENTURE", "WISDOM_TOOTH", "ROOT_CANAL"),
+        "09": ("CLEANING", "CHECKUP", "CARIES"),
+    }
+    matched = [
+        DEFINITION_BY_CODE[code].label
+        for code in by_category[category_key]
+        if code in codes and code in DEFINITION_BY_CODE
+    ]
+    if category_key == "09" and not matched:
+        matched = ["一般歯科"]
+    return " / ".join(matched)
+
+
+def _category_sales_frame(rows, category_key):
+    label = CATEGORY_LABEL_BY_KEY[category_key]
+    return pd.DataFrame([
+        {
+            "営業カテゴリ": label,
+            "カテゴリ根拠タグ": _category_evidence_labels(row, category_key),
+            "管理番号": row["id"],
+            "UUID": row.get("uuid") or "",
+            "医院名": row.get("clinic_name") or "",
+            "電話番号": row.get("phone") or "",
+            "住所": row.get("address") or "",
+            "都道府県": row.get("prefecture") or "",
+            "HP URL": row.get("hp_url") or "",
+            "最優先タグ": row.get("tag_label") or "",
+            "最優先タグコード": row.get("tag_code") or "",
+            "全歯科営業タグ": row.get("labels") or "",
+            "全タグコード": row.get("codes") or "",
+            "確度": float(row.get("confidence") or 0),
+            "判定ソース": row.get("source") or "",
+            "判定ルール": row.get("rule_id") or "",
+        }
+        for row in rows
+    ])
+
+
+def _build_category_zip(rows):
+    grouped = {key: [] for key, _label, _filename in CATEGORY_EXPORTS}
+    for row in rows:
+        grouped[_exclusive_category_key(row)].append(row)
+
+    summary = pd.DataFrame([
+        {"カテゴリ": CATEGORY_LABEL_BY_KEY[key], "件数": len(grouped[key])}
+        for key, _label, _filename in CATEGORY_EXPORTS
+    ])
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "00_カテゴリ件数.csv",
+            summary.to_csv(index=False).encode("utf-8-sig"),
+        )
+        for key, _label, filename in CATEGORY_EXPORTS:
+            frame = _category_sales_frame(grouped[key], key)
+            archive.writestr(filename, frame.to_csv(index=False).encode("utf-8-sig"))
+    return buffer.getvalue(), {key: len(grouped[key]) for key in grouped}
 
 
 def _summary_panel(repo):
@@ -155,6 +272,45 @@ def _sales_list_tab(repo):
             mime="text/csv",
             use_container_width=True,
             key="dental_sales_export_download",
+        )
+
+
+    st.divider()
+    st.markdown("##### カテゴリ別CSV一括出力")
+    st.caption(
+        "全有効歯科医院を①→⑨の優先順で1医院1カテゴリに振り分け、"
+        "10個のCSV＋件数サマリーをZIPで作成します。現在の画面フィルタには依存しません。"
+    )
+    if st.button(
+        "カテゴリ別CSVをZIPで一括作成",
+        type="primary",
+        key="dental_category_zip_create",
+    ):
+        all_rows = repo.list_effective_clinics(
+            priority_groups=list(range(1, 10)),
+            tag_codes=[],
+            limit=100000,
+        )
+        zip_bytes, category_counts = _build_category_zip(all_rows)
+        st.session_state["_dental_category_zip_export"] = {
+            "zip": zip_bytes,
+            "counts": category_counts,
+            "rows": len(all_rows),
+        }
+    category_output = st.session_state.get("_dental_category_zip_export")
+    if category_output:
+        count_text = " / ".join(
+            f"{key}:{category_output['counts'].get(key, 0):,}件"
+            for key, _label, _filename in CATEGORY_EXPORTS
+        )
+        st.caption(f"振り分け結果：{count_text}")
+        st.download_button(
+            f"カテゴリ別歯科営業CSV ZIPをダウンロード（{category_output['rows']:,}医院）",
+            category_output["zip"],
+            "dental_sales_category_csv.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="dental_category_zip_download",
         )
 
 
