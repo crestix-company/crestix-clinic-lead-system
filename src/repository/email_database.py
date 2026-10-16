@@ -10,6 +10,7 @@ from urllib.parse import unquote, urlsplit
 import os
 import re
 import threading
+from src.repository.connection_diagnostics import connection_error_category
 
 
 EMAIL_RESEARCH_DB_URL_ENV_VAR = "EMAIL_RESEARCH_DB_URL"
@@ -137,6 +138,37 @@ def email_target_reader_status(environ=None) -> EmailDatabaseStatus:
 _lock = threading.Lock()
 _cached_bundle = None
 _cached_key = None
+_ui_connection_error = None
+
+
+def note_email_database_connection_error(exc):
+    """Retain only a safe error category for the Email UI; never retain driver text."""
+    global _ui_connection_error
+    _ui_connection_error = connection_error_category(exc)
+
+
+def clear_email_database_connection_error():
+    global _ui_connection_error
+    _ui_connection_error = None
+
+
+def email_database_ui_status(environ=None) -> EmailDatabaseStatus:
+    """Distinguish safe config validation from a failed live Email DB connection."""
+    configured = email_database_status(environ)
+    if not configured.ready:
+        return configured
+    if _ui_connection_error:
+        messages = {
+            "authentication": "Email DB認証に失敗しました。正式ランチャーの専用接続資格情報を確認してください。",
+            "timeout": "Email DB接続がタイムアウトしました。ネットワークと接続先の状態を確認してください。",
+            "query_timeout": "Email DBの読取がタイムアウトしました。時間をおいて再試行してください。",
+            "disconnected": "Email DB接続が切断されました。読取で再接続を試しましたが復旧できませんでした。",
+            "network": "Email DBホストへ接続できません。DNS・ネットワーク設定を確認してください。",
+            "configuration": "Email DB設定を確認できません。正式ランチャーと専用DB設定を確認してください。",
+            "unavailable": "Email DBに接続できません。接続状態を確認してください。",
+        }
+        return EmailDatabaseStatus(False, messages.get(_ui_connection_error, messages["unavailable"]))
+    return EmailDatabaseStatus(True, "Email DBの接続設定は有効です。実接続状態は読取時に確認します。")
 
 
 def build_email_repositories(*, environ=None, connect_fn=None):
@@ -208,7 +240,7 @@ def email_repositories_for_ui():
     are NOT caught here and continue to propagate, so real bugs aren't hidden.
     """
     import psycopg
-    global _cached_bundle, _cached_key
+    global _cached_bundle, _cached_key, _ui_connection_error
     status = email_database_status()
     if not status.ready:
         return None
@@ -219,12 +251,14 @@ def email_repositories_for_ui():
             return _cached_bundle
         try:
             bundle, _ = build_email_repositories()
-        except (psycopg.OperationalError, psycopg.InterfaceError, ValueError):
+        except (psycopg.OperationalError, psycopg.InterfaceError, ValueError) as exc:
             # Do not touch _cached_bundle/_cached_key: a transient failure must never
             # be remembered as a stable "nothing to connect to" result that would
             # block recovery once the DB (or cohort file) is fixed.
+            _ui_connection_error = "configuration" if isinstance(exc, ValueError) else connection_error_category(exc)
             return None
         _cached_key, _cached_bundle = cache_key, bundle
+        _ui_connection_error = None
         return bundle
 
 

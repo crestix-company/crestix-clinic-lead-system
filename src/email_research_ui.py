@@ -10,8 +10,9 @@ from src.master.email_auto_run import EmailAutoRunner, build_default_research_on
 from src.master.email_research_config import load_email_research_config
 from src.repository.email_research_repository import email_controller_health
 from src.repository.email_database import (
-    build_email_repositories, email_database_status, email_target_reader_status,
-    email_repositories_for_ui,
+    build_email_repositories, email_database_status, email_database_ui_status,
+    email_target_reader_status, email_repositories_for_ui,
+    note_email_database_connection_error,
 )
 from src.repository.email_target_reader import connect_email_target_reader
 
@@ -107,7 +108,10 @@ def _fail_soft_on_db_loss(func):
             except ImportError:
                 raise
             if isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError)):
-                st.warning(DB_CONNECTION_LOST_MESSAGE)
+                note_email_database_connection_error(exc)
+                status = email_database_ui_status()
+                st.warning(f"{DB_CONNECTION_LOST_MESSAGE} {status.message}" if not status.ready
+                           else DB_CONNECTION_LOST_MESSAGE)
                 return None
             raise
     return wrapped
@@ -142,13 +146,13 @@ def _email_auto_research_controls(store, *, demo=False):
     repositories = email_repositories_for_ui()
     if repositories is None:
         st.subheader("メールアドレス自動調査")
-        st.caption(email_database_status().message)
+        st.caption(email_database_ui_status().message)
         st.button("メール自動調査を開始", key="simple_email_auto_start_unavailable", disabled=True)
         return
     repo = repositories.email_research
     st.subheader("メールアドレス自動調査")
     if repo is None:
-        st.caption(email_database_status().message)
+        st.caption(email_database_ui_status().message)
         st.button("メール自動調査を開始", key="simple_email_auto_start_unavailable", disabled=True)
         return
     if not repo.available():
@@ -262,6 +266,8 @@ def email_research_sidebar_status(store):
     """Compact always-visible sidebar status, mirroring hp/email human review sidebar widgets."""
     repositories = email_repositories_for_ui()
     if repositories is None:
+        with st.sidebar:
+            st.caption(email_database_ui_status().message)
         return
     repo = repositories.email_research
     if repo is None or not repo.available():
@@ -395,7 +401,7 @@ def email_research_page(store):
     st.caption("ホームページ自動調査とは独立して動き、HP確認済み・公式URLありのClinicを後から処理します。")
     repositories = email_repositories_for_ui()
     if repositories is None:
-        st.warning(email_database_status().message)
+        st.warning(email_database_ui_status().message)
         return
     repo = repositories.email_research
     if repo is None or not repo.available():
