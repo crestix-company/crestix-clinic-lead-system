@@ -53,6 +53,7 @@ from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL
 from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
+READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
 _STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
@@ -97,6 +98,10 @@ def runtime_store_cache_key():
     ]
     payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
     return hmac.new(_STORE_CACHE_SALT, payload, hashlib.sha256).hexdigest()
+
+
+def read_only_ui_mode():
+    return os.environ.get(READ_ONLY_UI_ENV_VAR, "").strip().casefold() in {"1", "true", "yes", "on"}
 
 
 @st.cache_resource(max_entries=2)
@@ -843,14 +848,15 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
             )
 
 
-def simple_workflow_ui(store, demo):
+def simple_workflow_ui(store, demo, *, read_only=False):
+    write_disabled = demo or read_only
     metrics = store.metrics()
 
     st.header("上から順に進めるだけ")
     st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
 
     st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
-    import_ui_comdesk_step(store, demo)
+    import_ui_comdesk_step(store, write_disabled)
 
     st.subheader("現在のデータ状況")
     cols = st.columns(2)
@@ -861,7 +867,7 @@ def simple_workflow_ui(store, demo):
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
-        if st.button("東京都マスターを取り込む", type="primary", disabled=demo, key="simple_import_tokyo", use_container_width=True):
+        if st.button("東京都マスターを取り込む", type="primary", disabled=write_disabled, key="simple_import_tokyo", use_container_width=True):
             with st.spinner("東京都マスターを取り込んでいます…"):
                 frame = pd.read_csv(ROOT/"data/master/tokyo_current.csv", dtype=str, keep_default_na=False)
                 result = write_repositories_for(store).clinics.import_master(frame)
@@ -878,14 +884,14 @@ def simple_workflow_ui(store, demo):
         "③ Google Maps収集結果CSVをアップロード",
         type=["csv"],
         key="simple_maps_results",
-        disabled=demo,
+        disabled=write_disabled,
     )
     if maps_upload:
         maps_table = load_table(maps_upload.getvalue(), maps_upload.name)
         maps_frame = maps_table.data.copy()
         maps_frame.columns = maps_table.headers
 
-        if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", use_container_width=True):
+        if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", disabled=write_disabled, use_container_width=True):
             with st.spinner("Google Maps結果を取り込んでいます…"):
                 result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             st.success(
@@ -929,7 +935,7 @@ def simple_workflow_ui(store, demo):
     auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
     auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
-    if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
+    if not read_only and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
         # Any PC may offer an executor, but the persisted lease allows only one controller.
         auto_runner.start(store)
 
@@ -965,7 +971,7 @@ def simple_workflow_ui(store, demo):
         st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
         if st.button(
             "HP自動調査を開始", type="primary",
-            disabled=demo or runner.running() or unfinished or auto_active or actual == 0,
+            disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0,
             key="simple_start", use_container_width=True,
         ):
             provider = TavilySearchProvider("")
@@ -983,7 +989,7 @@ def simple_workflow_ui(store, demo):
         st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
         if st.button(
             "未調査がなくなるまで自動調査を開始", type="primary",
-            disabled=demo or auto_repo is None or auto_active or runner.running() or unfinished or available == 0,
+            disabled=write_disabled or auto_repo is None or auto_active or runner.running() or unfinished or available == 0,
             key="simple_auto_start", use_container_width=True,
         ):
             auto_repo.start(pref, research_medical_types, force, int(batch_size))
@@ -998,22 +1004,25 @@ def simple_workflow_ui(store, demo):
 
         auto_controls = st.columns(2)
         if auto_controls[0].button(
-            "自動調査を一時停止", disabled=auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
+            "自動調査を一時停止", disabled=write_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
             key="simple_auto_pause", use_container_width=True,
         ):
             auto_repo.pause()
             st.rerun()
         if auto_controls[1].button(
-            "自動調査を再開", disabled=auto_state.get("status") not in {"PAUSED", "ERROR"},
+            "自動調査を再開", disabled=write_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
             key="simple_auto_resume", use_container_width=True,
         ):
             auto_repo.resume()
             auto_runner.start(store)
             st.rerun()
 
-    hp_human_review_card(store)
-    email_human_review_card(store)
-    email_auto_research_card(store, demo=demo)
+    if read_only:
+        st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
+    else:
+        hp_human_review_card(store)
+        email_human_review_card(store)
+        email_auto_research_card(store, demo=demo)
 
     st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
     st.caption("HP調査成功済み・UUID未付与の医院から、Comdesk取込済み・照合保留・merge holdを除いて同期します。営業用HPランクでは絞り込みません。")
@@ -1021,20 +1030,21 @@ def simple_workflow_ui(store, demo):
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
-    import_ui_comdesk_step(store, demo, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
+    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
 
     if current:
         st.write("現在の調査")
         st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
         controls = st.columns(3)
 
-        can_pause = runner.running() or current["status"] == "RUNNING"
+        can_pause = not write_disabled and (runner.running() or current["status"] == "RUNNING")
         if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
             write_repositories_for(store).jobs.pause_job(current["id"])
             st.rerun()
 
         can_resume = (
-            not runner.running()
+            not write_disabled
+            and not runner.running()
             and current["status"] in {"PAUSED", "BUDGET"}
             and current["counts"].get("PENDING", 0) > 0
         )
@@ -1044,7 +1054,7 @@ def simple_workflow_ui(store, demo):
             runner.start(store, current["id"], provider)
             st.rerun()
 
-        can_reset = not runner.running() and current["status"] != "RUNNING"
+        can_reset = not write_disabled and not runner.running() and current["status"] != "RUNNING"
         if controls[2].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
             try:
                 write_repositories_for(store).jobs.reset_job(current["id"])
@@ -1060,7 +1070,7 @@ def simple_workflow_ui(store, demo):
         st.write("HP未取得医院の検索、EPARK、外部媒体の調査は「詳細設定」から行えます。")
         if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}:
             st.warning("完全終了しても完了済み調査結果は削除されません。現在BatchはPAUSEDで保持されます。")
-            if st.button("自動調査を終了", key="simple_auto_cancel"):
+            if st.button("自動調査を終了", key="simple_auto_cancel", disabled=write_disabled):
                 auto_repo.cancel()
                 st.rerun()
 
@@ -1096,7 +1106,12 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
 
 
 def render_comdesk_sync_export(store, demo):
-    candidates = comdesk_sync_candidates(store)
+    try:
+        candidates = comdesk_sync_candidates(store)
+    except Exception:
+        st.metric("Comdesk同期対象", "未確定")
+        st.error("Comdesk取込履歴・照合保留をREAD ONLYで確認できないため、同期用CSV出力を停止しました。provenance参照権限を確認してください。")
+        return
     st.metric("Comdesk同期対象", f"{len(candidates):,}件", help="HP調査成功・UUID・Comdesk取込履歴・照合保留・merge holdを確認します。営業用HPランクは使用しません。")
     with st.expander("同期対象医院一覧", expanded=False):
         st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
@@ -1486,11 +1501,15 @@ def main():
         st.session_state["navigation"] = "詳細設定"
         st.session_state["advanced_section"] = "HP Human Review"
 
+    read_only = read_only_ui_mode()
     with st.sidebar:
-        nav = st.radio("メニュー", NAV, key="navigation")
+        nav_options = NAV[:2] if read_only else NAV
+        nav = st.radio("メニュー", nav_options, key="navigation")
         with st.expander("開発・確認用", expanded=False):
             demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
+    if read_only:
+        st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
@@ -1509,26 +1528,28 @@ def main():
             _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
     try:
         store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
-        write_repositories_for(store).clinics.refresh_age_model()
+        if not read_only:
+            write_repositories_for(store).clinics.refresh_age_model()
     except Exception as exc:
         if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
             _show_supabase_startup_error(exc)
         raise
 
-    hp_human_review_sidebar(store)
-    email_research_sidebar_status(store)
-    email_human_review_sidebar(store)
-    if st.session_state.pop("_open_hp_human_review_dialog", False):
-        hp_human_review_dialog(store)
-    if st.session_state.pop("_open_email_human_review_dialog", False):
-        email_human_review_dialog(store)
+    if not read_only:
+        hp_human_review_sidebar(store)
+        email_research_sidebar_status(store)
+        email_human_review_sidebar(store)
+        if st.session_state.pop("_open_hp_human_review_dialog", False):
+            hp_human_review_dialog(store)
+        if st.session_state.pop("_open_email_human_review_dialog", False):
+            email_human_review_dialog(store)
 
     if demo:
         load_demo(store)
         st.info("架空サンプル4医院を表示しています。実データとは別に保存されます。")
 
     if nav == "かんたん操作":
-        simple_workflow_ui(store, demo)
+        simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
         simple_sales_ui(store, demo)
     elif nav == "Email調査":

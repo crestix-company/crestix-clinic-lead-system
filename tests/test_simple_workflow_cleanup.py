@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import app_v2
+
 
 def _app_source():
     return Path("app_v2.py").read_text(encoding="utf-8")
@@ -74,3 +76,25 @@ def test_simple_sync_and_sales_export_use_separate_conditions_and_actions():
     assert "simple_comdesk_sync_export" not in sales
     assert "simple_comdesk_reimport" not in sales
     assert "sales_filters" in sales
+
+
+def test_read_only_ui_mode_is_explicit_and_fail_closed(monkeypatch):
+    monkeypatch.delenv("CLINIC_READ_ONLY_UI", raising=False)
+    assert app_v2.read_only_ui_mode() is False
+    monkeypatch.setenv("CLINIC_READ_ONLY_UI", "true")
+    assert app_v2.read_only_ui_mode() is True
+
+
+def test_read_only_ui_skips_startup_writes_and_auto_resume():
+    source = _app_source()
+    main_start = source.index("def main()")
+    main = source[main_start:]
+    simple_start = source.index("def simple_workflow_ui")
+    simple_end = source.index("def import_ui_comdesk_step", simple_start)
+    simple = source[simple_start:simple_end]
+
+    assert "nav_options = NAV[:2] if read_only else NAV" in main
+    assert "if not read_only:\n            write_repositories_for(store).clinics.refresh_age_model()" in main
+    assert "if not read_only and auto_state.get" in simple
+    assert "write_disabled = demo or read_only" in simple
+    assert "READ ONLY画面確認中" in simple

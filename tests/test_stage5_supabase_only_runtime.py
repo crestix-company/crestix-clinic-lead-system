@@ -1,6 +1,38 @@
 from types import SimpleNamespace
 
 
+def test_read_only_ui_connection_sets_server_enforced_transaction_guard(monkeypatch):
+    from src.repository.supabase_adapter import connect
+
+    captured = {}
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def execute(self, statement): captured.setdefault("statements", []).append(statement)
+
+    class Connection:
+        autocommit = False
+        def cursor(self): return Cursor()
+
+    def fake_connect(url, **kwargs):
+        captured.update(url=url, kwargs=kwargs)
+        return Connection()
+
+    monkeypatch.setenv("CLINIC_READ_ONLY_UI", "true")
+    monkeypatch.setattr("psycopg.connect", fake_connect)
+
+    connect("postgresql://example.invalid/postgres", autocommit=True)
+
+    assert "default_transaction_read_only=on" in captured["kwargs"]["options"]
+    assert captured["kwargs"]["connect_timeout"] == 20
+    assert captured["statements"] == [
+        "SET extra_float_digits = 3",
+        "SET default_transaction_read_only = on",
+        "SET statement_timeout = 60000",
+    ]
+
+
 def test_production_store_factory_never_constructs_sqlite(monkeypatch):
     import app_v2
     sentinel = object()

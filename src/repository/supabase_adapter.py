@@ -32,12 +32,27 @@ def connect(url, *, connect_timeout=20, autocommit=False):
     independent statements over a long lifetime (see src.repository.shadow), where one
     cancelled/failed statement must never leave the connection stuck for every statement after.
     """
+    import os
     import psycopg
-    conn = psycopg.connect(url, connect_timeout=connect_timeout)
-    if autocommit:
+    read_only_ui = os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
+    connect_options = {}
+    if read_only_ui:
+        # PostgreSQL enforces this for every transaction on the connection. This protects the
+        # browser verification runtime even if a write control is reached unexpectedly.
+        connect_options["options"] = "-c default_transaction_read_only=on -c statement_timeout=60000"
+    conn = psycopg.connect(url, connect_timeout=connect_timeout, **connect_options)
+    if autocommit or read_only_ui:
         conn.autocommit = True
     with conn.cursor() as cur:
         cur.execute("SET extra_float_digits = 3")
+        if read_only_ui:
+            # Session poolers may ignore libpq startup options. SET runs in autocommit before
+            # any application statement, then applies to every later transaction on this
+            # physical session. Switching autocommit back below starts no transaction itself.
+            cur.execute("SET default_transaction_read_only = on")
+            cur.execute("SET statement_timeout = 60000")
+    if read_only_ui and not autocommit:
+        conn.autocommit = False
     return conn
 
 
