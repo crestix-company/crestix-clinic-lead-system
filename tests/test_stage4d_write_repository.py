@@ -798,9 +798,9 @@ def test_supabase_maps_target_uses_base_json_when_legacy_effective_json_has_esca
             self.executed.append((normalized, params))
             if "effective_json" in normalized:
                 raise AssertionError("identity prefetch must not read legacy effective_json")
-            if "id=ANY(%s::bigint[])" in normalized:
+            if "base_json->>'clinic_id'=ANY" in normalized:
                 self._result = [(294, None, "official-294", None, None, None)]
-            elif "base_json->>'medical_institution_number'=ANY" in normalized:
+            elif "COALESCE(base_json->>'medical_institution_number','')<>''" in normalized:
                 self._result = []
             else:
                 raise AssertionError(f"unexpected query: {normalized}")
@@ -925,11 +925,46 @@ def test_maps_prefetch_uses_bounded_bulk_queries_not_per_row_identity_queries():
     indexes = SupabaseProvenanceWriteRepository._prefetch_maps_targets(cur, rows)
 
     assert indexes["active_ids"] == set()
-    # One bulk canonical/internal query and one compatibility preload query, rather than
-    # 1,000 repeated medical-number and clinic-id scans.
-    assert len(cur.queries) == 2
-    assert sum("base_json->>'medical_institution_number'=ANY" in q for q in cur.queries) == 1
+    # One internal-ID query, one indexed canonical-ID query, and one compatibility preload,
+    # rather than 1,000 repeated medical-number and clinic-id scans.
+    assert len(cur.queries) == 3
+    assert sum("base_json->>'clinic_id'=ANY" in q for q in cur.queries) == 1
+    assert sum("COALESCE(base_json->>'medical_institution_number','')<>''" in q for q in cur.queries) == 1
+    assert all("COALESCE(base_json->>'clinic_id','')<>''" in q
+               for q in cur.queries if "base_json->>'clinic_id'=ANY" in q)
     assert all("WHERE id=%s" not in q for q in cur.queries)
+
+
+def test_maps_prefetch_chunks_large_candidate_sets_without_changing_resolution():
+    from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+
+    class ChunkCursor:
+        def __init__(self):
+            self.queries = []
+            self.params = None
+
+        def execute(self, query, params=None):
+            self.queries.append(" ".join(str(query).split()))
+            self.params = params
+
+        def fetchall(self):
+            query = self.queries[-1]
+            if "base_json->>'clinic_id'=ANY" in query:
+                return [(int(value.split("-")[1]), None, value, None, None, None)
+                        for value in self.params[0]]
+            return []
+
+    rows = [{"medical_institution_number": f"official-{i}"} for i in range(10_001)]
+    cur = ChunkCursor()
+    indexes = SupabaseProvenanceWriteRepository._prefetch_maps_targets(cur, rows)
+
+    canonical_queries = [q for q in cur.queries if "base_json->>'clinic_id'=ANY" in q]
+    assert len(canonical_queries) == 3
+    assert len(cur.queries) == 4  # three indexed chunks plus one legacy compatibility scan
+    for index in (0, 5_000, 10_000):
+        assert SupabaseProvenanceWriteRepository._find_target_prefetched(rows[index], indexes) == (
+            index, "medical_institution_number", 100
+        )
 
 
 def test_supabase_import_maps_results_preserves_confirmed_website():
