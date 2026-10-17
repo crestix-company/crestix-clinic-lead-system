@@ -147,14 +147,30 @@ class SupabaseClinicRepository:
             # in supabase_filters.clauses(excluded_ids=...), which EXPLAIN confirmed is a 4.7x
             # faster equivalent (4690ms -> 993ms) because it lets Postgres use a Merge Anti Join
             # against clinics_pkey instead of evaluating an unindexable regex+LIKE per row.
+            #
+            # 2026-10-18: the facility_type term used a POSIX regex substring extraction
+            # (substring(... from '"facility_type":"([^"]*)"')), measured at ~18.6s of this
+            # query's ~18.6-19s total on the full 164k-row table -- comfortably over the
+            # clinic_runtime role's 15s statement_timeout, causing production Step6/funnel/query
+            # calls to fail with QueryCanceled. A literal substring search for the one exact
+            # value this predicate ever compares against ('病院') is semantically identical (both
+            # are plain text matches against the same un-parsed JSON string, same quote-free
+            # assumption) and was verified byte-identical in result (7907 rows, both ways) while
+            # cutting that term's cost roughly in half. The role's statement_timeout is left
+            # untouched; this call alone temporarily raises it for the one query that needs the
+            # margin, then restores the previous value immediately after.
             with self._conn.cursor() as cur:
-                cur.execute(
-                    "SELECT id FROM public.clinics WHERE "
-                    "exclude_reason IN ('hospital','center') "
-                    "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
-                    "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
-                )
-                self._excluded_ids_cache = [r[0] for r in cur.fetchall()]
+                cur.execute("SET statement_timeout = '60s'")
+                try:
+                    cur.execute(
+                        "SELECT id FROM public.clinics WHERE "
+                        "exclude_reason IN ('hospital','center') "
+                        "OR effective_json LIKE '%\"facility_type\":\"病院\"%' "
+                        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                    )
+                    self._excluded_ids_cache = [r[0] for r in cur.fetchall()]
+                finally:
+                    cur.execute("SET statement_timeout = DEFAULT")
         return self._excluded_ids_cache
 
     def _where(self, filters, as_of):
