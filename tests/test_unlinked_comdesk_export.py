@@ -1,4 +1,4 @@
-from app_v2 import unlinked_comdesk_candidates
+from app_v2 import comdesk_sync_candidates, comdesk_sync_csv
 from src.master.comdesk import COMDESK_EXPORT_HEADERS, COMDESK_HEADERS, new_export_row
 from src.io.input_loader import load_table
 from src.io.output_writer import csv_bytes
@@ -14,9 +14,9 @@ class _LargeClinicStore:
 
     def count(self, filters):
         assert filters.sales_tiers == []
-        assert filters.effective_ranks == ["A", "B"]
+        assert filters.effective_ranks == []
         assert filters.active_only is True
-        assert filters.hp_only is False
+        assert filters.hp_only is True
         raise_if_unsupported(filters)
         return self.total
 
@@ -29,6 +29,8 @@ class _LargeClinicStore:
                 "uuid": "UUID-4" if clinic_id == 4 else "",
                 "clinic_name": f"医院{clinic_id}",
                 "merge_hold": clinic_id == 5,
+                # Synchronization deliberately accepts every HP rank.
+                "effective_hp_rank": "D" if clinic_id % 2 else "UNKNOWN",
             }
             for clinic_id in range(offset + 1, end + 1)
         ]
@@ -37,14 +39,39 @@ class _LargeClinicStore:
         return {"imported_clinic_ids": {2}, "held_clinic_ids": {3}}
 
 
-def test_unlinked_candidates_page_through_full_clinic_master_and_exclude_linkage_states():
+def test_sync_candidates_page_through_all_hp_confirmed_clinics_and_exclude_linkage_states():
     store = _LargeClinicStore(164_199)
-    candidates = unlinked_comdesk_candidates(store)
+    candidates = comdesk_sync_candidates(store)
 
     assert store.calls == [(50_000, 0), (50_000, 50_000), (50_000, 100_000), (50_000, 150_000)]
     assert len(candidates) == 164_195
     assert [item["id"] for item in candidates[:3]] == [1, 6, 7]
     assert candidates[-1]["id"] == 164_199
+
+
+class _SupabaseHpSuccessStore:
+    is_supabase_runtime = True
+
+    def latest_completed_hp_job(self):
+        return {"id": 81}
+
+    def hp_job_export_summary(self, job_id):
+        assert job_id == 81
+        return {"export_ids": [11, 12, 13, 14]}
+
+    def records_by_ids(self, clinic_ids):
+        assert clinic_ids == [11, 12, 13, 14]
+        return [
+            {"id": clinic_id, "uuid": "SYNCED" if clinic_id == 14 else "", "clinic_name": f"医院{clinic_id}"}
+            for clinic_id in clinic_ids
+        ]
+
+    def comdesk_linkage_state(self):
+        return {"imported_clinic_ids": {11}, "held_clinic_ids": {12}}
+
+
+def test_supabase_sync_reuses_canonical_hp_success_ids_before_linkage_exclusions():
+    assert [row["id"] for row in comdesk_sync_candidates(_SupabaseHpSuccessStore())] == [13]
 
 
 def test_unlinked_export_row_keeps_formal_thirty_column_contract():
@@ -58,6 +85,19 @@ def test_unlinked_export_row_keeps_formal_thirty_column_contract():
     assert len(output) == len(COMDESK_EXPORT_HEADERS) == 30
     assert output[COMDESK_EXPORT_HEADERS.index("HPランク")] == "A"
     assert output[COMDESK_EXPORT_HEADERS.index("メールアドレス")] == "clinic@example.jp"
+
+
+def test_sync_csv_row_count_matches_candidate_count_and_keeps_thirty_columns():
+    candidates = [
+        {"id": 1, "clinic_name": "A医院", "effective_hp_rank": "D"},
+        {"id": 2, "clinic_name": "B医院", "effective_hp_rank": "UNKNOWN"},
+    ]
+
+    table = load_table(comdesk_sync_csv(object(), candidates), "sync.csv")
+
+    assert table.headers == COMDESK_EXPORT_HEADERS
+    assert len(table.headers) == 30
+    assert len(table.data) == len(candidates) == 2
 
 
 def test_uuid_added_after_initial_comdesk_import_reimport_updates_same_clinic(tmp_path):

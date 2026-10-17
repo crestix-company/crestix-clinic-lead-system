@@ -1015,9 +1015,9 @@ def simple_workflow_ui(store, demo):
     email_human_review_card(store)
     email_auto_research_card(store, demo=demo)
 
-    st.subheader("Step6：Comdesk未連携医院CSVを出力")
-    st.caption("Clinic MasterのComdesk取込履歴・照合保留・紐付け状態を確認し、未連携が確定した営業対象医院だけを出力します。")
-    render_unlinked_comdesk_export(store, demo)
+    st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
+    st.caption("HP調査成功済み・UUID未付与の医院から、Comdesk取込済み・照合保留・merge holdを除いて同期します。営業用HPランクでは絞り込みません。")
+    render_comdesk_sync_export(store, demo)
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
@@ -1095,36 +1095,49 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
         report_import(result)
 
 
-def render_unlinked_comdesk_export(store, demo):
-    candidates = unlinked_comdesk_candidates(store)
-    st.metric("Comdesk未連携確定医院", f"{len(candidates):,}件", help="Comdesk取込履歴・照合保留・紐付け状態を確認し、営業対象外と分類不能の医院を除きます。")
-    with st.expander("未連携医院一覧", expanded=False):
+def render_comdesk_sync_export(store, demo):
+    candidates = comdesk_sync_candidates(store)
+    st.metric("Comdesk同期対象", f"{len(candidates):,}件", help="HP調査成功・UUID・Comdesk取込履歴・照合保留・merge holdを確認します。営業用HPランクは使用しません。")
+    with st.expander("同期対象医院一覧", expanded=False):
         st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
     signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, store.revision()], ensure_ascii=False)
-    if st.button(f"未連携確定 {len(candidates):,}件をComdesk CSVで出力", key="simple_unlinked_comdesk_export", disabled=demo or not candidates, use_container_width=True):
-        rows = [new_export_row(r, COMDESK_HEADERS, {"clinic_name":2,"phone":9,"prefecture":5,"address":6}) for r in candidates]
-        if hasattr(store, "_attach_export_metadata"):
-            rows = store._attach_export_metadata(candidates, rows)
-        else:
-            rows = [
-                [*row, str(clinic.get("effective_hp_rank") or "").strip().upper()
-                 if str(clinic.get("effective_hp_rank") or "").strip().upper() in {"A", "B", "C", "D"} else "", ""]
-                for clinic, row in zip(candidates, rows)
-            ]
-        st.session_state["simple_unlinked_comdesk_output"] = {"signature":signature,"content":csv_bytes(COMDESK_EXPORT_HEADERS, rows)}
-    output = st.session_state.get("simple_unlinked_comdesk_output")
+    if st.button(f"同期対象 {len(candidates):,}件をComdesk CSVで出力", key="simple_comdesk_sync_export", disabled=demo or not candidates, use_container_width=True):
+        st.session_state["simple_comdesk_sync_output"] = {
+            "signature": signature,
+            "content": comdesk_sync_csv(store, candidates),
+        }
+    output = st.session_state.get("simple_comdesk_sync_output")
     if output and output["signature"] == signature:
-        st.download_button("未連携医院CSVをダウンロード", output["content"], "comdesk_unlinked_clinics.csv", mime="text/csv", key="simple_unlinked_comdesk_download")
+        st.download_button("同期対象CSVをダウンロード", output["content"], "comdesk_hp_confirmed_sync.csv", mime="text/csv", key="simple_comdesk_sync_download")
 
 
-def unlinked_comdesk_candidates(store, page_size=50000):
-    # Match the ordinary sales UI contract: active clinics with an effective A/B rank.
-    # Sales Tier is a local analysis sidecar and is unsupported by the Supabase runtime.
-    filters = Filters(active_only=True, hp_only=False, effective_ranks=["A", "B"])
-    total = store.count(filters)
-    clinics = []
-    for offset in range(0, total, page_size):
-        clinics.extend(store.query(filters, limit=page_size, offset=offset))
+def comdesk_sync_csv(store, candidates):
+    rows = [new_export_row(r, COMDESK_HEADERS, {"clinic_name":2,"phone":9,"prefecture":5,"address":6}) for r in candidates]
+    if hasattr(store, "_attach_export_metadata"):
+        rows = store._attach_export_metadata(candidates, rows)
+    else:
+        rows = [
+            [*row, str(clinic.get("effective_hp_rank") or "").strip().upper()
+             if str(clinic.get("effective_hp_rank") or "").strip().upper() in {"A", "B", "C", "D"} else "", ""]
+            for clinic, row in zip(candidates, rows)
+        ]
+    return csv_bytes(COMDESK_EXPORT_HEADERS, rows)
+
+
+def comdesk_sync_candidates(store, page_size=50000):
+    if getattr(store, "is_supabase_runtime", False):
+        # Reuse the HP workflow's canonical SUCCESS/Human Review/fetch-status gate.
+        job = store.latest_completed_hp_job()
+        successful_ids = store.hp_job_export_summary(job["id"])["export_ids"] if job else []
+        clinics = store.records_by_ids(successful_ids)
+    else:
+        # SQLite/test mode has no canonical HP job ledger. Its established projection of the
+        # same success state is hp_status=VERIFIED with a non-empty official hp_url.
+        filters = Filters(active_only=True, hp_only=True)
+        total = store.count(filters)
+        clinics = []
+        for offset in range(0, total, page_size):
+            clinics.extend(store.query(filters, limit=page_size, offset=offset))
 
     linkage = store.comdesk_linkage_state()
     imported_ids = set(linkage["imported_clinic_ids"])
@@ -1251,7 +1264,10 @@ def simple_sales_ui(store, demo=False):
         )
 
     with st.expander("対象医院を確認", expanded=False):
-        listing(store, filters, "simple_sales_results")
+        if non_ab_only_selected:
+            st.info("選択したHP ABC判定には営業対象のA/Bが含まれないため、対象医院は0件です。")
+        else:
+            listing(store, sales_filters, "simple_sales_results")
 
     st.subheader("営業対象をComdesk形式で出力")
     st.caption(

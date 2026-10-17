@@ -26,6 +26,9 @@ def test_comdesk_export_and_import_remain_available_in_dedicated_pages():
     sales = source[sales_start:sales_end]
     assert 'st.subheader("営業対象をComdesk形式で出力")' in sales
     assert 'key="simple_sales_filtered_export"' in sales
+    assert "comdesk_sync_candidates" not in sales
+    assert "import_ui_comdesk_step" not in sales
+    assert 'listing(store, sales_filters, "simple_sales_results")' in sales
 
     import_start = source.index("def import_ui")
     import_end = source.index("def ", import_start + 10)
@@ -45,11 +48,29 @@ def test_simple_workflow_keeps_step1_through_step7_in_order():
         "Step3：Google Maps Collector",
         "Step4：Google Maps結果を取り込む",
         "Step5：HP・Email自動調査",
-        "Step6：Comdesk未連携医院CSVを出力",
+        "Step6：HP確認済み医院をComdesk同期用CSVで出力",
         "Step7：UUID付与後のComdesk CSVを再取り込む",
     ]
 
     positions = [simple.index(heading) for heading in headings]
     assert positions == sorted(positions)
-    assert "render_unlinked_comdesk_export(store, demo)" in simple
+    assert "render_comdesk_sync_export(store, demo)" in simple
     assert 'key_prefix="simple_comdesk_reimport"' in simple
+
+
+def test_simple_sync_and_sales_export_use_separate_conditions_and_actions():
+    source = _app_source()
+    sync_start = source.index("def comdesk_sync_candidates")
+    sync_end = source.index("def simple_sales_ui", sync_start)
+    sync = source[sync_start:sync_end]
+    sales_start = source.index("def simple_sales_ui")
+    sales_end = source.index("def advanced_ui", sales_start)
+    sales = source[sales_start:sales_end]
+
+    assert "hp_job_export_summary" in sync
+    assert "hp_only=True" in sync
+    assert "effective_ranks" not in sync
+    assert "comdesk_linkage_state" in sync
+    assert "simple_comdesk_sync_export" not in sales
+    assert "simple_comdesk_reimport" not in sales
+    assert "sales_filters" in sales
