@@ -126,14 +126,17 @@ def clauses(filters, as_of=None, excluded_ids=None):
         # effective_json is PostgreSQL `text`, never `jsonb` (Stage3 kept it that way deliberately:
         # some rows contain a NUL-character JSON escape inside a string value -- valid JSON, valid SQLite
         # TEXT, but jsonb rejects it outright with "unsupported Unicode escape sequence", which would
-        # make this *unconditional* base clause fail on every count()/query() call). A plain substring
-        # regex reads the one short, quote-free enum value we need without ever parsing the document,
-        # so it is immune to that. (production_companies, which also reads effective_json but needs a
-        # whole array, is handled as a Python post-filter instead -- see needs_post_filter().)
+        # make this *unconditional* base clause fail on every count()/query() call). A literal
+        # substring match against the one exact value this ever compares against ('病院') reads
+        # the same quote-free text without parsing the document, so it is equally immune to that --
+        # see SupabaseClinicRepository._excluded_clinic_ids() for why this replaced a POSIX regex
+        # substring extraction (2026-10-18, same predicate text, verified identical result set).
+        # (production_companies, which also reads effective_json but needs a whole array, is
+        # handled as a Python post-filter instead -- see needs_post_filter().)
         add(
             "病院・センター除外（営業対象外）",
             "NOT (exclude_reason IN ('hospital','center') "
-            "OR COALESCE(substring(effective_json from '\"facility_type\":\"([^\"]*)\"'),'')='病院' "
+            "OR effective_json LIKE '%%\"facility_type\":\"病院\"%%' "
             "OR clinic_name LIKE '%%病院%%' OR clinic_name LIKE '%%センター%%')",
         )
     else:
