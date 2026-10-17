@@ -4,6 +4,7 @@ from src.io.input_loader import load_table
 from src.io.output_writer import csv_bytes
 from src.master.filters import Filters
 from src.master.store import ClinicStore
+from src.repository.supabase_filters import raise_if_unsupported
 
 
 class _LargeClinicStore:
@@ -12,9 +13,11 @@ class _LargeClinicStore:
         self.calls = []
 
     def count(self, filters):
-        assert filters.sales_tiers == ["A", "B", "C"]
-        assert filters.active_only is False
+        assert filters.sales_tiers == []
+        assert filters.effective_ranks == ["A", "B"]
+        assert filters.active_only is True
         assert filters.hp_only is False
+        raise_if_unsupported(filters)
         return self.total
 
     def query(self, filters, *, limit, offset):
@@ -34,14 +37,14 @@ class _LargeClinicStore:
         return {"imported_clinic_ids": {2}, "held_clinic_ids": {3}}
 
 
-def test_unlinked_candidates_page_through_more_than_100k_and_exclude_linkage_states():
-    store = _LargeClinicStore(160_005)
+def test_unlinked_candidates_page_through_full_clinic_master_and_exclude_linkage_states():
+    store = _LargeClinicStore(164_199)
     candidates = unlinked_comdesk_candidates(store)
 
     assert store.calls == [(50_000, 0), (50_000, 50_000), (50_000, 100_000), (50_000, 150_000)]
-    assert len(candidates) == 160_001
+    assert len(candidates) == 164_195
     assert [item["id"] for item in candidates[:3]] == [1, 6, 7]
-    assert candidates[-1]["id"] == 160_005
+    assert candidates[-1]["id"] == 164_199
 
 
 def test_unlinked_export_row_keeps_formal_thirty_column_contract():

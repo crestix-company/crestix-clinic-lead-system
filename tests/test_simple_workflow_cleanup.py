@@ -32,3 +32,24 @@ def test_comdesk_export_and_import_remain_available_in_dedicated_pages():
     import_block = source[import_start:import_end]
     assert 'st.subheader("1. 既存コムデスクを取り込む")' in import_block
     assert 'key="comdesk_upload"' in import_block
+
+
+def test_simple_workflow_keeps_step1_through_step7_in_order():
+    source = _app_source()
+    start = source.index("def simple_workflow_ui")
+    end = source.index("def simple_sales_ui", start)
+    simple = source[start:end]
+    headings = [
+        "Step1：既存Comdesk CSV・Excelを取り込む",
+        "Step2：厚生局データを取り込む",
+        "Step3：Google Maps Collector",
+        "Step4：Google Maps結果を取り込む",
+        "Step5：HP・Email自動調査",
+        "Step6：Comdesk未連携医院CSVを出力",
+        "Step7：UUID付与後のComdesk CSVを再取り込む",
+    ]
+
+    positions = [simple.index(heading) for heading in headings]
+    assert positions == sorted(positions)
+    assert "render_unlinked_comdesk_export(store, demo)" in simple
+    assert 'key_prefix="simple_comdesk_reimport"' in simple

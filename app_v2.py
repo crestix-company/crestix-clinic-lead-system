@@ -1118,8 +1118,9 @@ def render_unlinked_comdesk_export(store, demo):
 
 
 def unlinked_comdesk_candidates(store, page_size=50000):
-    # Restrict output to explicitly sales-eligible tiers. Missing classification fails closed.
-    filters = Filters(active_only=False, hp_only=False, sales_tiers=["A", "B", "C"])
+    # Match the ordinary sales UI contract: active clinics with an effective A/B rank.
+    # Sales Tier is a local analysis sidecar and is unsupported by the Supabase runtime.
+    filters = Filters(active_only=True, hp_only=False, effective_ranks=["A", "B"])
     total = store.count(filters)
     clinics = []
     for offset in range(0, total, page_size):
