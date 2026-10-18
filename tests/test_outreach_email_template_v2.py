@@ -16,6 +16,7 @@ from src.outreach.email_template_v2 import (
     load_settings,
     render_preview,
 )
+from src.outreach import email_template_v2
 from scripts.build_outreach_email_v2_review import approved_v2_body
 
 ARTICLE = "https://clinic.mynavi.jp/article/chofushi_orthodontics/"
@@ -188,7 +189,16 @@ def test_article_url_must_be_https_article_and_exact_master_member(url):
         render_preview(base(actual_article_url=url))
 
 
-def test_past_or_weekend_dates_are_rejected():
+def test_past_or_weekend_dates_are_rejected(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = cls(2026, 10, 16, 9, 0)
+            return fixed.astimezone(tz) if tz else fixed
+
+    # Keep render_preview's implicit clock deterministic without changing the
+    # production date-validation behavior.
+    monkeypatch.setattr(email_template_v2, "datetime", FixedDateTime)
     with pytest.raises(TemplateV2Error, match="過去"):
         render_preview(base(schedule=("2026-10-15 10:00",)))
     with pytest.raises(TemplateV2Error, match="営業日"):

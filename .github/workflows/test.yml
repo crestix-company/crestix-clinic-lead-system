@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - main
+      - feat/outreach-gas-sheet-bridge-phase1
   push:
     branches:
       - main
