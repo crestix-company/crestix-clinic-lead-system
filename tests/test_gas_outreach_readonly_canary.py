@@ -48,10 +48,40 @@ def test_happy_path_counts_and_never_filters_on_comdesk_uuid(tmp_path):
     report = json.loads((tmp_path / "out" / "gas_canary_report.json").read_text(encoding="utf-8"))
     assert report["clinic_id_resolved"] == 5
     assert report["primary_email_found"] == 3
-    assert report["gas_payload_ready"] == 3
-    assert report["comdesk_uuid_used_as_filter"] is False
+    assert report["email_ready"] == 3
+    assert report["gas_case_registration_ready"] == 3
+    assert report["comdesk_uuid_used_as_filter_for_email_ready"] is False
     assert report["writes_performed"] is False
     assert report["gmail_drafts_created"] == 0 and report["gmail_messages_sent"] == 0
+
+
+def test_missing_comdesk_uuid_still_counts_as_email_ready_but_not_case_registration_ready(tmp_path):
+    # clinic 2 mirrors the real clinic_id 74/98 finding: active, HP-verified, Primary
+    # Email found, but public.clinics.uuid (Comdesk UUID) is blank because the clinic
+    # was never imported through src.master.comdesk. It must still count as
+    # email_ready and must not count as gas_case_registration_ready.
+    recs = [{"id": 1, "uuid": "0000-1-aaaa-bbbb-cccc-dddddddddddd", "clinic_name": "医院1"},
+            {"id": 2, "uuid": "", "clinic_name": "医院2"}]
+
+    class FakeEmailResearch:
+        def primary_listing(self, *, limit=500):
+            return [{"clinic_id": 1, "candidate_id": "", "email": "c1@example.jp", "final_sales_eligible": True},
+                    {"clinic_id": 2, "candidate_id": "", "email": "c2@example.jp", "final_sales_eligible": True}]
+
+    class FakeBundle:
+        email_research = FakeEmailResearch()
+
+    code = canary.main(
+        ["--limit", "2", "--out", str(tmp_path / "out")],
+        fetch_records=lambda args, connect_fn: recs,
+        email_build_repositories=lambda **k: (FakeBundle(), None),
+        open_outreach_repository=lambda: FakeOutreachRepo({}),
+    )
+    assert code == 0
+    report = json.loads((tmp_path / "out" / "gas_canary_report.json").read_text(encoding="utf-8"))
+    assert report["comdesk_uuid_missing_count"] == 1
+    assert report["email_ready"] == 2  # both clinics, uuid or not
+    assert report["gas_case_registration_ready"] == 1  # only clinic 1 has a Comdesk UUID
 
 
 def test_gmail_blocking_status_excludes_from_payload_ready(tmp_path):
@@ -74,7 +104,8 @@ def test_gmail_blocking_status_excludes_from_payload_ready(tmp_path):
     assert code == 0
     report = json.loads((tmp_path / "out" / "gas_canary_report.json").read_text(encoding="utf-8"))
     assert report["gmail_excluded_count"] == 1
-    assert report["gas_payload_ready"] == 2  # clinic 2 excluded despite having a Primary Email
+    assert report["email_ready"] == 2  # clinic 2 excluded despite having a Primary Email
+    assert report["gas_case_registration_ready"] == 2
 
 
 def test_clinic_master_permission_denial_stops_before_any_other_connection(tmp_path):
