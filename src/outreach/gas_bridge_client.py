@@ -22,6 +22,7 @@ import hashlib
 import hmac
 import json
 import re
+import secrets
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -233,10 +234,12 @@ class GasBridgeClient:
 
         try:
             status_code, body = self._transport(payload, timeout_seconds=timeout)
-        except GasBridgeTransportError as error:
-            return GasCaseRegistrationResult(status=GasCaseStatus.TRANSPORT_ERROR, reason=str(error))
+        except GasBridgeTransportError:
+            return GasCaseRegistrationResult(status=GasCaseStatus.TRANSPORT_ERROR, reason="transport failed")
         except Exception as error:  # noqa: BLE001 - transport implementations raise varied errors (timeouts, DNS, etc.)
-            return GasCaseRegistrationResult(status=GasCaseStatus.TRANSPORT_ERROR, reason=f"transport failed: {error}")
+            return GasCaseRegistrationResult(
+                status=GasCaseStatus.TRANSPORT_ERROR, reason=f"transport failed ({type(error).__name__})"
+            )
 
         if status_code in (401, 403):
             return GasCaseRegistrationResult(status=GasCaseStatus.AUTH_ERROR, reason=f"HTTP {status_code}")
@@ -256,19 +259,23 @@ class GasBridgeClient:
         return parse_response(parsed)
 
 
-def build_auth_fields(body_json: str, shared_secret: str, *, now: float | None = None) -> dict[str, str]:
-    """Builds the auth values described in connection_auth_design.md.
+def build_auth_fields(
+    body_json: str, shared_secret: str, *, now: float | None = None, nonce: str | None = None
+) -> dict[str, str]:
+    """Return the body-envelope authentication fields shared with GAS.
 
-    GAS `doPost` can only read `e.parameter` (query/form fields), not
-    arbitrary HTTP headers -- so the exact wire placement is left to the
-    transport (see gas_bridge_transport.py, which sends these as query
-    parameters and keeps the POST body as the untouched contract JSON).
-    The signature covers `timestamp + "." + body_json` so a captured
-    request cannot be replayed with a different timestamp.
+    The signed bytes are ``timestamp + LF + nonce + LF + payload`` where
+    payload is the exact compact, recursively key-sorted JSON string.
+    The secret is used only to calculate the signature and is never returned.
     """
     if not shared_secret:
         raise ValueError("shared_secret is required to build auth fields")
     timestamp = str(int(now if now is not None else time.time()))
-    signed_payload = f"{timestamp}.{body_json}".encode("utf-8")
+    request_nonce = nonce or secrets.token_urlsafe(18)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{24,}", request_nonce):
+        raise ValueError("nonce must contain at least 24 URL-safe characters")
+    if not re.fullmatch(r"\d{10}", timestamp):
+        raise ValueError("timestamp must be a 10-digit Unix timestamp")
+    signed_payload = f"{timestamp}\n{request_nonce}\n{body_json}".encode("utf-8")
     signature = hmac.new(shared_secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
-    return {"sharedSecret": shared_secret, "timestamp": timestamp, "signature": signature}
+    return {"timestamp": timestamp, "nonce": request_nonce, "signature": signature}

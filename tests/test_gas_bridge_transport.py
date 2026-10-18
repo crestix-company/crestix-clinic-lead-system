@@ -29,7 +29,7 @@ class _FakeResponse:
         return False
 
 
-def test_transport_sends_auth_as_query_params_and_body_as_untouched_json():
+def test_transport_sends_signed_payload_envelope_without_secret_in_url_or_body():
     captured = {}
 
     def fake_urlopen(request, timeout):
@@ -47,11 +47,15 @@ def test_transport_sends_auth_as_query_params_and_body_as_untouched_json():
 
     assert status == 200
     assert json.loads(body) == {"status": "REGISTERED"}
-    assert "authSecret=s3cret" in captured["url"]
-    assert "authTimestamp=" in captured["url"]
-    assert "authSignature=" in captured["url"]
-    # The body itself must be the untouched contract JSON -- no auth fields mixed in.
-    assert json.loads(captured["body"]) == {"operationKey": "a" * 64}
+    assert "s3cret" not in captured["url"]
+    assert "?" not in captured["url"]
+    wire = json.loads(captured["body"])
+    assert set(wire) == {"auth", "payload"}
+    assert "s3cret" not in captured["body"].decode("utf-8")
+    assert json.loads(wire["payload"]) == {"operationKey": "a" * 64}
+    assert len(wire["auth"]["timestamp"]) == 10
+    assert len(wire["auth"]["nonce"]) >= 24
+    assert len(wire["auth"]["signature"]) == 64
     assert captured["timeout"] == 5.0
 
 
@@ -86,3 +90,15 @@ def test_config_requires_endpoint_url_and_secret():
         make_http_transport(GasBridgeHttpConfig(endpoint_url="", shared_secret="s"))
     with pytest.raises(ValueError):
         make_http_transport(GasBridgeHttpConfig(endpoint_url="https://example.invalid", shared_secret=""))
+
+
+@pytest.mark.parametrize("url", [
+    "http://example.invalid/exec",
+    "https://user:pass@example.invalid/exec",
+    "https://example.invalid/exec?token=x",
+    "https://example.invalid/exec#fragment",
+    "https://example.invalid/s3cret/exec",
+])
+def test_config_rejects_insecure_or_credential_bearing_endpoint_urls(url):
+    with pytest.raises(ValueError):
+        make_http_transport(GasBridgeHttpConfig(endpoint_url=url, shared_secret="s3cret"))

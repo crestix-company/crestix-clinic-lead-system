@@ -5,6 +5,9 @@ against the in-memory `MockGasBridgeServer`, never a real network call.
 from __future__ import annotations
 
 import json
+import time
+
+from src.outreach.gas_bridge_client import build_auth_fields
 
 import pytest
 
@@ -42,6 +45,45 @@ def test_successful_registration_through_mock_server_with_real_auth_signing():
     assert result.status == GasCaseStatus.REGISTERED
     assert result.draft_id == "draft-1"
     assert server.call_count == 1
+    assert len(server.accepted_nonces) == 1
+
+
+def _signed_wire(payload, *, secret=SECRET, timestamp=None, nonce="test_nonce_abcdefghijklmnop"):
+    payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    auth = build_auth_fields(
+        payload_json,
+        secret,
+        now=time.time() if timestamp is None else timestamp,
+        nonce=nonce,
+    )
+    return json.dumps({"auth": auth, "payload": payload_json}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def test_mock_server_rejects_signature_mismatch_before_registration():
+    server = MockGasBridgeServer(shared_secret=SECRET, known_draft_ids={"draft-1"})
+    envelope = json.loads(_signed_wire(_request().to_json()))
+    envelope["auth"]["signature"] = "0" * 64
+
+    status, _ = server.handle_wire(json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+    assert status == 401
+    assert server.cases_by_operation_key == {}
+    assert server.accepted_nonces == set()
+
+
+def test_mock_server_rejects_expired_timestamp_and_replay_before_side_effects():
+    server = MockGasBridgeServer(shared_secret=SECRET, known_draft_ids={"draft-1"}, now=1_800_000_000)
+    payload = _request().to_json()
+    expired = _signed_wire(payload, timestamp=1_700_000_000, nonce="expired_nonce_abcdefghijkl")
+    assert server.handle_wire(expired)[0] == 401
+    assert server.cases_by_operation_key == {}
+
+    server.now = time.time()
+    valid = _signed_wire(payload, timestamp=server.now, nonce="replay_nonce_abcdefghijkl")
+    assert server.handle_wire(valid)[0] == 200
+    replay_status, _ = server.handle_wire(valid)
+    assert replay_status == 401
+    assert len(server.cases_by_operation_key) == 1
 
 
 def test_auth_failure_wrong_shared_secret_does_not_register_anything():
@@ -63,6 +105,21 @@ def test_timeout_maps_to_retryable_transport_error():
 
     assert result.status == GasCaseStatus.TRANSPORT_ERROR
     assert result.is_retryable
+
+
+def test_retry_after_timeout_uses_fresh_nonce_and_preserves_operation_key():
+    server = MockGasBridgeServer(shared_secret=SECRET, known_draft_ids={"draft-1"}, always_timeout=True)
+    client = GasBridgeClient(make_mock_transport(server, shared_secret=SECRET))
+    request = _request()
+
+    first = client.register_case(request)
+    server.always_timeout = False
+    second = client.register_case(request)
+
+    assert first.status == GasCaseStatus.TRANSPORT_ERROR
+    assert second.status == GasCaseStatus.REGISTERED
+    assert len(server.accepted_nonces) == 1
+    assert request.operation_key in server.cases_by_operation_key
 
 
 def test_unexpected_http_status_is_treated_as_transport_error():
@@ -107,6 +164,7 @@ def test_retry_after_pending_recovers_without_duplicate_registration():
     assert second.status == GasCaseStatus.RECOVERED
     assert second.draft_id == "draft-1"
     assert second.is_success
+    assert len(server.accepted_nonces) == 2, "each retry must use a fresh nonce"
 
 
 def test_rejected_draft_not_found_does_not_retry_automatically():

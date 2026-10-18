@@ -11,6 +11,9 @@ without a network call or a deployed Web App, per
 from __future__ import annotations
 
 import json
+import hashlib
+import hmac
+import time
 from dataclasses import dataclass, field
 
 from src.outreach.gas_bridge_client import build_auth_fields
@@ -27,17 +30,48 @@ class MockGasBridgeServer:
     always_timeout: bool = False
     always_return_http_status: int | None = None
     call_count: int = 0
+    accepted_nonces: set[str] = field(default_factory=set)
+    now: float | None = None
 
-    def handle(self, payload: dict, *, provided_secret: str) -> tuple[int, str]:
+    def handle_wire(self, wire_body: str) -> tuple[int, str]:
         self.call_count += 1
 
         if self.always_timeout:
             raise TimeoutError("mock GAS server did not respond in time")
         if self.always_return_http_status is not None:
             return self.always_return_http_status, ""
-        if provided_secret != self.shared_secret:
-            # A real gateway would reject before registerClinicLeadCase_ ever runs.
-            return 401, json.dumps({"status": "REJECTED", "reason": "shared secret mismatch"})
+        try:
+            envelope = json.loads(wire_body)
+            auth = envelope["auth"]
+            payload_json = envelope["payload"]
+            payload = json.loads(payload_json)
+            timestamp = auth["timestamp"]
+            nonce = auth["nonce"]
+            signature = auth["signature"]
+        except (TypeError, ValueError, KeyError):
+            return 400, json.dumps({"status": "REJECTED"})
+
+        if not isinstance(payload_json, str) or not isinstance(payload, dict):
+            return 400, json.dumps({"status": "REJECTED"})
+        # Require payload's exact canonical representation, including Unicode.
+        if json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")) != payload_json:
+            return 400, json.dumps({"status": "REJECTED"})
+        clock = self.now if self.now is not None else time.time()
+        if not isinstance(timestamp, str) or not timestamp.isdigit() or len(timestamp) != 10:
+            return 401, json.dumps({"status": "REJECTED"})
+        if abs(int(clock) - int(timestamp)) > 300:
+            return 401, json.dumps({"status": "REJECTED"})
+        if not isinstance(nonce, str) or len(nonce) < 24 or not all(c.isalnum() or c in "_-" for c in nonce):
+            return 401, json.dumps({"status": "REJECTED"})
+        if nonce in self.accepted_nonces:
+            return 401, json.dumps({"status": "REJECTED"})
+        signed = f"{timestamp}\n{nonce}\n{payload_json}".encode("utf-8")
+        expected = hmac.new(self.shared_secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
+        if not isinstance(signature, str) or not hmac.compare_digest(signature, expected):
+            return 401, json.dumps({"status": "REJECTED"})
+        # A valid nonce is consumed before business side effects, just as GAS
+        # must do under ScriptLock/PropertiesService.
+        self.accepted_nonces.add(nonce)
 
         operation_key = payload.get("operationKey", "")
 
@@ -49,7 +83,7 @@ class MockGasBridgeServer:
 
         draft_id = (payload.get("existingDraft") or {}).get("id", "")
         if draft_id not in self.known_draft_ids:
-            return 200, json.dumps({"status": "REJECTED", "reason": "draft could not be verified: " + draft_id})
+            return 200, json.dumps({"status": "REJECTED", "reason": "draft could not be verified"})
 
         if self.fail_next_n_sheet_writes > 0:
             self.fail_next_n_sheet_writes -= 1
@@ -79,8 +113,11 @@ def make_mock_transport(server: MockGasBridgeServer, *, shared_secret: str):
     """
 
     def transport(payload: dict, *, timeout_seconds: float) -> tuple[int, str]:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        auth = build_auth_fields(body, shared_secret)
-        return server.handle(payload, provided_secret=auth["sharedSecret"])
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        auth = build_auth_fields(payload_json, shared_secret)
+        wire_body = json.dumps(
+            {"auth": auth, "payload": payload_json}, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        return server.handle_wire(wire_body)
 
     return transport

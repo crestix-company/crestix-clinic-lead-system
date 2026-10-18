@@ -39,22 +39,24 @@ def make_http_transport(config: GasBridgeHttpConfig) -> GasBridgeTransport:
         raise ValueError("endpoint_url is required")
     if not config.shared_secret:
         raise ValueError("shared_secret is required")
+    parsed_endpoint = urllib.parse.urlsplit(config.endpoint_url)
+    if parsed_endpoint.scheme.lower() != "https":
+        raise ValueError("endpoint_url must use HTTPS")
+    if not parsed_endpoint.netloc or parsed_endpoint.username or parsed_endpoint.password:
+        raise ValueError("endpoint_url must not contain user information")
+    if parsed_endpoint.query or parsed_endpoint.fragment:
+        raise ValueError("endpoint_url must not contain a query or fragment")
+    if config.shared_secret in config.endpoint_url:
+        raise ValueError("endpoint_url must not contain the shared secret")
 
     def transport(payload: dict, *, timeout_seconds: float) -> tuple[int, str]:
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        auth = build_auth_fields(body, config.shared_secret)
-        query = urllib.parse.urlencode(
-            {
-                "authSecret": auth["sharedSecret"],
-                "authTimestamp": auth["timestamp"],
-                "authSignature": auth["signature"],
-            }
-        )
-        separator = "&" if "?" in config.endpoint_url else "?"
-        url = config.endpoint_url + separator + query
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        auth = build_auth_fields(payload_json, config.shared_secret)
+        envelope = {"auth": auth, "payload": payload_json}
+        body = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
         request = urllib.request.Request(
-            url,
+            config.endpoint_url,
             data=body.encode("utf-8"),
             headers={"Content-Type": "application/json; charset=UTF-8"},
             method="POST",
@@ -65,6 +67,8 @@ def make_http_transport(config: GasBridgeHttpConfig) -> GasBridgeTransport:
         except urllib.error.HTTPError as error:
             return error.code, error.read().decode("utf-8", errors="replace")
         except (urllib.error.URLError, TimeoutError, OSError) as error:
-            raise GasBridgeTransportError(f"HTTP transport failed: {error}") from error
+            # urllib errors can embed request URLs; keep transport diagnostics
+            # free of endpoint, payload, and credential material.
+            raise GasBridgeTransportError(f"HTTP transport failed ({type(error).__name__})") from error
 
     return transport
