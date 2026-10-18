@@ -161,6 +161,28 @@ class OutreachDeliveryRepository:
         return {int(row["clinic_id"]): str(row["status"])
                 for row in self.campaign_rows(campaign_id)}
 
+    def clinic_statuses(self, clinic_ids) -> dict[int, list[dict]]:
+        """Every delivery record for the given Clinic IDs, across all campaigns.
+
+        READ ONLY cross-campaign dedup lookup (e.g. for a GAS/outreach payload that must
+        not re-target a clinic with an existing DRAFT/SENT/SCHEDULED/REPLIED record under
+        any campaign_id, not just one known in advance).
+        """
+        ids = sorted({int(cid) for cid in clinic_ids})
+        if not ids:
+            return {}
+        from psycopg.rows import dict_row
+        rows = self._select(
+            f"SELECT clinic_id,campaign_id,status,gmail_draft_id,gmail_message_id,"
+            f"sent_at,created_at FROM {TABLE} WHERE clinic_id=ANY(%s::bigint[]) "
+            f"ORDER BY clinic_id,created_at",
+            (ids,), row_factory=dict_row,
+        )
+        result: dict[int, list[dict]] = {clinic_id: [] for clinic_id in ids}
+        for row in rows:
+            result[int(row["clinic_id"])].append(dict(row))
+        return result
+
     def counts(self, *, campaign_id: str | None = None) -> dict[str, int]:
         sql = f"SELECT status,count(*) AS n FROM {TABLE}"
         params: tuple = ()

@@ -7,6 +7,13 @@ configured role holds SELECT and no INSERT/UPDATE/DELETE/TRUNCATE on every table
 reader uses.
 
 No write method is implemented anywhere in this module.
+
+Status (2026-10-18): EMAIL_READONLY_DB_URL names a role that has not been provisioned
+in Supabase. It is allowlisted in scripts/launch_v2.py and documented in
+config/email_research.env.example for when that role exists, but nothing sets it
+today, so this module always fails closed. GAS/outreach callers needing a Primary
+Email lookup must use src.outreach.gas_email_lookup instead, which uses the
+already-working EMAIL_RESEARCH_DB_URL connection.
 """
 from __future__ import annotations
 
