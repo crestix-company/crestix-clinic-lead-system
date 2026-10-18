@@ -125,7 +125,7 @@ def test_register_case_maps_transport_exception_to_transport_error():
 
     assert result.status == GasCaseStatus.TRANSPORT_ERROR
     assert result.is_retryable
-    assert "timed out" in result.reason
+    assert result.reason == "transport failed"
 
 
 def test_register_case_handles_malformed_json_response():
@@ -161,14 +161,39 @@ def test_already_registered_is_success_not_retryable():
 
 
 def test_build_auth_fields_is_deterministic_for_same_timestamp_and_changes_with_body():
-    first = build_auth_fields('{"a":1}', "secret", now=1000)
-    second = build_auth_fields('{"a":1}', "secret", now=1000)
-    different_body = build_auth_fields('{"a":2}', "secret", now=1000)
+    first = build_auth_fields('{"a":1}', "secret", now=1700000000, nonce="abcdefghijklmnopqrstuvwx")
+    second = build_auth_fields('{"a":1}', "secret", now=1700000000, nonce="abcdefghijklmnopqrstuvwx")
+    different_body = build_auth_fields('{"a":2}', "secret", now=1700000000, nonce="abcdefghijklmnopqrstuvwx")
 
     assert first == second
     assert first["signature"] != different_body["signature"]
+    assert "sharedSecret" not in first
+    assert first["nonce"] == "abcdefghijklmnopqrstuvwx"
 
 
 def test_build_auth_fields_requires_shared_secret():
     with pytest.raises(ValueError):
         build_auth_fields("{}", "")
+
+
+def test_build_auth_fields_rejects_non_ten_digit_timestamp_and_short_nonce():
+    with pytest.raises(ValueError):
+        build_auth_fields("{}", "secret", now=1000)
+    with pytest.raises(ValueError):
+        build_auth_fields("{}", "secret", now=1700000000, nonce="short")
+
+
+def test_build_auth_fields_matches_shared_gas_golden_vector():
+    payload = '{"clinicName":"架空医院","clinicUuid":"123e4567-e89b-42d3-a456-426614174000","operationKey":"mock-operation-key"}'
+    auth = build_auth_fields(
+        payload,
+        "mock-only-shared-secret-never-production",
+        now=1792310400,
+        nonce="abcdefghijklmnopqrstuvwx",
+    )
+
+    assert auth == {
+        "timestamp": "1792310400",
+        "nonce": "abcdefghijklmnopqrstuvwx",
+        "signature": "65b760feb1bf5336842237fee8adcd2ae039314f32ed526f3e48d6855f8c4fe2",
+    }

@@ -37,6 +37,18 @@ HANDOFF.mdに記載の2点は、そのまま「確認待ち」として扱った
 - `gas_bridge_transport.py`の実URLへの接続試験（現在は`urlopen`をモックしたテストのみ）。
 - `outreach_delivery_repository.py`（別ブランチ`feat/email-outreach-completion-20261017`、他セッション管轄）との統合は未着手。本ブリッジのローカル台帳とは別物。
 
+## HTTP認証契約
+
+HTTP POST本文は次のJSON envelopeとする。`payload`は既存の登録契約JSONを再帰的にキー順ソートし、空白なし・UTF-8（`ensure_ascii=False`）で直列化した文字列。
+
+```json
+{"auth":{"timestamp":"10桁Unix秒","nonce":"リクエストごとの24文字以上URL-safe値","signature":"小文字hexのHMAC-SHA256"},"payload":"..."}
+```
+
+署名対象はUTF-8 bytesの`timestamp + LF + nonce + LF + payload`。共有シークレットはローカルのHMAC計算にのみ使用し、URL・本文・ログには含めない。各通信試行は新しいnonceを発行するが、payloadと`operationKey`は再試行間で変えない。受信側は300秒以内のtimestamp、未使用nonce、定時間比較による署名一致を副作用前に確認する。HTTP transportはHTTPSのみ許可し、query・fragment・userinfoを含むURLを拒否する。
+
+接続先URLと共有シークレットは環境変数またはSecret Storeから注入する。失敗ログは通信エラー種別とHTTP statusに限定し、request payload・Draft ID・医院情報・credentialを記録しない。
+
 ## テスト結果
 
 Target tests: `test_gas_bridge_client.py` + `test_gas_bridge_ledger.py` +
