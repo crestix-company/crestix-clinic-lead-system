@@ -17,12 +17,14 @@ connection is not role-verified read-only the way Clinic Master's
 implements no write method.
 
 Clinic ID (``public.clinics.id``, bigint) is the only identifier this module
-accepts. Comdesk UUID (an external Comdesk case/lead id populated by
-``src.master.comdesk`` only once a clinic is matched into Comdesk -- see
-``ClinicTarget.comdesk_uuid``) is a separate, often-empty identifier unrelated to
-Clinic Master or Email Research row addressing, and must never gate this lookup.
-Clinic UUID (``public.clinics.uuid``) is the Clinic Lead System's own internal,
-always-present identifier and is informational here, not a query key.
+accepts. ``public.clinics.uuid`` -- the Comdesk UUID -- is copied in only by
+``src.master.comdesk``'s CSV import (from Comdesk's own case/lead-id column; no
+code anywhere generates one) and is therefore empty for any clinic never matched
+into Comdesk. It is an external, often-empty identifier unrelated to Clinic
+Master or Email Research row addressing, and must never gate this lookup --
+confirmed live for clinic_id 74 and 98 (active, HP-verified, with a Primary
+Email candidate query this module runs against), which have ``uuid=''`` for
+this reason alone and are still resolved by this module.
 """
 from __future__ import annotations
 
