@@ -20,6 +20,12 @@ EMAIL_ENV_KEYS = {
     "EMAIL_RESEARCH_DB_URL",
     "EMAIL_TARGET_READER_DB_URL",
     "CLINIC_READONLY_DB_URL",
+    # Optional, stricter dedicated-role path for src.outreach.email_readonly_access.
+    # Not provisioned in Supabase today -- see config/email_research.env.example.
+    # Until a role exists, GAS/outreach Email Research reads use EMAIL_RESEARCH_DB_URL
+    # via src.outreach.gas_email_lookup, the same connection already proven in
+    # scripts/outreach_mail_canary.py.
+    "EMAIL_READONLY_DB_URL",
     "EMAIL_AUTO_RUN_ENABLED",
     "SERPAPI_API_KEY",
     "EMAIL_SEARCH_PROVIDER",
