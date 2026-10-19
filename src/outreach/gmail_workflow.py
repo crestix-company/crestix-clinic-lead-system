@@ -215,6 +215,7 @@ def _reconcile_existing_ledger(result: OutreachResult, *, campaign_id: str,
                 pass
         try:
             repository.sync_status(outreach_id=outreach_id, status="SENT",
+                                   gmail_draft_id=str(row.get("gmail_draft_id") or ""),
                                    gmail_message_id=message.message_id,
                                    gmail_thread_id=message.thread_id, sent_at=sent_at)
         except Exception:
@@ -230,6 +231,7 @@ def _reconcile_existing_ledger(result: OutreachResult, *, campaign_id: str,
         message = scheduled[0]
         try:
             repository.sync_status(outreach_id=outreach_id, status="SCHEDULED",
+                                   gmail_draft_id=str(row.get("gmail_draft_id") or ""),
                                    gmail_message_id=message.message_id,
                                    gmail_thread_id=message.thread_id)
         except Exception:
