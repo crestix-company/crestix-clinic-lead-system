@@ -1160,10 +1160,13 @@ After approval/application, the Reader acceptance gate is:
 ### Apply / rollback boundary
 
 The proposed application transaction is the full “Final proposed SQL and order” block above,
-with two release conditions: the clinic projection must no longer require raw `effective_json`,
-or a data owner must sign an explicit exception; and the policy-name/catalog guard must pass.
-It only changes `clinic_cloudrun_reader` grants/policies. Do not execute by copy/paste until
-those approvals are recorded.
+with two release conditions: C's implementation must identify an approved no-raw-JSON read path,
+or a data owner must sign an explicit full-payload exception; and the policy-name/catalog guard
+must pass. The SQL block still contains the conditional `effective_json` grant for compatibility
+with the current implementation. It is **not executable as the recommended projection path**;
+remove that column and update the app-facing relation/SQL first. It only changes
+`clinic_cloudrun_reader` grants/policies. Do not execute by copy/paste until those approvals are
+recorded.
 
 Rollback has two distinct outcomes. **Security rollback:** stop the application credential via
 separately approved Cloud Run/Secret operations; drop only the seven newly added policies,
@@ -1227,3 +1230,57 @@ Until sign-offs 1–4 exist and the selected `effective_json` path is implemente
 SQL is review-ready but not execution-authorized. This document contains no live connection
 parameters; an authorized operator retrieves them from the approved Dashboard at connection
 time. Do not disclose them in PR text or command history.
+
+## Projection implementation alignment plan (2026-10-19)
+
+The current PR #118 SQL is the baseline. No C implementation SHA was present in the open PR list
+available during this review, so no projection-specific SQL should be approved yet. Once C
+provides a commit/PR and confirms the SQL it emits, replace the conditional raw-JSON grant and
+reconcile the exact SQL capture against this plan.
+
+| C implementation form | Reader database privilege model | RLS / CRM effect | Seven-object boundary |
+|---|---|---|---|
+| App extracts JSON keys but still selects `effective_json` | Still requires `SELECT(effective_json)`; application-side extraction does not constrain DB access. | Existing table RLS is unchanged; raw payload remains readable. CRM is unaffected. | Same seven tables, but **not** a least-privilege projection. Reject as satisfying the requirement. |
+| App SQL uses JSON key operators on `effective_json` | PostgreSQL column ACL is on the source column, not an expression; selecting `effective_json->...` still requires SELECT on the whole source column. | Same RLS; does not hide other JSON keys from the Reader. | Seven tables remain, but raw JSON permission remains. Not acceptable as projection. |
+| Generated/physical projection columns on `public.clinics` | Grant only approved projection columns; omit/revoke `effective_json`. If generated columns are used, add them via separately reviewed schema change. | Existing base table RLS can apply directly; no policy for other roles needs to change. Review defaults/write paths and data backfill/validation before migration. | Preserves seven table relations, but changes the shared table schema and requires migration/compatibility review. |
+| Dedicated view replacing `public.clinics` in the app path | Grant SELECT on the view only; do not grant Reader direct raw JSON access. The view must expose only approved fields. | A default owner-rights view may bypass base-table RLS if owned by the table owner; `security_invoker` preserves caller RLS but normally requires caller privileges on base columns. A safe design must resolve this explicitly (for example a narrowly privileged non-owner view owner with an RLS policy scoped to it), and prove it in an isolated DB. Do not copy a generic view definition without this review. | App query capture can remain seven direct read relations if the view substitutes the clinics relation, but the database has an additional view object/dependency. Record this as a view exception to the seven-table *base-table* allowlist. |
+
+**Preferred direction:** a dedicated narrow projection relation that replaces the direct `public.clinics`
+read in the seven-object app allowlist. The exact choice between generated columns and a view is
+conditional on C's implementation: generated columns preserve the table boundary but alter the
+shared schema; a view avoids granting raw JSON to Reader but adds an object and requires careful
+RLS-owner semantics. Direct expression extraction is not sufficient. Do not modify existing CRM
+grants/policies; test that the normal Clinic Master and CRM roles retain their current behavior.
+The existing SQL adapter deliberately treats `effective_json` as text and avoids casting it to
+`jsonb`, because some stored escaped-NUL values are rejected by PostgreSQL `jsonb`. Therefore
+generated-column or view extraction that casts the whole source text must first prove safe over
+the complete source-value domain or use a validated, non-throwing extraction; do not assume the
+column is uniformly castable.
+
+### SQL delta when the projection implementation is known
+
+- **Generated/physical columns:** keep `public.clinics` as the first allowlisted relation;
+  `REVOKE SELECT ON public.clinics FROM clinic_cloudrun_reader`, then `GRANT SELECT` on only the
+  approved projection columns plus filter/order columns. Omit `effective_json`. Keep its existing
+  Reader RLS policy `USING (true)` only if the approved projection's row scope is all national
+  clinic records; do not change any other role's policies.
+- **View:** revoke the Reader's base table-level SELECT and do not grant `effective_json`.
+  Grant only schema USAGE and SELECT on the dedicated view. Add/confirm a base policy for the
+  narrowly privileged view owner if the design uses owner-rights access; validate that the view
+  cannot bypass intended row scope. The six non-clinic table grants/policies remain unchanged.
+- **Either form:** the other six target tables and the email predicate remain as already
+  proposed. Reject any C SQL path that adds audit/history/Email KPI/HP Job/Step 6 tables or
+  selects raw email evidence. Check policy-name conflicts before adding any policy; never replace
+  existing CRM policies.
+
+### Projection integration test gate
+
+Before DB approval, run the READ ONLY application against an isolated DB with the proposed
+projection and a Reader-equivalent role. Capture SQL and prove: no raw `effective_json` select;
+filters and row counts agree with the pre-projection reference fixture; projected clinic list
+and all allowed CSV/XLSX fields remain identical; hidden JSON keys cannot be selected through
+the Reader; all seven target relations stay within the approved list (or the view substitution
+is explicitly recorded); Reader writes fail; CRM fixture roles keep their prior SELECT/write
+behavior; and the existing official-email RLS fixture still exposes only qualifying rows.
+Then update the GRANT/RLS block to the exact C commit and rerun the pre-apply catalog/policy
+collision checks. This gate is not met by the existing UI-only integration tests.
