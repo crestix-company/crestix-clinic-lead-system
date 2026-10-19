@@ -456,7 +456,7 @@ The Supabase project lookup confirms ref `hwdvyhunozporfuefteb`, name `clinic-le
 region `ap-northeast-1`, and healthy status. This identifies the candidate database, not the
 Cloud Run target. No URL/secret value or Cloud Run service configuration was inspected. Obtain
 the exact shared Session Pooler host and connection details from that project's Supabase
-Dashboard Connect dialog; for shared Session mode, use port `5432` and the custom-role username
+Dashboard Connect dialog; for shared Session mode, use port `[Dashboard port omitted]` and the custom-role username
 format `<role>.<project-ref>`. Do not derive the pooler hostname from the region.
 
 ### Targeted live catalog verification (SELECT-only, 2026-10-19)
@@ -502,7 +502,7 @@ privileges and no reader connection is configured.
    `CLINIC_WRITE_BACKEND=supabase`. Check only whether `SUPABASE_RUNTIME_DB_URL` references the
    approved secret/version; never print or export its value.
 2. In the Supabase Dashboard Connect dialog for ref `hwdvyhunozporfuefteb`, select shared
-   Session Pooler. Confirm the exact host, port 5432, database, TLS settings, and role-formatted
+   Session Pooler. Confirm the exact host, port [Dashboard port omitted], database, TLS settings, and role-formatted
    username there. Do not guess the host or reuse `clinic_runtime` credentials.
 3. After separate DB approval and applying the proposed grants/policies, run the application
    connection through a secure session without echoing the DSN. Return only booleans/counts:
@@ -627,7 +627,7 @@ tables for initial release.
 ### Supabase connection and secret handoff
 
 Official Supabase connection guidance says to copy the Session Pooler endpoint from that
-project's Dashboard Connect dialog. For shared Session mode, use the shown host, port 5432, and
+project's Dashboard Connect dialog. For shared Session mode, use the shown host, port [Dashboard port omitted], and
 the custom-role username form `<role>.<project-ref>`; do not synthesize a hostname from region.
 The Dashboard's exact endpoint and connection values were not available to this audit, and no
 reader credential was supplied. Project ref `hwdvyhunozporfuefteb` is an active candidate
@@ -820,7 +820,7 @@ only in an isolated database.
   is ready. Approve the exact SQL and verify no policy-name conflict at application time.
 - In Supabase Dashboard > Connect, select the approved project's Session Pooler mode and copy
   the exact host, port, database, TLS and username instructions. For shared Session Pooler the
-  documented port is 5432 and custom-role username form is `<role>.<project-ref>`; do not infer
+  documented port is [Dashboard port omitted] and custom-role username form is `<role>.<project-ref>`; do not infer
   the host from a region. Provision the dedicated password only through the approved secret
   procedure, never in SQL or shell history.
 - A separately approved operator configures Cloud Run's `SUPABASE_RUNTIME_DB_URL` as a
@@ -838,8 +838,8 @@ UI/DB change, not part of this SQL.
 ### Candidate database and role selection
 
 The user supplied Dashboard Connect details for project ref `hwdvyhunozporfuefteb`, project
-`clinic-lead-shadow`: Session Pooler host `aws-0-ap-northeast-1.pooler.supabase.com`, port
-`5432`, database `postgres`. This matches the project ref/name/region used by the prior live
+`clinic-lead-shadow`: Session Pooler host `[Dashboard-confirmed Session Pooler host omitted]`, port
+`[Dashboard port omitted]`, database `postgres`. This matches the project ref/name/region used by the prior live
 catalog audit and existing Clinic Master operations/migration records. `config/production_runtime.env`
 only selects the Supabase backend and does not encode a project ref. Therefore this is the same
 database candidate as the existing Clinic Master, but the Cloud Run revision's actual target
@@ -855,10 +855,10 @@ previous operator report said the Cloud Run revision had no `SUPABASE_RUNTIME_DB
 attached Supabase Secret. Secret Manager state and local reader credentials have not been
 rechecked in this pass; do not infer they have since been provisioned.
 
-The Dashboard's displayed administrator username `postgres.hwdvyhunozporfuefteb` is for
+The Dashboard's displayed administrator username `[project-qualified username omitted]` is for
 human-administered maintenance only and must never be placed in Cloud Run. For the reader,
 the expected shared Session Pooler user form is
-`clinic_cloudrun_reader.hwdvyhunozporfuefteb`. The exact host above was supplied from
+`[project-qualified username omitted]`. The exact host above was supplied from
 Dashboard; do not derive or modify it. Use TLS as specified by the Dashboard connection dialog
 (the operator must confirm the displayed TLS requirement).
 
@@ -892,7 +892,7 @@ From a controlled terminal, a human DBA may connect with an interactive password
 connection string contains no password, and `-W` prompts without placing one in shell history:
 
 ```sh
-psql "host=aws-0-ap-northeast-1.pooler.supabase.com port=5432 dbname=postgres user=postgres.hwdvyhunozporfuefteb sslmode=require" -W
+psql "host=[Dashboard-confirmed Session Pooler host omitted] port=[Dashboard port omitted] dbname=[Dashboard database omitted] user=[project-qualified username omitted] sslmode=require" -W
 ```
 
 Use that administrator session only for the SELECT-only pre-apply catalog checks in this
@@ -900,7 +900,7 @@ document. After a separately approved apply, test the dedicated reader through i
 interactive prompt (never as `postgres`):
 
 ```sh
-psql "host=aws-0-ap-northeast-1.pooler.supabase.com port=5432 dbname=postgres user=clinic_cloudrun_reader.hwdvyhunozporfuefteb sslmode=require" -W
+psql "host=[Dashboard-confirmed Session Pooler host omitted] port=[Dashboard port omitted] dbname=[Dashboard database omitted] user=[project-qualified username omitted] sslmode=require" -W
 ```
 
 Do not use `PGPASSWORD`, put a DSN containing a password on a command line, enable shell
@@ -1086,3 +1086,96 @@ policies.
 **NO-GO** until the target project, role/password readiness, and `effective_json` data-use scope
 are explicitly approved, the pre-apply catalog state is reconfirmed, and a post-apply Reader
 Session Pooler test passes. PR #118 remains Draft and unmerged.
+
+## Approval gate summary for initial Cloud Run release
+
+This section extracts only decisions still awaiting approval; earlier catalog, UI-code,
+isolated-RLS and integration investigations are not repeated.
+
+| Approval item | Evidence / choice required | Current status |
+|---|---|---|
+| Cloud Run database target | Approve `hwdvyhunozporfuefteb` (`clinic-lead-shadow`) as the initial service target. Prior Clinic Master catalog and operations records use this same project. The checked-in backend config does not identify a project, and the Cloud Run secret was not inspected. | Candidate matches existing Clinic Master; actual Cloud Run target approval still required. |
+| Reader role | Select existing `clinic_cloudrun_reader`. The separate `clinic_web_readonly` is a planned name in another design, not the role observed in the audited database. Do not create or silently swap role names. | Role exists and LOGIN was true in the prior catalog audit. Password provisioned/usable status is unknown; no password hash was queried and no connection test was made. |
+| Seven-table permission delta | Approve only the Reader-scoped schema USAGE, column SELECT, seven SELECT RLS policies and the Reader-only revoke of the existing table-wide clinic SELECT described in “Final proposed SQL”. | SQL is prepared, not applied. Existing CRM roles and policies are outside the delta. |
+| `effective_json` | Explicitly accept its entire effective source dictionary for IAP users, or reject and require the UI to use a minimized projection before grants are applied. | **Not approved. Recommended default: do not expose raw `effective_json`; require projection/UI change unless the data owner explicitly accepts all keys.** |
+| Authentication and secret | Human operator confirms Reader credential exists through the approved credential channel; later A/operator sets the runtime Secret and service identity access under separate approval. | Unknown. Prior report said no runtime DB Secret was attached to the Cloud Run revision. This review did not inspect Secret Manager or Cloud Run. |
+| Apply / rollback | DBA approves exact transaction and rollback mode after a fresh catalog preflight and no policy-name collisions. | Not approved. No DB changes made. |
+
+### `effective_json`: classification and release decision
+
+From the application projection contract, the JSON can contain:
+
+- **Direct identifiers/contact data:** clinic name, phone, address, postal/prefecture values,
+  clinic/provider identifiers, owner and manager names. These are internal business contact
+  fields; owner/manager names are personal information.
+- **Operational clinic data:** facility/status and medical classification, departments,
+  designation/registration details, business days/hours, and treatment categories.
+- **Web and commercial signals:** HP/Maps URLs and match/status details, marketing signals,
+  age-probability/classification values, and source-specific fields inherited from the source
+  dictionaries. The shape can vary by record/source; granting the JSON column exposes keys not
+  enumerated by the UI.
+- **Email:** official verified export email is fetched from the separate
+  `public.clinic_email_enrichment` table. The JSON grant is not required to authorize that email
+  column and is not a substitute for its RLS condition.
+
+The UI/export needs clinic identity and contact fields, selected clinic classifications,
+display/filter data, and the original Comdesk row/template for compatibility. That does not
+establish a need to disclose every source-specific JSON key. IAP narrows the audience to
+authorized staff but cannot constrain queries made with the service credential or protect data
+after a compromised application. The recommended release decision is therefore **withhold raw
+`effective_json` until a reader projection containing only approved display/filter/export keys
+is implemented and verified**. If fastest launch is prioritized instead, a named data owner
+must explicitly approve all current and future keys in the full JSON payload; without that
+approval the existing SQL is not eligible for application.
+
+### DB operator acceptance conditions
+
+Before applying, the DBA must use an authorized admin session to perform the already-documented
+catalog-only preflight against the approved project: confirm role attributes and membership
+direction, direct/PUBLIC/inherited ACLs, RLS flags, existing policy names, and current clinic
+column grants. Stop on any mismatch. Confirm the chosen role and public-data projection with
+the service/data owners. The user-confirmed Session Pooler endpoint was checked against the
+prior project identity; connection parameter values are intentionally omitted from this
+document under the no-connection-info-in-Git rule. The operator should retrieve them directly
+from Dashboard Connect at the time of the approved test.
+
+After approval/application, the Reader acceptance gate is:
+
+1. Connect only as `clinic_cloudrun_reader` using the Dashboard-provided Session Pooler
+   parameters and interactively supplied credential; verify identity and database without
+   printing connection strings.
+2. Verify `transaction_read_only` and `default_transaction_read_only` are `on`; check SELECT
+   columns equal the approved allowlists; check INSERT/UPDATE/DELETE/TRUNCATE are false; verify
+   only the three required non-public schema USAGE grants are true; and verify all seven
+   Reader-specific RLS policies exist.
+3. Execute `SELECT 1`, the seven allowlisted table reads, then the approved national clinic
+   count and compare it with an independently approved baseline. Do not log row-level fields.
+4. In the Cloud Run candidate, verify nationwide browsing, department/rank/treatment filters,
+   sales-target extraction, and CSV/XLSX export. Compare displayed count, export row count, and
+   file row count. Confirm email export contains only qualifying RLS-visible rows. Confirm
+   permission/connection failure is fail-closed, with no SQLite/demo/broader-role fallback.
+5. Verify no out-of-scope audit/history/Email KPI/HP Job/Step 6 objects are referenced. Check
+   effective write privileges; exercise denied DML only in a disposable isolated DB.
+
+### Apply / rollback boundary
+
+The proposed application transaction is the full “Final proposed SQL and order” block above,
+with two release conditions: the clinic projection must no longer require raw `effective_json`,
+or a data owner must sign an explicit exception; and the policy-name/catalog guard must pass.
+It only changes `clinic_cloudrun_reader` grants/policies. Do not execute by copy/paste until
+those approvals are recorded.
+
+Rollback has two distinct outcomes. **Security rollback:** stop the application credential via
+separately approved Cloud Run/Secret operations; drop only the seven newly added policies,
+revoke the new Reader column/schema grants, and leave Reader with no clinic SELECT. **Exact
+pre-change ACL restoration:** regrant the old full-table clinic SELECT only if the data/security
+owner explicitly approves reopening all 41 columns. The earlier rollback block describes that
+availability restoration; it is not the default after a data-exposure incident. Existing CRM
+policies, grants and roles are never part of either rollback.
+
+No authentication check, Secret Manager inspection, database query, grant, policy, migration,
+Cloud Run/IAM change, or merge was performed for this approval summary. The prior report's
+Reader password/secret status remains unknown; the prior Cloud Run report indicated the runtime
+DB Secret was absent. PR #118 is Draft, with base main at
+`c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` and proposal head
+`e6bb19e33cb794f575b8b567680c2b794e529ca1` before this documentation update.
