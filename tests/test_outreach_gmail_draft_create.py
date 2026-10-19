@@ -3,13 +3,14 @@ from __future__ import annotations
 import base64
 import json
 import stat
-from datetime import date
+from datetime import date, datetime
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
 
+import src.outreach.email_template_v2 as email_template_v2
 from scripts import outreach_gmail_create_drafts as draft_cli
 from src.outreach.email_template_v2 import ARTICLE_PRESENT, SUBJECT, TEMPLATE_VERSION, PreviewInput, render_preview
 from src.outreach.gmail_drafts import (
@@ -28,6 +29,22 @@ AS_OF = date(2026, 10, 16)
 ARTICLE = "https://clinic.mynavi.jp/article/chofushi_orthodontics/"
 DETAIL = "https://clinic.mynavi.jp/clinic/ihff0m1f1d12/"
 SCHEDULE = ("2026-10-19 10:00", "2026-10-20 14:00")
+
+
+@pytest.fixture(autouse=True)
+def _frozen_render_preview_clock(monkeypatch):
+    """Pin render_preview()'s internal "now" to AS_OF, same root cause/fix as
+    tests/test_outreach_email_template_v2.py -- see
+    https://github.com/crestix-company/crestix-clinic-lead-system/issues/107.
+    Production rendering code is unchanged; only this test's view of "now"."""
+    fixed_now = datetime(2026, 10, 16, 8, 0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(email_template_v2, "datetime", FrozenDateTime)
 
 
 class _Response:
