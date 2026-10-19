@@ -1535,6 +1535,12 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         "治療カテゴリを選択していない場合は治療カテゴリでは絞り込みません。"
         "HP ABC判定は営業対象のA/B条件を反映します。"
     )
+    readonly_export_over_limit = read_only and count > 100000
+    if readonly_export_over_limit:
+        st.warning(
+            f"READ ONLY出力は100,000件までです。現在の条件は{count:,}件のため、"
+            "一部のみのファイルを誤って出力しないようダウンロードを停止しました。条件を絞ってください。"
+        )
     sales_export_signature = json.dumps(
         [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS,
          None if read_only else store.revision(), count],
@@ -1545,7 +1551,7 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         f"営業対象 {count:,}件をComdesk形式で出力",
         type="primary",
         key="simple_sales_filtered_export",
-        disabled=demo or count == 0,
+        disabled=demo or count == 0 or readonly_export_over_limit,
         use_container_width=True,
     ):
         st.session_state["simple_sales_filtered_export_files"] = {
@@ -1753,8 +1759,11 @@ def main():
     with st.sidebar:
         nav_options = NAV[:2] if read_only else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
-        with st.expander("開発・確認用", expanded=False):
-            demo = st.toggle("サンプルモード", key="sample_mode")
+        if read_only:
+            demo = False
+        else:
+            with st.expander("開発・確認用", expanded=False):
+                demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")

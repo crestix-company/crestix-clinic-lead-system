@@ -30,7 +30,7 @@ def test_comdesk_export_and_import_remain_available_in_dedicated_pages():
     assert 'key="simple_sales_filtered_export"' in sales
     assert "comdesk_sync_candidates" not in sales
     assert "import_ui_comdesk_step" not in sales
-    assert 'listing(store, sales_filters, "simple_sales_results")' in sales
+    assert 'listing(store, sales_filters, "simple_sales_results", read_only=read_only)' in sales
 
     import_start = source.index("def import_ui")
     import_end = source.index("def ", import_start + 10)

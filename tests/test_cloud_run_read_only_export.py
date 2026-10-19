@@ -25,6 +25,7 @@ class _Cursor:
     def execute(self, sql, params=()):
         normalized = " ".join(str(sql).split())
         self.connection.statements.append(normalized)
+        self.connection.parameters.append(params)
         if "provenance.comdesk_original_rows" in normalized:
             original = [""] * len(COMDESK_HEADERS)
             original[COMDESK_HEADERS.index("UUID")] = "uuid-101"
@@ -40,6 +41,8 @@ class _Cursor:
                 (101, "Clinic@example.jp", "VERIFIED_EMAIL", True),
                 (101, "clinic@EXAMPLE.jp", "VERIFIED_EMAIL", True),
                 (102, "candidate@example.jp", "SEARCH_CANDIDATE", True),
+                (102, "   ", "VERIFIED_EMAIL", True),
+                (999, "out-of-scope@example.jp", "VERIFIED_EMAIL", True),
             ]
         else:
             raise AssertionError(f"Unexpected READ ONLY export query: {normalized}")
@@ -51,6 +54,7 @@ class _Cursor:
 class _Connection:
     def __init__(self):
         self.statements = []
+        self.parameters = []
 
     def cursor(self):
         return _Cursor(self)
@@ -83,6 +87,7 @@ def test_read_only_export_only_selects_allowlisted_metadata_tables_and_matches_n
     assert "provenance.comdesk_original_rows" in references
     assert "provenance.templates" in references
     assert "public.clinic_email_enrichment" in references
+    assert readonly._conn.parameters[2] == ([101, 102],)
     for excluded in (
         "provenance.change_history", "provenance.match_reviews", "provenance.source_records",
         "email_delivery", "email_kpi", "hp_job", "sales_entity_",
@@ -131,6 +136,9 @@ def test_read_only_home_and_sales_ui_skip_internal_reads_and_revision():
     assert "None if read_only else store.revision()" in sales
     assert "store.export_read_only(sales_filters)" in sales
     assert "listing(store, sales_filters, \"simple_sales_results\", read_only=read_only)" in sales
+    assert "readonly_export_over_limit = read_only and count > 100000" in sales
+    assert "disabled=demo or count == 0 or readonly_export_over_limit" in sales
+    assert "一部のみのファイルを誤って出力しないよう" in sales
 
 
 def test_read_only_treatment_pair_filter_uses_only_confirmed_treatment_sidecar():
@@ -142,3 +150,16 @@ def test_read_only_treatment_pair_filter_uses_only_confirmed_treatment_sidecar()
     assert "research.research_results" not in readonly_sql
     assert "treatment.clinic_treatment_research" in readonly_sql
     assert "research_status='CONFIRMED'" in readonly_sql
+
+
+def test_read_only_main_cannot_enter_demo_loader_or_write_side_effects():
+    source = Path("app_v2.py").read_text(encoding="utf-8")
+    main = source[source.index("def main():"):source.index("def user_error_text")]
+    sidebar_start = main.index("with st.sidebar:")
+    readonly_sidebar = main[sidebar_start:main.index("    if read_only:\n        st.warning", sidebar_start)]
+    assert "if read_only:" in readonly_sidebar
+    assert "demo = False" in readonly_sidebar
+    assert "st.toggle(\"サンプルモード\"" in readonly_sidebar
+
+    demo_block = main[main.index("if demo:", main.index("def main():")):main.index("if nav == \"かんたん操作\"")]
+    assert "load_demo(store)" in demo_block
