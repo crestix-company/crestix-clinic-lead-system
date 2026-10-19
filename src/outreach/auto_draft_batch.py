@@ -10,7 +10,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from src.outreach.compose import ARTICLE_LISTED, ARTICLE_UNCONFIRMED
+from src.outreach.compose import ARTICLE_LISTED, ARTICLE_NOT_LISTED, ARTICLE_UNCONFIRMED
 from src.outreach.generation import READY, OutreachResult
 from src.outreach.targets import EMAIL_FOUND, valid_email
 from src.outreach.gmail_workflow import DraftWorkflowResult
@@ -77,7 +77,7 @@ def plan_auto_drafts(results: Sequence[OutreachResult], *, limit: int = MAX_AUTO
             problems.append("確認済みEmail Researchアドレスが必要")
         if not t.director_name.strip() or not t.director_name_confirmed:
             problems.append("院長名未確認")
-        if t.article.status == ARTICLE_UNCONFIRMED:
+        if t.article.status not in {ARTICLE_LISTED, ARTICLE_NOT_LISTED}:
             problems.append("マイナビ掲載状況が未確認")
         if t.article.status == ARTICLE_LISTED and t.article.article_type != "NORMAL":
             problems.append("PR・監修・記事種別不明の掲載は自動下書きから除外")
