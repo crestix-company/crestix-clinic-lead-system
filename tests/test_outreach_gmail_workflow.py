@@ -386,6 +386,26 @@ def test_same_clinic_review_status_under_different_campaign_also_blocks():
     assert service.create_calls == 0
 
 
+def test_reconciling_to_sent_or_scheduled_preserves_the_original_draft_id():
+    # sync_status()'s SQL uses NULLIF(%s, '') on gmail_draft_id; any call site that omits
+    # it (defaulting to "") would silently wipe the already-recorded Draft ID on the
+    # DRAFT -> SENT/SCHEDULED transition. That corrupts both audit trail and any
+    # per-clinic draft-count aggregation built on top of this ledger.
+    repo = FakeRepository()
+    first = create(repository=repo)[0]
+    assert first.status == "DRAFT_CREATED"
+    original_draft_id = first.gmail_draft_id
+    assert original_draft_id
+
+    sent_service = GmailService(sent=[{"id": "sent1", "threadId": "t1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    second = create(service=sent_service, repository=repo)[0]
+    assert second.status == "SENT_TODAY"
+    assert repo.results[-1]["status"] == "SENT"
+    assert repo.results[-1]["gmail_draft_id"] == original_draft_id
+
+
 def test_history_under_the_same_campaign_is_not_affected_by_cross_campaign_check():
     # Regression guard: the new cross-campaign check must not interfere with the
     # existing same-campaign ledger reconciliation path.
