@@ -1503,7 +1503,7 @@ def main():
 
     read_only = read_only_ui_mode()
     with st.sidebar:
-        nav_options = NAV[:2] if read_only else NAV
+        nav_options = NAV[:2] + ["GAS・CRM連携"] if read_only else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
         with st.expander("開発・確認用", expanded=False):
             demo = st.toggle("サンプルモード", key="sample_mode")
