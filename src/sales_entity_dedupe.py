@@ -39,7 +39,7 @@ def plan_sales_entities(rows: Sequence[Mapping]) -> list[GroupDecision]:
         name, address, phone = (_val(row, k) for k in
                                 ("name_norm", "address_norm", "phone_norm"))
         # Missing evidence cannot be used to identify another clinic.
-        key = ("match", name, address, phone) if all((name, address, phone)) else ("solo", cid)
+        key = ("match", name, address) if name and address else ("solo", cid)
         groups[key].append(row)
 
     decisions = []
@@ -52,7 +52,7 @@ def plan_sales_entities(rows: Sequence[Mapping]) -> list[GroupDecision]:
             decisions.append(GroupDecision(clinic_ids, int(row["id"]), "SINGLE", "unique", _val(row, "uuid")))
             continue
 
-        types = {_val(r, "medical_type") for r in members}
+        phones = {_val(r, "phone_norm") for r in members}\n        types = {_val(r, "medical_type") for r in members}\n        if len(phones) != 1 or "" in phones:\n            decisions.append(GroupDecision(clinic_ids, None, "HOLD", "missing or differing phone numbers", ""))\n            continue
         # Do not collapse multiple medical or multiple dental registrations.
         if len(members) != 2 or types != {"医科", "歯科"}:
             decisions.append(GroupDecision(clinic_ids, None, "HOLD", "ambiguous registration / medical types", ""))
