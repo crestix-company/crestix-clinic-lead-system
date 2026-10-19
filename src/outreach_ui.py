@@ -25,6 +25,11 @@ from src.outreach.generation import (
     FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
     summarize, to_csv_bytes,
 )
+from src.outreach.pre_send_review import build_pre_send_review, configured_i3_reference
+from src.outreach.source_import import CSVPreviewError, preview_csv
+from src.outreach.legacy_import_preview import (
+    LegacyImportInputError, parse_legacy_import_csv, preview_legacy_import,
+)
 from src.outreach.staff import load_staff
 from src.outreach.targets import DEFAULT_LIMIT, EMAIL_FOUND, LIMIT_OPTIONS, select_targets, target_from_record, valid_email
 from src.utils.date_utils import today_japan
@@ -550,27 +555,72 @@ def _tab_results():
     st.caption("メール送信・予約送信は実装していません。Gmail下書き保存はデフォルト無効で、環境設定・個別確認・Gmail/DB照合を通過した場合だけ実行できます。")
     from src.outreach.gmail_workflow import create_gmail_draft, gmail_drafts_enabled
     draft_enabled = gmail_drafts_enabled()
+    i3_reference = configured_i3_reference()
     if not draft_enabled:
         st.info("Gmail下書き保存は無効です（OUTREACH_GMAIL_DRAFTS_ENABLED=false）。")
+    if not i3_reference.configured:
+        st.error("I3の正式定義を既存資料から特定できていません。承認済み定義IDとHTTPS参照URLが設定されるまで下書き保存は停止します。")
+    else:
+        st.markdown(f"I3定義参照：[{i3_reference.definition_id}]({i3_reference.definition_url})")
     ready_options = [i for i, result in enumerate(results) if result.status == READY]
     selected_drafts = st.multiselect(
         "下書き保存対象（READYのみ・最大25医院）", ready_options,
         format_func=lambda i: f"Clinic {results[i].target.clinic_id}｜{results[i].target.clinic_name}",
         key=K + "draft_selection",
     )
+    reviewer = st.text_input("送信前確認担当者（ISリーダー）", key=K + "reviewer") if selected_drafts else ""
+    review_payloads = {}
+    review_blockers_by_index = {}
     for i in selected_drafts:
         result = results[i]
         clinic_key = str(result.target.clinic_id)
         with st.expander(f"保存前プレビュー：{result.target.clinic_name}（Clinic ID {clinic_key}）", expanded=True):
+            st.text_input("医院名", result.target.clinic_name, disabled=True, key=K + f"draft_clinic_{clinic_key}")
+            st.text_input("院長名", result.target.director_name or "（未確認）", disabled=True, key=K + f"draft_director_{clinic_key}")
             st.text_input("宛先", result.target.email, disabled=True, key=K + f"draft_to_{clinic_key}")
             st.text_input("件名", result.subject, disabled=True, key=K + f"draft_subject_{clinic_key}")
-            st.text_area("本文", result.body, height=260, disabled=True, key=K + f"draft_body_{clinic_key}")
-            st.checkbox("この医院の宛先・件名・本文を確認しました",
-                        key=K + f"draft_confirm_{clinic_key}")
-    all_reviewed = bool(selected_drafts) and all(
-        st.session_state.get(K + f"draft_confirm_{results[i].target.clinic_id}", False)
-        for i in selected_drafts
-    )
+            st.text_area("本文（正式テンプレート）", result.body, height=260, disabled=True, key=K + f"draft_body_{clinic_key}")
+            article_url = result.listed_url or result.example_url or (result.first.article.url if result.first else "")
+            st.text_input("実掲載記事または類似記事URL", article_url or "（未確認）", disabled=True,
+                          key=K + f"draft_article_{clinic_key}")
+            profile_url = result.target.article.clinic_profile_url
+            st.text_input("医院詳細ページURL", profile_url or "（未取得）", disabled=True,
+                          key=K + f"draft_profile_{clinic_key}")
+            operation_key = st.text_input(
+                "案件ID / operation_key（Sheets連携値があればその値）",
+                value=f"clinic:{clinic_key}:campaign:{st.session_state.get(K + 'campaign_id', '').strip()}",
+                key=K + f"operation_key_{clinic_key}",
+            ).strip()
+            gmail_state = st.session_state.get(K + "gmail_states", {}).get(result.target.clinic_id, "未照合")
+            st.caption(f"Gmail重複照合状態：{gmail_state}。下書き保存時にもGmailと案件台帳を再照合します。")
+            duplicate_clear = st.checkbox(
+                "既存下書き・送信予約・送信済みとの重複がないことを確認しました",
+                disabled=gmail_state != "CLEAR",
+                key=K + f"review_duplicate_{clinic_key}",
+            )
+            checks = {
+                "clinic_identity": st.checkbox("医院名・院長名・宛先を照合しました", key=K + f"review_identity_{clinic_key}"),
+                "template_body": st.checkbox("正式テンプレート本文を全文確認しました", key=K + f"review_body_{clinic_key}"),
+                "article_reference": st.checkbox("実掲載記事または類似記事URLを確認しました", key=K + f"review_article_{clinic_key}"),
+                "clinic_detail_page": st.checkbox("医院詳細ページURLを確認しました", key=K + f"review_profile_{clinic_key}"),
+                "duplicate_clear": duplicate_clear,
+            }
+            i3_acknowledged = st.checkbox("設定されたI3正式定義・参照先に基づいて確認しました",
+                                          disabled=not i3_reference.configured,
+                                          key=K + f"review_i3_{clinic_key}")
+            payload, blockers = build_pre_send_review(
+                result=result, reviewer=reviewer, checks=checks,
+                i3_reference=i3_reference, i3_acknowledged=i3_acknowledged,
+                operation_key=operation_key,
+                campaign_id=st.session_state.get(K + "campaign_id", "").strip(),
+            )
+            review_payloads[i] = payload
+            review_blockers_by_index[i] = blockers
+            if blockers:
+                st.warning("保存前確認が未完了：" + " / ".join(blockers))
+            else:
+                st.success(f"確認担当者：{payload['reviewed_by']}｜確認日時（保存操作時に記録）：{payload['reviewed_at']}")
+    all_reviewed = bool(selected_drafts) and all(not review_blockers_by_index.get(i) for i in selected_drafts)
     typed_confirmation = st.text_input("下書き保存の確認語", key=K + "draft_confirmation")
     st.caption("確認語：CREATE_GMAIL_DRAFTS。最大25件を順に保存し、曖昧な結果は自動再送しません。")
     if st.button("Gmail下書きに保存", key=K + "create_drafts", type="primary",
@@ -592,6 +642,7 @@ def _tab_results():
                     generation_batch_id=settings.generation_batch_id,
                     staff_name=settings.staff, gmail=gmail, repository=repository,
                     as_of=today_japan(), enabled=draft_enabled,
+                    pre_send_review=review_payloads[i],
                 ))
             counts = {}
             for outcome in outcomes:
@@ -617,10 +668,111 @@ def _tab_results():
         } for outcome in st.session_state[K + "draft_outcomes"]]), hide_index=True, use_container_width=True)
 
 
+def _tab_cases(demo):
+    st.markdown("#### 営業案件・Gmail同期状況")
+    campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+    if demo or not campaign_id or not st.session_state.get(K + "delivery_ready"):
+        st.info("案件台帳のREAD ONLY確認には、履歴DB接続・Campaign IDが必要です。")
+        return
+    repository = None
+    try:
+        from src.repository.outreach_delivery_repository import OutreachDeliveryRepository
+        repository = OutreachDeliveryRepository.connect()
+        rows = repository.campaign_rows(campaign_id)
+        event_counts = repository.clinic_contact_event_counts(campaign_id)
+        history_by_clinic = repository.clinic_statuses([int(row["clinic_id"]) for row in rows])
+    except Exception as exc:
+        st.error(f"案件・同期状況を読み取れません。書込みは行いません（{type(exc).__name__}）。")
+        return
+    finally:
+        if repository is not None:
+            repository.close()
+    st.caption("既存フォーム・GAS・Gmailはそのままです。この画面はClinic Leadの送付台帳をREAD ONLY表示します。")
+    if not rows:
+        st.info("このCampaign IDの保存済み案件はありません。")
+        return
+    stored = st.session_state.get(K + "results")
+    by_clinic = {r.target.clinic_id: r for r in stored[1]} if stored else {}
+    visible = []
+    for row in rows:
+        result = by_clinic.get(int(row["clinic_id"]))
+        visible.append({
+            "Clinic ID": row["clinic_id"], "Clinic UUID": row["clinic_uuid"],
+            "医院名": result.target.clinic_name if result else row.get("clinic_name_snapshot", ""),
+            "宛先": row.get("recipient_email", ""), "担当IS": row.get("staff_name", ""),
+            "担当FS": "未同期", "記事URL": ((result.listed_url or result.example_url) if result else ""),
+            "記事判定": (result.target.article.status if result else row.get("listing_status", "未照合")),
+            "Gmail状態": row["status"], "Draft ID": row.get("gmail_draft_id", ""),
+            "送信済みID": row.get("gmail_message_id", ""),
+            "返信状態": "返信あり" if row["status"] == "REPLIED" else "未確認",
+            "開封推定イベント": event_counts.get(int(row["clinic_id"]), {}).get("OPEN", 0)
+                + event_counts.get(int(row["clinic_id"]), {}).get("OPENED", 0),
+            "クリックイベント": event_counts.get(int(row["clinic_id"]), {}).get("CLICK", 0)
+                + event_counts.get(int(row["clinic_id"]), {}).get("CLICKED", 0),
+            "アポイント": "Calendar/Sheets同期未導入",
+            "Sheets/Calendar同期": "未接続",
+            "DB同期": "Clinic Lead台帳から取得",
+            "同期エラー": row.get("last_error", "") or "なし",
+        })
+    st.dataframe(pd.DataFrame(visible), hide_index=True, use_container_width=True)
+    selected_id = st.selectbox("医院・過去案件の詳細", [int(r["clinic_id"]) for r in rows],
+                               format_func=lambda cid: next(
+                                   (f"{item['医院名']}｜Clinic {cid}" for item in visible if item["Clinic ID"] == cid), str(cid)),
+                               key=K + "case_detail")
+    selected_row = next(row for row in rows if int(row["clinic_id"]) == selected_id)
+    st.json({key: selected_row.get(key) for key in (
+        "clinic_id", "clinic_uuid", "campaign_id", "status", "gmail_draft_id",
+        "gmail_message_id", "gmail_thread_id", "sent_at", "scheduled_at", "last_synced_at", "last_error",
+    )})
+    st.markdown("**同一医院の過去案件（全Campaign）**")
+    history = history_by_clinic.get(selected_id, [])
+    if history:
+        st.dataframe(pd.DataFrame(history), hide_index=True, use_container_width=True)
+    else:
+        st.caption("過去案件なし")
+
+
+def _tab_import_preview():
+    st.markdown("#### Google Sheets / CSV取込プレビュー（ローカル・書込みなし）")
+    st.caption("全元列・元値・行順を保ったローカルプレビューです。Clinic ID・Clinic UUID・案件ID・operation_keyは候補として表示し、重複行・履歴行・同一医院の複数案件を統合しません。")
+    uploaded = st.file_uploader("変換前の案件・履歴CSV", type=["csv"], key=K + "source_csv_preview")
+    if uploaded is None:
+        return
+    try:
+        preview = preview_csv(uploaded.getvalue())
+    except CSVPreviewError as exc:
+        st.error(str(exc))
+        return
+    try:
+        legacy_rows = parse_legacy_import_csv(uploaded.getvalue())
+        legacy = preview_legacy_import(legacy_rows)
+    except LegacyImportInputError:
+        legacy = None
+    if legacy is not None:
+        st.markdown("**既存328医院CSV照合（既存プレビュー機能を再利用）**")
+        st.caption(
+            f"行数 {legacy.total_rows}｜Clinic ID重複 {legacy.duplicate_clinic_ids}｜"
+            f"UUID重複 {legacy.duplicate_clinic_uuids}｜ID/UUID/医院名/住所不足 {legacy.incomplete_identity_rows}"
+        )
+        st.json({"記事判定": legacy.listing_status_counts, "Gmail状態": legacy.gmail_state_counts,
+                 "期待行数328": legacy.expected_count_matches,
+                 "記事判定件数一致": legacy.status_count_matches})
+    st.metric("取込候補行（ヘッダー除外）", f"{len(preview.rows):,}")
+    duplicate_count = len(preview.row_hashes) - len(set(preview.row_hashes))
+    st.caption(f"元列数 {len(preview.headers)}｜行幅不一致 {len(preview.ragged_rows)}｜同一行hash {duplicate_count}件（自動統合なし）")
+    st.dataframe(pd.DataFrame([{
+        "元列名": header,
+        "候補型": ", ".join(f"{kind}:{count}" for kind, count in counts.items() if kind != "empty") or "empty",
+    } for header, counts in zip(preview.headers, preview.type_counts)]), hide_index=True, use_container_width=True)
+    st.json({key: values for key, values in preview.key_suggestions.items() if values})
+    st.dataframe(pd.DataFrame(preview.rows[:25], columns=list(preview.headers)), hide_index=True, use_container_width=True)
+    st.warning("プレビューのみです。取込履歴への保存・Sheets書込み・DB書込み・自動紐付けは実行しません。")
+
+
 def outreach_email_page(store, demo=False, *, formal_email_page=None):
     st.header("メール送付文章")
     st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。メール送信・予約送信は行いません。")
-    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果"])
+    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 案件・状態", "⑥ 取込プレビュー"])
     with tabs[0]:
         _tab_targets(store, demo, formal_email_page=formal_email_page)
     with tabs[1]:
@@ -629,3 +781,7 @@ def outreach_email_page(store, demo=False, *, formal_email_page=None):
         _tab_preview()
     with tabs[3]:
         _tab_results()
+    with tabs[4]:
+        _tab_cases(demo)
+    with tabs[5]:
+        _tab_import_preview()

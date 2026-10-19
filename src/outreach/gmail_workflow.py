@@ -28,6 +28,7 @@ from src.outreach.gmail_drafts import (
     list_existing_messages,
 )
 from src.outreach.gmail_oauth import GmailConnection, REQUIRED_SCOPES
+from src.outreach.pre_send_review import I3Reference, build_pre_send_review
 from src.repository.outreach_delivery_repository import DraftReservation, OutreachDeliveryRepository
 from src.outreach.targets import valid_email
 
@@ -247,12 +248,34 @@ def create_gmail_draft(
     repository: OutreachDeliveryRepository,
     as_of: date | None = None,
     enabled: bool | None = None,
+    pre_send_review: dict | None = None,
 ) -> DraftWorkflowResult:
     """Create one draft after Gmail/ledger checks. No call to any send endpoint exists."""
     if not (gmail_drafts_enabled() if enabled is None else enabled):
         return DraftWorkflowResult("DISABLED", reason="OUTREACH_GMAIL_DRAFTS_ENABLED is not true")
     if not campaign_id.strip():
         return DraftWorkflowResult("REVIEW", reason="Campaign ID is required")
+    if not isinstance(pre_send_review, dict):
+        return DraftWorkflowResult("REVIEW", reason="Approved pre-send review is required")
+    try:
+        reviewed_at = datetime.fromisoformat(str(pre_send_review.get("reviewed_at") or ""))
+    except ValueError:
+        return DraftWorkflowResult("REVIEW", reason="Pre-send review timestamp is invalid")
+    review_payload, review_blockers = build_pre_send_review(
+        result=result,
+        reviewer=str(pre_send_review.get("reviewed_by") or ""),
+        checks=pre_send_review.get("checks") or {},
+        i3_reference=I3Reference(
+            str(pre_send_review.get("i3_definition_id") or ""),
+            str(pre_send_review.get("i3_definition_url") or ""),
+        ),
+        i3_acknowledged=pre_send_review.get("i3_definition_status") == "CONFIRMED",
+        operation_key=str(pre_send_review.get("operation_key") or ""),
+        campaign_id=campaign_id,
+        reviewed_at=reviewed_at,
+    )
+    if review_blockers:
+        return DraftWorkflowResult("REVIEW", reason="; ".join(review_blockers))
     target = result.target
     if result.status != READY:
         return DraftWorkflowResult("REVIEW", reason="Generated message is not READY")
@@ -309,6 +332,8 @@ def create_gmail_draft(
             clinic_profile_url=target.article.clinic_profile_url,
             subject=result.subject,
             body_sha256=hashlib.sha256(result.body.encode("utf-8")).hexdigest(),
+            pre_send_review=review_payload,
+            operation_key=review_payload["operation_key"],
         )
     except Exception:
         return DraftWorkflowResult("REVIEW", reason="Outreach history reservation failed")

@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import json
 import os
 import uuid
 from typing import Any, Callable
@@ -35,8 +36,9 @@ class DraftReservation:
     gmail_draft_id: str = ""
 
 
-def _idempotency_key(clinic_id: int, campaign_id: str) -> str:
-    material = f"clinic-outreach-v1|{int(clinic_id)}|{campaign_id.strip()}".encode()
+def _idempotency_key(clinic_id: int, campaign_id: str, operation_key: str = "") -> str:
+    identity = operation_key.strip() or f"{int(clinic_id)}|{campaign_id.strip()}"
+    material = f"clinic-outreach-v2|{identity}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
@@ -151,11 +153,36 @@ class OutreachDeliveryRepository:
         from psycopg.rows import dict_row
         rows = self._select(
             f"SELECT outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,status,"
-            f"gmail_draft_id,gmail_message_id,gmail_thread_id,sent_at,scheduled_at,created_at,updated_at "
+            f"gmail_draft_id,gmail_message_id,gmail_thread_id,sent_at,scheduled_at,created_at,updated_at,"
+            f"clinic_name_snapshot,recipient_email,staff_name,last_error "
             f"FROM {TABLE} WHERE campaign_id=%s ORDER BY clinic_id,created_at",
             (campaign_id.strip(),), row_factory=dict_row,
         )
         return [dict(row) for row in rows]
+
+    def contact_event_counts(self, campaign_id: str) -> dict[str, int]:
+        """Aggregate existing open/click event ledger without exposing request metadata."""
+        if not campaign_id.strip():
+            return {}
+        rows = self._select(
+            "SELECT event_type,count(*) AS event_count FROM outreach.email_contact_events "
+            "WHERE campaign_id=%s GROUP BY event_type",
+            (campaign_id.strip(),),
+        )
+        return {str(event_type).upper(): int(count) for event_type, count in rows}
+
+    def clinic_contact_event_counts(self, campaign_id: str) -> dict[int, dict[str, int]]:
+        if not campaign_id.strip():
+            return {}
+        rows = self._select(
+            "SELECT clinic_id,event_type,count(*) AS event_count FROM outreach.email_contact_events "
+            "WHERE campaign_id=%s GROUP BY clinic_id,event_type",
+            (campaign_id.strip(),),
+        )
+        counts: dict[int, dict[str, int]] = {}
+        for clinic_id, event_type, count in rows:
+            counts.setdefault(int(clinic_id), {})[str(event_type).upper()] = int(count)
+        return counts
 
     def campaign_statuses(self, campaign_id: str) -> dict[int, str]:
         return {int(row["clinic_id"]): str(row["status"])
@@ -220,23 +247,49 @@ class OutreachDeliveryRepository:
                       operation_id: str, status: str = "REVIEW", listing_status: str = "UNCONFIRMED",
                       article_type: str = "UNKNOWN", example_article_url: str = "",
                       listing_article_url: str = "", clinic_profile_url: str = "",
-                      subject: str = "", body_sha256: str = "") -> DraftReservation:
+                      subject: str = "", body_sha256: str = "",
+                      pre_send_review: dict | None = None,
+                      operation_key: str = "") -> DraftReservation:
         if status != "REVIEW":
             raise ValueError("Draft reservation must begin in REVIEW state")
-        key = _idempotency_key(clinic_id, campaign_id)
+        if not isinstance(pre_send_review, dict) or not pre_send_review.get("reviewed_by"):
+            raise ValueError("A completed pre-send review is required")
+        if pre_send_review.get("i3_definition_status") != "CONFIRMED":
+            raise ValueError("An approved I3 definition reference is required")
+        operation_key = operation_key.strip() or f"clinic:{int(clinic_id)}:campaign:{campaign_id.strip()}"
+        key = _idempotency_key(clinic_id, campaign_id, operation_key)
         outreach_id = str(uuid.uuid4())
         with self._conn.transaction():
             with self._conn.cursor() as cur:
                 cur.execute(
+                    """INSERT INTO outreach.sales_cases
+                    (operation_key,source_system,external_case_id,clinic_id,clinic_uuid,campaign_id,is_owner)
+                    VALUES (%s,'CLINIC_LEAD','',%s,%s,%s,%s)
+                    ON CONFLICT (operation_key) DO NOTHING RETURNING sales_case_id""",
+                    (operation_key, int(clinic_id), clinic_uuid, campaign_id, staff_name),
+                )
+                case_row = cur.fetchone()
+                if case_row is None:
+                    cur.execute(
+                        "SELECT sales_case_id,clinic_id,clinic_uuid,campaign_id FROM outreach.sales_cases WHERE operation_key=%s",
+                        (operation_key,),
+                    )
+                    case_row = cur.fetchone()
+                if case_row is None or (int(case_row[1]), str(case_row[2]), str(case_row[3])) != (
+                    int(clinic_id), clinic_uuid, campaign_id
+                ):
+                    raise OutreachDatabaseError("Sales case identity conflicts with the supplied operation key")
+                sales_case_id = str(case_row[0])
+                cur.execute(
                     f"""INSERT INTO {TABLE}
-                    (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,
+                    (outreach_id,operation_id,idempotency_key,sales_case_id,clinic_id,clinic_uuid,
                      clinic_name_snapshot,clinic_address_snapshot,recipient_email,sender_account,
                      staff_name,campaign_id,generation_batch_id,status,listing_status,article_type,
                      example_article_url,listing_article_url,clinic_profile_url,subject,body_sha256,last_error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT (clinic_id,campaign_id) DO NOTHING
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (sales_case_id) DO NOTHING
                     RETURNING outreach_id,operation_id,status,gmail_draft_id""",
-                    (outreach_id, operation_id, key, int(clinic_id), clinic_uuid, clinic_name,
+                    (outreach_id, operation_id, key, sales_case_id, int(clinic_id), clinic_uuid, clinic_name,
                      clinic_address, recipient_email, sender_account, staff_name, campaign_id,
                      generation_batch_id, status, listing_status, article_type, example_article_url,
                      listing_article_url, clinic_profile_url, subject, body_sha256,
@@ -244,11 +297,23 @@ class OutreachDeliveryRepository:
                 )
                 row = cur.fetchone()
                 created = row is not None
+                if created:
+                    cur.execute(
+                        """INSERT INTO outreach.email_pre_send_reviews
+                        (outreach_id,sales_case_id,reviewed_by,reviewed_at,i3_definition_id,i3_definition_url,
+                         i3_definition_status,checklist,protocol)
+                        VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",
+                        (str(row[0]), sales_case_id, pre_send_review["reviewed_by"], pre_send_review["reviewed_at"],
+                         pre_send_review["i3_definition_id"], pre_send_review["i3_definition_url"],
+                         pre_send_review["i3_definition_status"],
+                         json.dumps(pre_send_review["checks"], ensure_ascii=False, sort_keys=True),
+                         pre_send_review["protocol"]),
+                    )
                 if row is None:
                     cur.execute(
                         f"SELECT outreach_id,operation_id,status,gmail_draft_id FROM {TABLE} "
-                        "WHERE clinic_id=%s AND campaign_id=%s",
-                        (int(clinic_id), campaign_id),
+                        "WHERE sales_case_id=%s",
+                        (sales_case_id,),
                     )
                     row = cur.fetchone()
                 if row is None:
