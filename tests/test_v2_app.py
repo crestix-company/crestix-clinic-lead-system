@@ -74,6 +74,7 @@ def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
     assert '"この調査を再開"' in source
     assert 'current["status"] in {"PAUSED", "BUDGET"}' in source
     assert "unfinished" in source
-    assert "disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
+    assert "write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
+    assert "or not area_and_medical_type_selected" in source
     assert 'j.get("kind") == "hp"' in source
     assert "上の「ウェブサイト調査対象」は新しいジョブ用の件数" in source

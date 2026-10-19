@@ -996,12 +996,28 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             prefs = [r[0] for r in c.execute(
                 "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
             )]
-    pref_options = ["すべて"] + prefs
-    default_pref = pref_options.index("東京都") if "東京都" in pref_options else 0
-    pref_label = st.selectbox("都道府県", pref_options, index=default_pref, key="simple_research_pref")
-    pref = "" if pref_label == "すべて" else pref_label
-    med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_research_medical_type")
-    research_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
+    # 起動時に特定の都道府県・医科/歯科が自動選択された状態だと、確認せずに
+    # 「開始」を押すだけで対象範囲（最悪「すべて」＝全国）のHP調査が走ってしまう。
+    # 誤操作防止のため、両方とも「未選択」を既定値にし、明示的に選んだ場合のみ
+    # 「HP自動調査を開始」を有効化する（下のdisabled判定を参照）。
+    PREF_PLACEHOLDER = "未選択（選択してください）"
+    MEDICAL_TYPE_PLACEHOLDER = "未選択"
+    pref_options = [PREF_PLACEHOLDER, "すべて"] + prefs
+    pref_label = st.selectbox("都道府県", pref_options, index=0, key="simple_research_pref")
+    pref_explicitly_selected = pref_label != PREF_PLACEHOLDER
+    pref = "" if pref_label in (PREF_PLACEHOLDER, "すべて") else pref_label
+    med_options = [MEDICAL_TYPE_PLACEHOLDER, "医科", "歯科", "両方"]
+    med_label = st.selectbox("医科・歯科", med_options, index=0, key="simple_research_medical_type")
+    medical_type_explicitly_selected = med_label != MEDICAL_TYPE_PLACEHOLDER
+    if med_label == "両方":
+        research_medical_types = ["医科", "歯科"]
+    elif medical_type_explicitly_selected:
+        research_medical_types = [med_label]
+    else:
+        research_medical_types = []
+    area_and_medical_type_selected = pref_explicitly_selected and medical_type_explicitly_selected
+    if not area_and_medical_type_selected:
+        st.warning("都道府県と医科・歯科を選択してください。選択するまでHP調査は開始できません。")
 
     force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
     available = _maps_hp_available_count(store, pref, force, research_medical_types)
@@ -1072,7 +1088,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
         if st.button(
             "HP自動調査を開始", type="primary",
-            disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0,
+            disabled=(
+                write_disabled or runner.running() or unfinished or auto_active or actual == 0
+                or not area_and_medical_type_selected
+            ),
             key="simple_start", use_container_width=True,
         ):
             if cloud_run_executor:
@@ -1101,7 +1120,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
         if st.button(
             "未調査がなくなるまで自動調査を開始", type="primary",
-            disabled=write_disabled or auto_repo is None or auto_active or runner.running() or unfinished or available == 0,
+            disabled=(
+                write_disabled or auto_repo is None or auto_active or runner.running() or unfinished
+                or available == 0 or not area_and_medical_type_selected
+            ),
             key="simple_auto_start", use_container_width=True,
         ):
             auto_repo.start(pref, research_medical_types, force, int(batch_size))
@@ -1317,10 +1339,18 @@ def simple_sales_ui(store, demo=False):
             prefs = [r[0] for r in c.execute(
                 "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
             )]
-    pref_default = ["東京都"] if "東京都" in prefs else []
-    med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
-    sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
-    pref = st.multiselect("都道府県", prefs, default=pref_default, key="simple_sales_pref")
+    # 起動時に都道府県・医科/歯科が自動選択されていると、意図せず絞り込まれた
+    # （あるいは意図せず無絞り込みの）営業対象が表示される。誤操作防止のため
+    # 既定値は「未選択」＝絞り込みなしとし、都道府県の既定選択も行わない。
+    SALES_MEDICAL_TYPE_PLACEHOLDER = "未選択（絞り込みなし）"
+    med_label = st.selectbox(
+        "医科・歯科", [SALES_MEDICAL_TYPE_PLACEHOLDER, "医科", "歯科", "両方"],
+        index=0, key="simple_sales_medical_type",
+    )
+    sales_medical_types = ["医科", "歯科"] if med_label == "両方" else (
+        [] if med_label == SALES_MEDICAL_TYPE_PLACEHOLDER else [med_label]
+    )
+    pref = st.multiselect("都道府県", prefs, default=[], key="simple_sales_pref")
     deps = st.multiselect("診療科", DEPARTMENTS, key="simple_sales_departments")
     sales_master = sales_treatment_master()
     previous_deps = set(st.session_state.get("simple_sales_previous_departments", ()))
