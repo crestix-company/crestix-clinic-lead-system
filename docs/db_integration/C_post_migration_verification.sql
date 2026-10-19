@@ -46,7 +46,7 @@ set role clinic_outreach_runtime;
 --    status, listing_status, article_type, subject, body_sha256)
 -- values
 --   (gen_random_uuid(), 'verification-test-key', <clinic_id>, 'test-uuid',
---    'Verification Test Clinic', 'verify@example.jp', 'info@crestix-inc.com',
+--    'Verification Test Clinic', 'clinic@example.test', 'sender@example.test',
 --    'verification', 'verification-campaign', gen_random_uuid(),
 --    'REVIEW', 'NOT_LISTED', 'NORMAL', 'verification subject', 'verification-sha');
 

@@ -50,6 +50,8 @@ class GmailState:
     # no additional date filter is applied. Distinguishing "trashed" from "no history"
     # matters for human review even though it never silently unblocks a new draft.
     trashed: tuple[ExistingMessage, ...] = ()
+    sent_history: tuple[ExistingMessage, ...] = ()
+    replies: tuple[ExistingMessage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,7 +77,7 @@ def _unix_seconds(value: datetime) -> int:
     return int(value.astimezone(timezone.utc).timestamp())
 
 
-def read_gmail_state(service, *, as_of: date | None = None) -> GmailState:
+def read_gmail_state(service, *, as_of: date | None = None, target_email: str = "") -> GmailState:
     day = as_of or datetime.now(JST).date()
     start = datetime.combine(day, time.min, tzinfo=JST)
     end = start + timedelta(days=1)
@@ -85,13 +87,20 @@ def read_gmail_state(service, *, as_of: date | None = None) -> GmailState:
     sent = list_existing_messages(service, query=sent_query)
     scheduled = list_existing_messages(service, query=SCHEDULED_QUERY)
     trashed = list_existing_messages(service, query=TRASH_QUERY)
-    return GmailState(tuple(drafts), tuple(sent), tuple(scheduled), tuple(trashed))
+    sent_history = list_existing_messages(service, query=f"in:sent to:{target_email}") if target_email else []
+    replies = list_existing_messages(service, query=f"in:anywhere from:{target_email}") if target_email else []
+    return GmailState(tuple(drafts), tuple(sent), tuple(scheduled), tuple(trashed),
+                      tuple(sent_history), tuple(replies))
 
 
 def _identity_match(*, clinic_id: int, clinic_uuid: str, outreach_id: str,
                     email: str, clinic_name: str, clinic_address: str,
                     headers) -> bool:
     # Exact persistent IDs precede the recipient and name/address fallback.
+    if headers.clinic_id and headers.clinic_id.isdigit() and int(headers.clinic_id) != clinic_id:
+        return False
+    if headers.clinic_uuid and clinic_uuid and headers.clinic_uuid.casefold() != clinic_uuid.casefold():
+        return False
     if headers.clinic_id and headers.clinic_id.isdigit() and int(headers.clinic_id) == clinic_id:
         return True
     if headers.clinic_uuid and clinic_uuid and headers.clinic_uuid.casefold() == clinic_uuid.casefold():
@@ -121,7 +130,24 @@ def classify_target_state(target, *, state: GmailState, outreach_id: str = "") -
     args = dict(clinic_id=target.clinic_id, clinic_uuid=target.clinic_uuid,
                 outreach_id=outreach_id, email=target.email, clinic_name=target.clinic_name,
                 clinic_address=target.clinic_address)
-    if len(_matching_rows(state.sent_today, **args)) > 0:
+    observed_rows = (*state.drafts, *state.sent_today, *state.sent_history,
+                     *state.scheduled, *state.trashed, *state.replies)
+    for row in observed_rows:
+        explicit_id = str(getattr(row, "clinic_id", "") or "").strip()
+        explicit_uuid = str(getattr(row, "clinic_uuid", "") or "").strip().casefold()
+        recipients = getattr(row, "recipients", ())
+        if (explicit_id.isdigit() and int(explicit_id) != target.clinic_id
+                and target.email.casefold() in {str(x).casefold() for x in recipients}):
+            return "IDENTITY_MISMATCH"
+        if (explicit_uuid and target.clinic_uuid and explicit_uuid != target.clinic_uuid.casefold()
+                and target.email.casefold() in {str(x).casefold() for x in recipients}):
+            return "IDENTITY_MISMATCH"
+    sent_rows = _matching_rows(state.sent_history or state.sent_today, **args)
+    reply_rows = _matching_rows(state.replies, **args)
+    sent_threads = {row.thread_id for row in sent_rows if row.thread_id}
+    if reply_rows or any(row.thread_id and row.thread_id in sent_threads for row in state.replies):
+        return "REPLIED_EXISTS"
+    if sent_rows:
         return "SENT_TODAY"
     if len(_matching_rows(state.scheduled, **args)) > 0:
         return "SCHEDULED_EXISTS"
@@ -204,7 +230,15 @@ def _reconcile_existing_ledger(result: OutreachResult, *, campaign_id: str,
     if len(matching_drafts) > 1:
         return DraftWorkflowResult("REVIEW", outreach_id=outreach_id,
                                    reason="Multiple drafts share the exact idempotency key")
-    sent = _matching_mail(state.sent_today, target=target, outreach_id=outreach_id)
+    outbound = _matching_mail(state.sent_history or state.sent_today, target=target, outreach_id=outreach_id)
+    sent_threads = {row.thread_id for row in outbound if row.thread_id}
+    replies = _matching_mail(state.replies, target=target, outreach_id=outreach_id)
+    if replies or any(row.thread_id and row.thread_id in sent_threads for row in state.replies):
+        return DraftWorkflowResult("REPLIED_EXISTS", outreach_id=outreach_id,
+                                   gmail_message_id=replies[0].message_id,
+                                   gmail_thread_id=replies[0].thread_id,
+                                   reason="Reply history exists; automatic recreation is blocked")
+    sent = outbound
     if len(sent) == 1 and status in {"REVIEW", "UNKNOWN", "DRAFT"}:
         message = sent[0]
         sent_at = None
@@ -336,7 +370,7 @@ def create_gmail_draft(
         )
 
     try:
-        state = read_gmail_state(gmail.service, as_of=as_of)
+        state = read_gmail_state(gmail.service, as_of=as_of, target_email=target.email)
     except Exception:
         return DraftWorkflowResult("REVIEW", reason="Gmail history could not be verified")
     try:
