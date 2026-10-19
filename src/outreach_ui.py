@@ -620,7 +620,7 @@ def _tab_results():
 def outreach_email_page(store, demo=False, *, formal_email_page=None):
     st.header("メール送付文章")
     st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。メール送信・予約送信は行いません。")
-    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果"])
+    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 下書き一括保存"])
     with tabs[0]:
         _tab_targets(store, demo, formal_email_page=formal_email_page)
     with tabs[1]:
@@ -629,3 +629,6 @@ def outreach_email_page(store, demo=False, *, formal_email_page=None):
         _tab_preview()
     with tabs[3]:
         _tab_results()
+    with tabs[4]:
+        from src.outreach.auto_draft_ui import auto_draft_save_page
+        auto_draft_save_page(demo=demo)

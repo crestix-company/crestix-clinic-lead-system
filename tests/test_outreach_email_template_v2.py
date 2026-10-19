@@ -221,8 +221,7 @@ def test_past_or_weekend_dates_are_rejected(monkeypatch):
             fixed = cls(2026, 10, 16, 9, 0)
             return fixed.astimezone(tz) if tz else fixed
 
-    # Keep render_preview's implicit clock deterministic without changing the
-    # production date-validation behavior.
+    # Keep the implicit clock deterministic without changing production validation.
     monkeypatch.setattr(email_template_v2, "datetime", FixedDateTime)
     with pytest.raises(TemplateV2Error, match="過去"):
         render_preview(base(schedule=("2026-10-15 10:00",)))

@@ -18,7 +18,7 @@ from src.repository.connection_diagnostics import connection_error_category, ret
 TABLE = "outreach.email_delivery_records"
 RUNTIME_ROLE = "clinic_runtime"
 OUTREACH_ROLE = "clinic_outreach_runtime"
-BLOCKING_STATUSES = frozenset({"DRAFT", "SENT", "SCHEDULED", "REPLIED", "UNKNOWN", "REVIEW"})
+BLOCKING_STATUSES = frozenset({"DRAFT", "SENT", "SCHEDULED", "REPLIED", "TRASHED", "UNKNOWN", "REVIEW", "FAILED"})
 
 
 class OutreachDatabaseError(RuntimeError):
@@ -227,6 +227,29 @@ class OutreachDeliveryRepository:
         outreach_id = str(uuid.uuid4())
         with self._conn.transaction():
             with self._conn.cursor() as cur:
+                # The permanent per-clinic guard is inserted in the same transaction
+                # as the campaign ledger row. Its unique Clinic ID arbitrates races
+                # across campaigns; Gmail drafts.create is reachable only by the
+                # winner. Existing clinics are preloaded by the guard migration.
+                cur.execute(
+                    """INSERT INTO outreach.clinic_draft_guard
+                    (clinic_id,first_campaign_id,first_outreach_id)
+                    VALUES (%s,%s,%s) ON CONFLICT (clinic_id) DO NOTHING
+                    RETURNING clinic_id""",
+                    (int(clinic_id), campaign_id, outreach_id),
+                )
+                guard_claimed = cur.fetchone() is not None
+                if not guard_claimed:
+                    cur.execute(
+                        f"SELECT outreach_id,operation_id,status,gmail_draft_id FROM {TABLE} "
+                        "WHERE clinic_id=%s AND campaign_id=%s",
+                        (int(clinic_id), campaign_id),
+                    )
+                    existing = cur.fetchone()
+                    if existing is None:
+                        raise OutreachDatabaseError("Clinic already has a cross-campaign history guard")
+                    return DraftReservation(str(existing[0]), str(existing[1]), key, False,
+                                            str(existing[2]), str(existing[3] or ""))
                 cur.execute(
                     f"""INSERT INTO {TABLE}
                     (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,
@@ -280,7 +303,7 @@ class OutreachDeliveryRepository:
                     gmail_message_id: str = "", gmail_thread_id: str = "",
                     sent_at: datetime | None = None, scheduled_at: datetime | None = None,
                     last_error: str = "") -> bool:
-        if status not in {"DRAFT", "SENT", "SCHEDULED", "REPLIED", "FAILED", "UNKNOWN", "REVIEW"}:
+        if status not in {"DRAFT", "SENT", "SCHEDULED", "REPLIED", "TRASHED", "FAILED", "UNKNOWN", "REVIEW"}:
             raise ValueError("Invalid synchronized status")
         with self._conn.transaction():
             with self._conn.cursor() as cur:
@@ -294,6 +317,79 @@ class OutreachDeliveryRepository:
                 )
                 updated = cur.rowcount == 1
         return updated
+
+    def backfill_history_event(self, *, clinic_id: int, clinic_uuid: str | None,
+                               clinic_name: str, clinic_address: str,
+                               recipient_email: str, sender_account: str,
+                               gmail_kind: str, gmail_id: str, thread_id: str = "",
+                               message_id: str = "", status: str,
+                               operation_id: str = "") -> bool:
+        """Insert one already-observed Gmail event idempotently, keyed by Clinic ID.
+
+        This is an explicit write adapter; the dry-run planner never calls it. A
+        different Clinic ID or conflicting Gmail ID is an error/HOLD, never merged.
+        """
+        import hashlib
+        import uuid as uuid_module
+        if status not in {"DRAFT", "SCHEDULED", "SENT", "REPLIED", "TRASHED", "UNKNOWN", "REVIEW"}:
+            raise ValueError("Invalid Gmail history status")
+        if not int(clinic_id) or not gmail_id.strip() or gmail_kind not in {"draft", "message"}:
+            raise ValueError("Clinic ID and one observed Draft/Message ID are required")
+        key = f"gmail-history-v1|{int(clinic_id)}|{gmail_kind}|{gmail_id.strip()}"
+        idem = hashlib.sha256(key.encode()).hexdigest()
+        stable_operation_id = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, key))
+        if operation_id and operation_id != stable_operation_id:
+            raise ValueError("Backfill operation ID must be stable for the Gmail event")
+        operation_id = stable_operation_id
+        outreach_id = stable_operation_id
+        batch_id = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, "batch|" + key))
+        campaign_id = f"gmail-history:{gmail_kind}:{hashlib.sha256(gmail_id.encode()).hexdigest()[:24]}"
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO outreach.clinic_draft_guard
+                    (clinic_id,first_campaign_id,first_outreach_id)
+                    VALUES (%s,%s,%s) ON CONFLICT (clinic_id) DO NOTHING""",
+                    (int(clinic_id), campaign_id, outreach_id),
+                )
+                # No RETURNING clause: INSERT may affect zero rows when a guard
+                # already exists for this Clinic ID. The unique Clinic ID key
+                # intentionally reuses that guard across campaigns; never read
+                # a result row or weaken the guard on conflict.
+                cur.execute(
+                    f"""INSERT INTO {TABLE}
+                    (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,
+                     clinic_name_snapshot,clinic_address_snapshot,recipient_email,sender_account,
+                     staff_name,campaign_id,generation_batch_id,status,listing_status,article_type,
+                     subject,body_sha256,gmail_draft_id,gmail_message_id,gmail_thread_id,last_error)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'UNCONFIRMED','UNKNOWN',
+                     %s,%s,%s,%s,%s,'READ-ONLY source verified by operator')
+                    ON CONFLICT DO NOTHING RETURNING outreach_id""",
+                    (outreach_id, operation_id, idem, int(clinic_id), clinic_uuid or None,
+                     clinic_name, clinic_address or "", recipient_email or "", sender_account,
+                     "Gmail history backfill", campaign_id, batch_id, status,
+                     f"Historical Gmail {gmail_kind}", hashlib.sha256(key.encode()).hexdigest(),
+                     gmail_id if gmail_kind == "draft" else None,
+                     message_id or (gmail_id if gmail_kind == "message" else None), thread_id or None),
+                )
+                inserted = cur.fetchone() is not None
+                if not inserted:
+                    cur.execute(
+                        f"""SELECT clinic_id,status,gmail_draft_id,gmail_message_id,gmail_thread_id
+                        FROM {TABLE} WHERE idempotency_key=%s OR gmail_draft_id=%s OR gmail_message_id=%s""",
+                        (idem, gmail_id if gmail_kind == "draft" else None,
+                         gmail_id if gmail_kind == "message" else None),
+                    )
+                    rows = cur.fetchall()
+                    expected_id = str(clinic_id)
+                    if len(rows) != 1 or str(rows[0][0]) != expected_id:
+                        raise OutreachDatabaseError("Gmail history ID collision requires HOLD")
+                    row = rows[0]
+                    if (str(row[1]) != status or (row[2] or "") != (gmail_id if gmail_kind == "draft" else "")
+                            or (row[3] or "") != (message_id or (gmail_id if gmail_kind == "message" else ""))
+                            or (row[4] or "") != (thread_id or "")):
+                        raise OutreachDatabaseError("Existing Gmail history differs; requires HOLD")
+        return inserted
 
 
 __all__ = ["OutreachDatabaseError", "OutreachDeliveryRepository", "DraftReservation",

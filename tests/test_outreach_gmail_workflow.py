@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from email import message_from_bytes, policy
-from threading import Lock
+from threading import Barrier, Lock
 
 from src.outreach.compose import ARTICLE_NOT_LISTED, ARTICLE_LISTED
 from src.outreach.generation import READY, OutreachResult
@@ -22,10 +22,11 @@ class Request:
 
 
 class GmailService:
-    def __init__(self, *, sent=(), scheduled=(), fail_after_create=False, fail_history=False):
+    def __init__(self, *, sent=(), scheduled=(), trashed=(), fail_after_create=False, fail_history=False):
         self.stored_drafts = {}
         self.sent = list(sent)
         self.scheduled = list(scheduled)
+        self.trashed = list(trashed)
         self.fail_after_create = fail_after_create
         self.fail_history = fail_history
         self.create_calls = 0
@@ -39,6 +40,10 @@ class GmailService:
             raise TimeoutError("transport failure")
         if q == "in:scheduled":
             rows = self.scheduled
+        elif q == "in:trash":
+            rows = self.trashed
+        elif q and q.startswith("in:anywhere from:"):
+            rows = []
         elif q:
             rows = self.sent
         else:
@@ -48,7 +53,7 @@ class GmailService:
         if id in self.stored_drafts:
             return Request({"id": id, "message": {"id": "msg-" + id, "threadId": "thread-" + id,
                                                      "payload": {"headers": self.stored_drafts[id]}}})
-        for row in (*self.sent, *self.scheduled):
+        for row in (*self.sent, *self.scheduled, *self.trashed):
             if row.get("id") == id:
                 return Request(row)
         raise KeyError(id)
@@ -74,8 +79,16 @@ class FakeRepository:
         self.rows = []
         self.results = []
         self._lock = Lock()
+        self.claimed_clinics = set()
     def health_check(self): return True
     def campaign_rows(self, campaign_id): return list(self.rows)
+    def clinic_statuses(self, clinic_ids):
+        wanted = {int(cid) for cid in clinic_ids}
+        result = {cid: [] for cid in wanted}
+        for row in self.rows:
+            if row["clinic_id"] in wanted:
+                result[row["clinic_id"]].append(row)
+        return result
     def reserve_draft(self, **fields):
         with self._lock:
             existing = next((r for r in self.rows if r["clinic_id"] == fields["clinic_id"]
@@ -84,9 +97,12 @@ class FakeRepository:
                 return DraftReservation(existing["outreach_id"], existing["operation_id"],
                                         existing["idempotency_key"], False, existing["status"],
                                         existing.get("gmail_draft_id", ""))
+            if fields["clinic_id"] in self.claimed_clinics:
+                return DraftReservation("", fields["operation_id"], "", False, "REVIEW")
             reservation = DraftReservation("out-1", fields["operation_id"], "key-1",
                                            self.allow_reserve, "REVIEW")
             if self.allow_reserve:
+                self.claimed_clinics.add(fields["clinic_id"])
                 self.rows.append({"clinic_id": fields["clinic_id"],
                                   "campaign_id": fields["campaign_id"],
                                   "outreach_id": reservation.outreach_id,
@@ -144,6 +160,86 @@ def test_new_clinic_creates_one_draft_and_records_ids_without_send_api():
     assert not hasattr(service, "send")
 
 
+def test_backfilled_existing_100_clinics_never_create_new_drafts_across_campaigns():
+    # Represents a backfilled ledger cohort spread across all blocking states and
+    # exercises PR #100's real create_gmail_draft entry point, not a stub runner.
+    statuses = ("DRAFT", "SENT", "SCHEDULED", "REPLIED", "TRASHED", "FAILED")
+    service = GmailService()
+    repo = FakeRepository()
+    for cid in range(50000, 50100):
+        repo.rows.append({"clinic_id": cid, "campaign_id": f"backfill-{cid}",
+                          "outreach_id": f"legacy-{cid}", "status": statuses[cid % len(statuses)],
+                          "gmail_draft_id": f"draft-{cid}"})
+    outcomes = [create_gmail_draft(
+        make_result(clinic_id=cid, email=f"clinic{cid}@example.jp"),
+        campaign_id="new-campaign", generation_batch_id="0123456789abcdef0123456789abcdef",
+        staff_name="Test Staff", gmail=connection(service), repository=repo, enabled=True,
+    ) for cid in range(50000, 50100)]
+    assert len(outcomes) == 100
+    assert all(out.status == "REVIEW" for out in outcomes)
+    assert service.create_calls == 0
+    assert len(repo.rows) == 100
+    assert not repo.results
+
+
+def test_gmail_history_before_backfill_and_persisted_backfill_both_block_creation():
+    # Before import, a Gmail-observed draft blocks even with an empty ledger.
+    service = GmailService()
+    service.stored_drafts["pre-backfill"] = [
+        {"name": "To", "value": "clinic@example.jp"},
+        {"name": "X-Clinic-Lead-Clinic-ID", "value": "101"},
+    ]
+    before, service, repo = create(service=service)
+    assert before.status in {"DRAFT_EXISTS", "REVIEW"}
+    assert service.create_calls == 0
+
+    # After import, the ledger suppresses creation even if the Gmail item has vanished.
+    post_service = GmailService()
+    post_repo = FakeRepository()
+    post_repo.rows.append({"clinic_id": 101, "campaign_id": "gmail-history:draft:abc",
+                           "outreach_id": "history-101", "status": "DRAFT",
+                           "gmail_draft_id": "gone-from-gmail"})
+    post_repo.claimed_clinics.add(101)
+    after = create_gmail_draft(
+        make_result(), campaign_id="new-campaign", generation_batch_id="0123456789abcdef0123456789abcdef",
+        staff_name="Test Staff", gmail=connection(post_service), repository=post_repo, enabled=True,
+    )
+    assert after.status == "REVIEW"
+    assert post_service.create_calls == 0
+
+
+def test_same_campaign_rerun_recovers_existing_draft_without_second_create():
+    service, repo = GmailService(), FakeRepository()
+    first, _, _ = create(service=service, repository=repo)
+    second, _, _ = create(service=service, repository=repo)
+    assert first.status == "DRAFT_CREATED"
+    assert second.status == "DRAFT_RECOVERED"
+    assert service.create_calls == 1
+
+
+def test_competing_campaigns_are_serialized_by_unique_clinic_guard():
+    class RacingRepository(FakeRepository):
+        def __init__(self):
+            super().__init__()
+            self.precheck_barrier = Barrier(2)
+        def clinic_statuses(self, clinic_ids):
+            snapshot = super().clinic_statuses(clinic_ids)
+            self.precheck_barrier.wait(timeout=3)
+            return snapshot
+
+    service, repo = GmailService(), RacingRepository()
+    def run(campaign):
+        return create_gmail_draft(
+            make_result(), campaign_id=campaign, generation_batch_id="0123456789abcdef0123456789abcdef",
+            staff_name="Test Staff", gmail=connection(service), repository=repo, enabled=True,
+        )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(run, ("campaign-a", "campaign-b")))
+    assert sum(o.status == "DRAFT_CREATED" for o in outcomes) == 1
+    assert sum(o.status != "DRAFT_CREATED" for o in outcomes) == 1
+    assert service.create_calls == 1
+
+
 def test_existing_draft_for_same_recipient_blocks_new_draft():
     service = GmailService()
     service.stored_drafts["prior"] = [
@@ -152,6 +248,17 @@ def test_existing_draft_for_same_recipient_blocks_new_draft():
     ]
     outcome, service, repo = create(service=service)
     assert outcome.status == "DRAFT_EXISTS"
+    assert service.create_calls == 0
+    assert not repo.rows
+
+
+def test_explicit_other_clinic_id_for_same_recipient_holds_without_create():
+    service = GmailService(sent=[{"id": "conflict", "threadId": "thread-conflict", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+        {"name": "X-Clinic-Lead-Clinic-ID", "value": "999"},
+    ]}}])
+    outcome, service, repo = create(service=service)
+    assert outcome.status == "IDENTITY_MISMATCH"
     assert service.create_calls == 0
     assert not repo.rows
 
@@ -256,6 +363,25 @@ def test_db_update_failure_after_gmail_create_returns_unknown_without_second_cre
     assert service.create_calls == 1
 
 
+def test_db_update_failure_after_gmail_create_then_retry_recovers_without_duplicate():
+    # The exact scenario called out as critical: the Gmail drafts.create call succeeds,
+    # but recording that result into the delivery ledger fails (DB blip, crash, etc.).
+    # Re-running must recover the already-created draft by its exact idempotency key
+    # (X-Clinic-Lead-Draft-Key), never call drafts.create a second time.
+    service = GmailService()
+    repo = FakeRepository(fail_update=True)
+    first = create(service=service, repository=repo)[0]
+    assert first.status == "UNKNOWN"
+    assert service.create_calls == 1
+    assert repo.rows and repo.rows[0]["status"] == "REVIEW"  # record_draft_result never applied
+
+    repo.fail_update = False
+    second = create(service=service, repository=repo)[0]
+    assert second.status == "DRAFT_RECOVERED"
+    assert service.create_calls == 1  # still exactly one Gmail draft ever created
+    assert repo.results[-1]["status"] == "DRAFT"
+
+
 def test_concurrent_saves_reserve_once_and_create_at_most_one_draft():
     service = GmailService()
     repo = FakeRepository()
@@ -283,3 +409,103 @@ def test_identity_match_prefers_ids_then_email():
     state = GmailState(drafts=(ExistingDraft("d", "", ("clinic@example.jp",), "subject"),),
                        sent_today=(), scheduled=())
     assert classify_target_state(result.target, state=state) == "DRAFT_EXISTS"
+
+
+def test_trashed_message_is_distinguished_from_clear_and_blocks_new_draft():
+    from src.outreach.gmail_drafts import ExistingMessage
+    result = make_result()
+    state = GmailState(drafts=(), sent_today=(), scheduled=(),
+                       trashed=(ExistingMessage(message_id="t1", thread_id="thread-1",
+                                                recipients=("clinic@example.jp",), subject="subject"),))
+    assert classify_target_state(result.target, state=state) == "TRASHED_EXISTS"
+    service = GmailService(trashed=[{"id": "t1", "threadId": "thread-1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    outcome, service, repo = create(result, service=service)
+    assert outcome.status == "TRASHED_EXISTS"
+    assert service.create_calls == 0
+    # Unlike a transient "no history" result, TRASHED_EXISTS is persisted to the ledger
+    # as a durable REVIEW hold -- so a later run under a different campaign (possibly
+    # after this trash has aged out of Gmail) is still blocked by the cross-campaign
+    # check, instead of silently reopening once Gmail's own evidence disappears.
+    assert len(repo.rows) == 1
+    assert repo.rows[0]["status"] == "REVIEW"
+    assert repo.rows[0]["campaign_id"] == "campaign-1"
+
+
+def test_trashed_hold_is_never_auto_recreated_on_retry_and_blocks_other_campaigns():
+    service = GmailService(trashed=[{"id": "t1", "threadId": "thread-1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    repo = FakeRepository()
+    first = create(service=service, repository=repo)[0]
+    assert first.status == "TRASHED_EXISTS"
+    assert service.create_calls == 0
+    # Retrying the exact same campaign must not auto-recreate the draft either.
+    second = create(service=service, repository=repo)[0]
+    assert second.status in {"TRASHED_EXISTS", "REVIEW", "UNKNOWN", "EXISTING_LEDGER"}
+    assert service.create_calls == 0
+    # And a brand-new campaign_id for the same clinic is blocked by the persisted hold,
+    # even if this ran after the Trash evidence itself would have aged out of Gmail.
+    clean_service = GmailService()  # No trashed items: simulates Gmail's ~30-day auto-purge.
+    third_outcome = create_gmail_draft(
+        make_result(), campaign_id="campaign-2", generation_batch_id="0123456789abcdef0123456789abcdef",
+        staff_name="Test Staff", gmail=connection(clean_service), repository=repo, enabled=True,
+    )
+    assert third_outcome.status == "REVIEW"
+    assert clean_service.create_calls == 0
+
+
+def test_existing_sent_history_under_a_different_campaign_blocks_new_campaign_draft():
+    repo = FakeRepository()
+    repo.rows.append({
+        "clinic_id": 101, "campaign_id": "campaign-0", "outreach_id": "out-0",
+        "operation_id": "op-0", "idempotency_key": "key-0", "status": "SENT",
+        "gmail_draft_id": "",
+    })
+    outcome, service, _ = create(repository=repo)
+    assert outcome.status == "REVIEW"
+    assert "campaign-0" in outcome.reason
+    assert service.create_calls == 0
+    # Only the pre-existing campaign-0 row remains; no reservation was made for campaign-1.
+    assert len(repo.rows) == 1
+
+
+def test_same_clinic_review_status_under_different_campaign_also_blocks():
+    repo = FakeRepository()
+    repo.rows.append({
+        "clinic_id": 101, "campaign_id": "campaign-older", "outreach_id": "out-0",
+        "operation_id": "op-0", "idempotency_key": "key-0", "status": "REVIEW",
+        "gmail_draft_id": "",
+    })
+    outcome, service, _ = create(repository=repo)
+    assert outcome.status == "REVIEW"
+    assert service.create_calls == 0
+
+
+def test_reconciling_to_sent_or_scheduled_preserves_the_original_draft_id():
+    # sync_status()'s SQL uses NULLIF(%s, '') on gmail_draft_id; any call site that omits
+    # it (defaulting to "") would silently wipe the already-recorded Draft ID on the
+    # DRAFT -> SENT/SCHEDULED transition. That corrupts both audit trail and any
+    # per-clinic draft-count aggregation built on top of this ledger.
+    repo = FakeRepository()
+    first = create(repository=repo)[0]
+    assert first.status == "DRAFT_CREATED"
+    original_draft_id = first.gmail_draft_id
+    assert original_draft_id
+
+    sent_service = GmailService(sent=[{"id": "sent1", "threadId": "t1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    second = create(service=sent_service, repository=repo)[0]
+    assert second.status == "SENT_TODAY"
+    assert repo.results[-1]["status"] == "SENT"
+    assert repo.results[-1]["gmail_draft_id"] == original_draft_id
+
+
+def test_history_under_the_same_campaign_is_not_affected_by_cross_campaign_check():
+    # Regression guard: the new cross-campaign check must not interfere with the
+    # existing same-campaign ledger reconciliation path.
+    outcome, service, repo = create()
+    assert outcome.status == "DRAFT_CREATED"
+    assert service.create_calls == 1
