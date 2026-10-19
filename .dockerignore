@@ -1,0 +1,36 @@
+# Default-deny: Dockerfile.cloudrun only needs app_v2.py, src/, config/, requirements.txt.
+# Everything else (real clinic data, local credentials, backups, scratch scripts, docs,
+# tests) is excluded by default so a future accidental file in the build context can never
+# silently end up inside the image. New code must be added to app_v2.py/src/ to be shipped.
+*
+
+!app_v2.py
+!requirements.txt
+!src
+!src/**
+!config
+!config/**
+
+# Re-exclude anything secret-shaped even if it ends up under src/ or config/ later.
+.env
+.env.*
+.supabase-runtime.env.local
+config/email_research.env.local
+config/gmail_oauth_client.json
+config/gmail_oauth_token.json
+config/outreach_email_v2.json
+**/*.secret
+**/*secrets*
+**/.secrets/**
+**/*.sqlite3*
+**/*.db*
+**/*.bak
+**/*.csv
+**/*.pem
+**/*.key
+
+# Build/runtime noise that must never ride along even under the allowed trees.
+**/__pycache__/**
+**/*.pyc
+**/.pytest_cache/**
+**/.DS_Store
