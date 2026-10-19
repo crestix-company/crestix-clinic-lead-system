@@ -1,0 +1,42 @@
+# Cloud Run Web (clinic-lead-web): READ ONLY verification runtime.
+#
+# This image serves app_v2.py behind Google IAP with CLINIC_READ_ONLY_UI=true and a
+# SELECT-only Supabase role. It never bundles production SQLite data, local credential
+# files, or real clinic CSVs (see .dockerignore). Min 0 / max 1 instance, PORT-based
+# listen address are Cloud Run requirements, not choices made in this file.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/app \
+    PORT=8080
+
+WORKDIR /app
+
+RUN groupadd --system clinicapp \
+    && useradd --system --gid clinicapp --home-dir /app --no-create-home clinicapp
+
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app_v2.py ./app_v2.py
+COPY src ./src
+COPY config ./config
+
+RUN mkdir -p /app/.streamlit \
+    && chown -R clinicapp:clinicapp /app
+
+USER clinicapp
+
+EXPOSE 8080
+
+# Cloud Run injects PORT; the service must listen on 0.0.0.0:$PORT, not 127.0.0.1.
+# IAP terminates auth in front of this container -- "allow unauthenticated" is a
+# deployment-time setting outside this Dockerfile and must stay disabled.
+CMD streamlit run app_v2.py \
+    --server.address=0.0.0.0 \
+    --server.port=$PORT \
+    --server.headless=true \
+    --server.showEmailPrompt=false \
+    --browser.gatherUsageStats=false \
+    --global.developmentMode=false

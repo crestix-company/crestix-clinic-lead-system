@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
+import src.outreach.email_template_v2 as email_template_v2
 from src.outreach.email_template_v2 import (
     ARTICLE_ABSENT,
     ARTICLE_PRESENT,
@@ -16,7 +17,32 @@ from src.outreach.email_template_v2 import (
     load_settings,
     render_preview,
 )
+from src.outreach import email_template_v2
 from scripts.build_outreach_email_v2_review import approved_v2_body
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    """Pin render_preview()'s internal "now" to the fixtures' as_of=2026-10-16.
+
+    render_preview() never forwards a `now=` override to _validate_schedule(),
+    so its past-date check otherwise uses the real wall-clock instant
+    (src/outreach/email_template_v2.py). Every fixture below hardcodes
+    `as_of=date(2026, 10, 16)` and schedule dates a few days after it; as real
+    time passes those hardcoded dates, they silently become "real past" and
+    tests start failing on the wrong branch (see
+    https://github.com/crestix-company/crestix-clinic-lead-system/issues/107).
+    This freezes only the test's view of "now" -- production rendering code
+    and its own as_of/now contract are unchanged.
+    """
+    fixed_now = datetime(2026, 10, 16, 8, 0)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed_now if tz is None else fixed_now.astimezone(tz)
+
+    monkeypatch.setattr(email_template_v2, "datetime", FrozenDateTime)
+
 
 ARTICLE = "https://clinic.mynavi.jp/article/chofushi_orthodontics/"
 DETAIL = "https://clinic.mynavi.jp/clinic/ihff0m1f1d12/"
@@ -188,7 +214,16 @@ def test_article_url_must_be_https_article_and_exact_master_member(url):
         render_preview(base(actual_article_url=url))
 
 
-def test_past_or_weekend_dates_are_rejected():
+def test_past_or_weekend_dates_are_rejected(monkeypatch):
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            fixed = cls(2026, 10, 16, 9, 0)
+            return fixed.astimezone(tz) if tz else fixed
+
+    # Keep render_preview's implicit clock deterministic without changing the
+    # production date-validation behavior.
+    monkeypatch.setattr(email_template_v2, "datetime", FixedDateTime)
     with pytest.raises(TemplateV2Error, match="過去"):
         render_preview(base(schedule=("2026-10-15 10:00",)))
     with pytest.raises(TemplateV2Error, match="営業日"):
