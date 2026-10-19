@@ -1817,7 +1817,7 @@ def main():
         email_research_page(store)
     elif nav == "メール送付文章":
         from src.outreach_ui import outreach_email_page
-        outreach_email_page(store, demo)
+        outreach_email_page(store, demo, read_only=read_only)
     else:
         advanced_ui(store, demo)
 

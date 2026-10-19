@@ -527,7 +527,7 @@ def _tab_preview():
     st.text_area("メール本文", r.body, height=520, disabled=True, key=K + f"pv_body_{uid}")
 
 
-def _tab_results():
+def _tab_results(read_only=False):
     stored = st.session_state.get(K + "results")
     if not stored:
         st.info("「② 文章生成」で一括生成すると表示されます。")
@@ -624,8 +624,10 @@ def _tab_results():
     all_reviewed = bool(selected_drafts) and all(not review_blockers_by_index.get(i) for i in selected_drafts)
     typed_confirmation = st.text_input("下書き保存の確認語", key=K + "draft_confirmation")
     st.caption("確認語：CREATE_GMAIL_DRAFTS。最大25件を順に保存し、曖昧な結果は自動再送しません。")
+    if read_only:
+        st.info("READ ONLY画面確認モードのため、Gmail下書き保存は無効です。")
     if st.button("Gmail下書きに保存", key=K + "create_drafts", type="primary",
-                 disabled=(not draft_enabled or not selected_drafts or len(selected_drafts) > 25
+                 disabled=(read_only or not draft_enabled or not selected_drafts or len(selected_drafts) > 25
                            or not all_reviewed or typed_confirmation != "CREATE_GMAIL_DRAFTS")):
         repository = None
         try:
@@ -784,7 +786,7 @@ def _tab_import_preview():
     st.warning("プレビューのみです。取込履歴への保存・Sheets書込み・DB書込み・自動紐付けは実行しません。")
 
 
-def outreach_email_page(store, demo=False, *, formal_email_page=None):
+def outreach_email_page(store, demo=False, *, formal_email_page=None, read_only=False):
     st.header("メール送付文章")
     st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。メール送信・予約送信は行いません。")
     tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 下書き一括保存", "⑥ 案件・状態", "⑦ 取込プレビュー"])
@@ -795,10 +797,10 @@ def outreach_email_page(store, demo=False, *, formal_email_page=None):
     with tabs[2]:
         _tab_preview()
     with tabs[3]:
-        _tab_results()
+        _tab_results(read_only=read_only)
     with tabs[4]:
         from src.outreach.auto_draft_ui import auto_draft_save_page
-        auto_draft_save_page(demo=demo)
+        auto_draft_save_page(demo=demo, read_only=read_only)
     with tabs[5]:
         _tab_cases(demo)
     with tabs[6]:

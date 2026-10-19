@@ -14,9 +14,11 @@ from src.outreach.pre_send_ui import render_pre_send_review_gate
 from src.utils.date_utils import today_japan
 
 
-def auto_draft_save_page(*, demo: bool = False) -> None:
+def auto_draft_save_page(*, demo: bool = False, read_only: bool = False) -> None:
     """Render as fifth tab; never send or schedule an email."""
     st.subheader("READY医院のGmail下書き一括保存")
+    if read_only:
+        st.info("READ ONLY画面確認モードのため、Gmail下書き一括保存は無効です。")
     st.caption(
         "一度の承認で最大25医院のGmail下書きを順次保存します。メール送信・予約送信は行いません。"
         " 各医院のGmail/DB重複照合と予約処理は既存の安全な実装で毎回再実行します。"
@@ -125,7 +127,7 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
     if st.session_state.get(f"auto_draft_done_{key}"):
         st.warning("この一括生成バッチは処理を試行済みです。履歴を再照合して新たに文章生成するまで再実行できません。")
     can_save = (
-        feature_enabled and not demo and history_verified and delivery_ready
+        feature_enabled and not demo and not read_only and history_verified and delivery_ready
         and calendar_confirmed and provisional_approved and bool(campaign_id)
         and bool(settings.staff.strip()) and all_confirmed and history_confirmed
         and typed == phrase and today_japan() == settings.as_of
