@@ -29,6 +29,10 @@ from src.master.jobs import JobRunner,job_status,recent_jobs
 from src.master.hp_auto_run import AutoHpRunner
 from src.master.hp_auto_state import controller_lease_health
 from src.repository.write_backend import write_repositories_for
+from src.cloud_run.hp_executor import (
+    hp_executor_mode, is_cloud_run_executor, max_single_job_count,
+    allow_unlimited_auto_run, dispatch_hp_job,
+)
 from src.repository.connection_diagnostics import (
     connection_error_category, is_database_connection_exception, safe_connection_message,
 )
@@ -375,6 +379,37 @@ def runner_for(path):
 @st.cache_resource
 def auto_hp_runner_for(path):
     return AutoHpRunner()
+
+
+def _dispatch_cloud_hp_job(jid):
+    """CLINIC_HP_EXECUTOR=cloud_run専用：既存Job IDに対してCloud Run Executionを1つ起動する。
+
+    結果（成功／起動結果不明／拒否）はsession_stateに保存し、次のrerunで
+    Step5セクションの先頭に表示する。DISPATCH_UNKNOWNの場合は絶対に自動再試行しない
+    （Cloud Run Executionsコンソールでの照合を人間に促す）。
+    """
+    from src.cloud_run.hp_executor import dispatch_hp_job, CloudRunNotConfiguredError
+    from src.cloud_run.job_dispatch import DISPATCHED, DISPATCH_UNKNOWN
+
+    try:
+        result = dispatch_hp_job(jid)
+    except CloudRunNotConfiguredError as exc:
+        st.session_state["cloud_hp_dispatch_message"] = ("error", str(exc))
+        return
+    if result.status == DISPATCHED:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "success", f"Cloud Run Jobを起動しました（Execution: {result.execution_name}）。"
+        )
+    elif result.status == DISPATCH_UNKNOWN:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "warning",
+            "Cloud Run Jobの起動結果が不明です。Cloud Run ExecutionsコンソールでJobの状態を確認し、"
+            "実行中であることを確認してから次の操作をしてください。自動的な再実行は行いません。",
+        )
+    else:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "error", "Cloud Run Jobの起動が拒否されました。設定を確認してください。"
+        )
 
 
 def ad_count_options(store):
@@ -924,19 +959,32 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     )
     st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・未調査（強制再調査時を除く）で、未完了jobにも入っていない医院です。上の参考件数とは分母が異なります。")
 
+    hp_mode = hp_executor_mode()
+    cloud_run_executor = hp_mode == "cloud_run"
+    mode_options = ["指定件数だけ調査"]
+    if allow_unlimited_auto_run(hp_mode):
+        mode_options.append("未調査がなくなるまで自動調査")
     mode = st.radio(
         "調査モード",
-        ["指定件数だけ調査", "未調査がなくなるまで自動調査"],
+        mode_options,
         index=0,
         key="simple_research_mode",
     )
+    if cloud_run_executor:
+        st.caption("Cloud Run実行モード：単発調査（最大50件）のみ。常時稼働の自動調査はローカル環境専用です。")
+    dispatch_message = st.session_state.pop("cloud_hp_dispatch_message", None)
+    if dispatch_message:
+        level, text = dispatch_message
+        getattr(st, level)(text)
     runner = runner_for(str(store.path))
     auto_runner = auto_hp_runner_for(str(store.path))
     auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
     auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
-    if not read_only and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
+    if not read_only and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running() and not cloud_run_executor:
         # Any PC may offer an executor, but the persisted lease allows only one controller.
+        # Cloud Run Web never self-elects as that executor: it must stay request-driven
+        # (min 0 / max 1), not an always-on background crawler charged to this service.
         auto_runner.start(store)
 
     hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
@@ -962,10 +1010,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         )
 
     if mode == "指定件数だけ調査":
+        count_cap = max_single_job_count(hp_mode)
         default_count = min(50, available) if available > 0 else 50
         count = st.number_input(
-            "最大調査件数", min_value=1, max_value=500,
-            value=max(1, default_count), key="simple_count",
+            "最大調査件数", min_value=1, max_value=count_cap,
+            value=max(1, min(default_count, count_cap)), key="simple_count",
         )
         actual = min(int(count), available)
         st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
@@ -974,10 +1023,12 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0,
             key="simple_start", use_container_width=True,
         ):
-            provider = TavilySearchProvider("")
             jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
             st.session_state["active_job"] = jid
-            runner.start(store, jid, provider)
+            if cloud_run_executor:
+                _dispatch_cloud_hp_job(jid)
+            else:
+                runner.start(store, jid, TavilySearchProvider(""))
             st.rerun()
     else:
         batch_size = st.number_input(
@@ -1014,7 +1065,8 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             key="simple_auto_resume", use_container_width=True,
         ):
             auto_repo.resume()
-            auto_runner.start(store)
+            if not cloud_run_executor:
+                auto_runner.start(store)
             st.rerun()
 
     if read_only:
@@ -1049,9 +1101,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             and current["counts"].get("PENDING", 0) > 0
         )
         if controls[1].button("この調査を再開", disabled=not can_resume, key="simple_resume", use_container_width=True):
-            provider = TavilySearchProvider("")
             st.session_state["active_job"] = current["id"]
-            runner.start(store, current["id"], provider)
+            if cloud_run_executor:
+                _dispatch_cloud_hp_job(current["id"])
+            else:
+                runner.start(store, current["id"], TavilySearchProvider(""))
             st.rerun()
 
         can_reset = not write_disabled and not runner.running() and current["status"] != "RUNNING"
