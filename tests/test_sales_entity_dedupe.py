@@ -17,9 +17,9 @@ def test_cross_type_same_destination_single_export_and_uuid_preserved():
     assert approved_representative_ids(result) == [9]
 
 
-def test_different_phones_remain_separate():
+def test_different_phones_require_review():
     result = plan_sales_entities([row(7, "医科"), row(9, "歯科", phone="0399999999")])
-    assert [d.decision for d in result] == ["SINGLE", "SINGLE"]
+    assert [d.decision for d in result] == ["HOLD"]
 
 
 def test_conflicting_uuid_is_hold_not_overwritten():
@@ -34,9 +34,9 @@ def test_same_type_duplicate_is_hold():
     assert result[0].decision == "HOLD"
 
 
-def test_missing_phone_is_never_collapsed():
+def test_missing_phone_requires_review():
     result = plan_sales_entities([row(7, "医科", phone=""), row(9, "歯科", phone="")])
-    assert len(result) == 2
+    assert [d.decision for d in result] == ["HOLD"]
 
 
 def test_duplicate_input_ids_fail_closed():
