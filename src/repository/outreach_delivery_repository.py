@@ -352,7 +352,10 @@ class OutreachDeliveryRepository:
                     VALUES (%s,%s,%s) ON CONFLICT (clinic_id) DO NOTHING""",
                     (int(clinic_id), campaign_id, outreach_id),
                 )
-                cur.fetchone()
+                # No RETURNING clause: INSERT may affect zero rows when a guard
+                # already exists for this Clinic ID. The unique Clinic ID key
+                # intentionally reuses that guard across campaigns; never read
+                # a result row or weaken the guard on conflict.
                 cur.execute(
                     f"""INSERT INTO {TABLE}
                     (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,

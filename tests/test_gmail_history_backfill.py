@@ -135,13 +135,16 @@ def test_verified_override_reclassification_is_0_ready_83_skip_245_hold_and_even
 
 
 class _FakeCursor:
-    def __init__(self, db): self.db = db; self.result = None; self.rows = []
+    def __init__(self, db, guards): self.db = db; self.guards = guards; self.result = None; self.rows = []; self.no_result = False
     def __enter__(self): return self
     def __exit__(self, *_): return False
     def execute(self, sql, params=()):
         if "INSERT INTO outreach.clinic_draft_guard" in sql:
+            self.guards.add(params[0])
+            self.no_result = True
             self.result = None
         elif "INSERT INTO outreach.email_delivery_records" in sql:
+            self.no_result = False
             key = params[2]
             existing = self.db.get(key)
             draft_id, message_id = params[15] or "", params[16] or ""
@@ -162,20 +165,23 @@ class _FakeCursor:
                          or (message_id and v["gmail_message_id"] == message_id)]
             self.result = None
         else:
+            self.no_result = False
             self.result = None
     def fetchone(self):
+        if self.no_result:
+            raise AssertionError("fetchone() called for INSERT without RETURNING")
         value, self.result = self.result, None
         return value
     def fetchall(self): return [tuple(x[k] for k in ("clinic_id", "status", "gmail_draft_id", "gmail_message_id", "gmail_thread_id")) for x in self.rows]
 
 
 class _FakeConnection:
-    def __init__(self): self.rows = {}
+    def __init__(self): self.rows = {}; self.guards = set()
     class _Transaction:
         def __enter__(self): return self
         def __exit__(self, *_): return False
     def transaction(self): return self._Transaction()
-    def cursor(self): return _FakeCursor(self.rows)
+    def cursor(self): return _FakeCursor(self.rows, self.guards)
 
 
 def test_repository_backfill_rerun_is_idempotent_and_uses_clinic_id_without_uuid():
@@ -187,6 +193,7 @@ def test_repository_backfill_rerun_is_idempotent_and_uses_clinic_id_without_uuid
     assert repo.backfill_history_event(**fields) is True
     assert repo.backfill_history_event(**fields) is False
     assert len(repo._conn.rows) == 1
+    assert repo._conn.guards == {500}
     row = next(iter(repo._conn.rows.values()))
     assert row["clinic_id"] == 500 and row["gmail_message_id"] == "sent-msg-500"
     assert row["gmail_thread_id"] == "thread-500"
