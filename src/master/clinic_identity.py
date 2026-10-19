@@ -8,7 +8,21 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Mapping, Sequence
+import os
 import unicodedata
+
+
+def common_identity_enabled(environ=None) -> bool:
+    """Return whether common-clinic identity integration is explicitly enabled.
+
+    The default is off so an un-migrated database keeps using the legacy
+    Comdesk path. Even when enabled, repository adapters still check schema
+    availability before issuing identity-table queries.
+    """
+    environ = os.environ if environ is None else environ
+    return str(environ.get("CLINIC_COMMON_IDENTITY_ENABLED", "")).strip().casefold() in {
+        "1", "true", "yes", "on",
+    }
 
 
 def _text(row: Mapping, key: str) -> str:

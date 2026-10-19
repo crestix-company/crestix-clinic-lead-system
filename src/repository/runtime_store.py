@@ -152,6 +152,9 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def comdesk_identity_for_clinics(self, clinic_ids):
         """Read common IDs and canonical Comdesk UUIDs for CSV export; no clinic write."""
+        from src.master.clinic_identity import common_identity_enabled
+        if not common_identity_enabled():
+            return {}
         ids = sorted({int(cid) for cid in clinic_ids if int(cid) > 0})
         if not ids:
             return {}

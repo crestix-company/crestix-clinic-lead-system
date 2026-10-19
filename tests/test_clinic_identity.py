@@ -1,6 +1,7 @@
 import pytest
 
 from src.master.clinic_identity import (
+    common_identity_enabled,
     project_export_rows,
     resolve_clinic_identity,
     validate_entity_uuid_assignments,
@@ -13,6 +14,56 @@ def clinic(i, **values):
         "name": "さくら内科", "address": "東京都千代田区1-1", "phone": "03-1234-5678",
         "medical_type": "医科", **values,
     }
+
+
+def test_common_identity_feature_is_opt_in():
+    assert common_identity_enabled({}) is False
+    assert common_identity_enabled({"CLINIC_COMMON_IDENTITY_ENABLED": "0"}) is False
+    assert common_identity_enabled({"CLINIC_COMMON_IDENTITY_ENABLED": "true"}) is True
+
+
+def test_schema_probe_is_skipped_when_feature_is_disabled(monkeypatch):
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
+
+    class NoQueryCursor:
+        def execute(self, *_args):
+            raise AssertionError("disabled identity feature must not query identity tables")
+
+    monkeypatch.delenv("CLINIC_COMMON_IDENTITY_ENABLED", raising=False)
+    assert SupabaseClinicWriteRepository._common_identity_schema_available(NoQueryCursor()) is False
+
+
+def test_schema_probe_falls_back_when_feature_enabled_but_migration_is_absent(monkeypatch):
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
+
+    class MissingSchemaCursor:
+        executed = False
+
+        def execute(self, query):
+            self.executed = True
+            assert "to_regclass" in query
+
+        def fetchone(self):
+            return (None, None, None)
+
+    cursor = MissingSchemaCursor()
+    monkeypatch.setenv("CLINIC_COMMON_IDENTITY_ENABLED", "1")
+    assert SupabaseClinicWriteRepository._common_identity_schema_available(cursor) is False
+    assert cursor.executed is True
+
+
+def test_runtime_export_skips_identity_lookup_when_feature_is_disabled(monkeypatch):
+    from src.repository.runtime_store import SupabaseRuntimeStore
+
+    class NoConnection:
+        def cursor(self):
+            raise AssertionError("disabled identity feature must not query identity tables")
+
+    monkeypatch.delenv("CLINIC_COMMON_IDENTITY_ENABLED", raising=False)
+    store = object.__new__(SupabaseRuntimeStore)
+    store._owns_runtime_connection = False
+    store._conn = NoConnection()
+    assert store.comdesk_identity_for_clinics([1]) == {}
 
 
 def test_same_uuid_resolves_to_existing_common_clinic_id():
