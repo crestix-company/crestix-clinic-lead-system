@@ -251,6 +251,30 @@ def _reconcile_existing_ledger(result: OutreachResult, *, campaign_id: str,
                                reason=f"Existing ledger state blocks a second draft: {status}")
 
 
+def _reserve(repository: OutreachDeliveryRepository, *, target, result: OutreachResult,
+            campaign_id: str, generation_batch_id: str, staff_name: str,
+            sender_account: str) -> DraftReservation:
+    return repository.reserve_draft(
+        clinic_id=target.clinic_id,
+        clinic_uuid=target.clinic_uuid,
+        clinic_name=target.clinic_name,
+        clinic_address=target.clinic_address,
+        recipient_email=target.email,
+        sender_account=sender_account,
+        staff_name=staff_name,
+        campaign_id=campaign_id,
+        generation_batch_id=str(uuid.UUID(generation_batch_id)),
+        operation_id=str(uuid.uuid4()),
+        listing_status=target.article.status,
+        article_type=target.article.article_type,
+        example_article_url=target.article.example_url,
+        listing_article_url=target.article.listed_url,
+        clinic_profile_url=target.article.clinic_profile_url,
+        subject=result.subject,
+        body_sha256=hashlib.sha256(result.body.encode("utf-8")).hexdigest(),
+    )
+
+
 def create_gmail_draft(
     result: OutreachResult,
     *,
@@ -321,30 +345,33 @@ def create_gmail_draft(
     if reconciled is not None:
         return reconciled
     existing = classify_existing_state(result, state=state)
+    if existing == "TRASHED_EXISTS":
+        # Gmail Trash auto-expires (~30 days); persist this as a durable ledger REVIEW row
+        # so a later run -- possibly under a different campaign_id, after this evidence has
+        # aged out of Gmail -- is still held by the cross-campaign check above, instead of
+        # silently reopening once Gmail's own trace of it disappears. Never auto-recreated.
+        try:
+            reservation = _reserve(repository, target=target, result=result,
+                                   campaign_id=campaign_id, generation_batch_id=generation_batch_id,
+                                   staff_name=staff_name, sender_account=gmail.email_address)
+            if reservation.created:
+                repository.record_draft_result(
+                    outreach_id=reservation.outreach_id, status="REVIEW",
+                    last_error="Trashed Gmail message/draft matched by identity; held for manual review",
+                )
+        except Exception:
+            pass  # best-effort persistence only; the TRASHED_EXISTS result below still blocks this call
+        return DraftWorkflowResult(
+            "TRASHED_EXISTS",
+            reason="Existing Gmail state blocks new draft (trashed; held for review, never auto-recreated)",
+        )
     if existing != "CLEAR":
         return DraftWorkflowResult(existing, reason="Existing Gmail state blocks new draft")
 
-    operation_id = str(uuid.uuid4())
     try:
-        reservation = repository.reserve_draft(
-            clinic_id=target.clinic_id,
-            clinic_uuid=target.clinic_uuid,
-            clinic_name=target.clinic_name,
-            clinic_address=target.clinic_address,
-            recipient_email=target.email,
-            sender_account=gmail.email_address,
-            staff_name=staff_name,
-            campaign_id=campaign_id,
-            generation_batch_id=str(uuid.UUID(generation_batch_id)),
-            operation_id=operation_id,
-            listing_status=target.article.status,
-            article_type=target.article.article_type,
-            example_article_url=target.article.example_url,
-            listing_article_url=target.article.listed_url,
-            clinic_profile_url=target.article.clinic_profile_url,
-            subject=result.subject,
-            body_sha256=hashlib.sha256(result.body.encode("utf-8")).hexdigest(),
-        )
+        reservation = _reserve(repository, target=target, result=result,
+                               campaign_id=campaign_id, generation_batch_id=generation_batch_id,
+                               staff_name=staff_name, sender_account=gmail.email_address)
     except Exception:
         return DraftWorkflowResult("REVIEW", reason="Outreach history reservation failed")
     if not reservation.created:

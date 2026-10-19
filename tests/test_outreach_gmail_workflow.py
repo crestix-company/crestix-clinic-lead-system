@@ -266,6 +266,25 @@ def test_db_update_failure_after_gmail_create_returns_unknown_without_second_cre
     assert service.create_calls == 1
 
 
+def test_db_update_failure_after_gmail_create_then_retry_recovers_without_duplicate():
+    # The exact scenario called out as critical: the Gmail drafts.create call succeeds,
+    # but recording that result into the delivery ledger fails (DB blip, crash, etc.).
+    # Re-running must recover the already-created draft by its exact idempotency key
+    # (X-Clinic-Lead-Draft-Key), never call drafts.create a second time.
+    service = GmailService()
+    repo = FakeRepository(fail_update=True)
+    first = create(service=service, repository=repo)[0]
+    assert first.status == "UNKNOWN"
+    assert service.create_calls == 1
+    assert repo.rows and repo.rows[0]["status"] == "REVIEW"  # record_draft_result never applied
+
+    repo.fail_update = False
+    second = create(service=service, repository=repo)[0]
+    assert second.status == "DRAFT_RECOVERED"
+    assert service.create_calls == 1  # still exactly one Gmail draft ever created
+    assert repo.results[-1]["status"] == "DRAFT"
+
+
 def test_concurrent_saves_reserve_once_and_create_at_most_one_draft():
     service = GmailService()
     repo = FakeRepository()
@@ -308,7 +327,36 @@ def test_trashed_message_is_distinguished_from_clear_and_blocks_new_draft():
     outcome, service, repo = create(result, service=service)
     assert outcome.status == "TRASHED_EXISTS"
     assert service.create_calls == 0
-    assert not repo.rows
+    # Unlike a transient "no history" result, TRASHED_EXISTS is persisted to the ledger
+    # as a durable REVIEW hold -- so a later run under a different campaign (possibly
+    # after this trash has aged out of Gmail) is still blocked by the cross-campaign
+    # check, instead of silently reopening once Gmail's own evidence disappears.
+    assert len(repo.rows) == 1
+    assert repo.rows[0]["status"] == "REVIEW"
+    assert repo.rows[0]["campaign_id"] == "campaign-1"
+
+
+def test_trashed_hold_is_never_auto_recreated_on_retry_and_blocks_other_campaigns():
+    service = GmailService(trashed=[{"id": "t1", "threadId": "thread-1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    repo = FakeRepository()
+    first = create(service=service, repository=repo)[0]
+    assert first.status == "TRASHED_EXISTS"
+    assert service.create_calls == 0
+    # Retrying the exact same campaign must not auto-recreate the draft either.
+    second = create(service=service, repository=repo)[0]
+    assert second.status in {"TRASHED_EXISTS", "REVIEW", "UNKNOWN", "EXISTING_LEDGER"}
+    assert service.create_calls == 0
+    # And a brand-new campaign_id for the same clinic is blocked by the persisted hold,
+    # even if this ran after the Trash evidence itself would have aged out of Gmail.
+    clean_service = GmailService()  # No trashed items: simulates Gmail's ~30-day auto-purge.
+    third_outcome = create_gmail_draft(
+        make_result(), campaign_id="campaign-2", generation_batch_id="0123456789abcdef0123456789abcdef",
+        staff_name="Test Staff", gmail=connection(clean_service), repository=repo, enabled=True,
+    )
+    assert third_outcome.status == "REVIEW"
+    assert clean_service.create_calls == 0
 
 
 def test_existing_sent_history_under_a_different_campaign_blocks_new_campaign_draft():
