@@ -7,6 +7,8 @@ import pandas as pd
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_EXPORT_HEADERS, COMDESK_HEADERS
 from src.master.filters import Filters
+from src.repository.errors import BackendNotSupportedError
+from src.repository.supabase_adapter import SupabaseClinicRepository
 from src.repository.runtime_store import SupabaseRuntimeStore
 from src.repository.supabase_filters import where as supabase_where
 
@@ -163,6 +165,32 @@ def test_read_only_treatment_pair_filter_uses_only_confirmed_treatment_sidecar()
     assert "research.research_results" not in readonly_sql
     assert "treatment.clinic_treatment_research" in readonly_sql
     assert "research_status='CONFIRMED'" in readonly_sql
+
+
+def test_inferred_age_is_excluded_from_read_only_projection_ui_and_filter():
+    assert "age_probability" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
+    assert "age_probability_under_59" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
+
+    filters = Filters(age_min=0.5)
+    ordinary_sql, _ = supabase_where(filters, excluded_ids=[])
+    assert "age_probability>=%s" in ordinary_sql
+    try:
+        supabase_where(filters, excluded_ids=[], read_only_ui=True)
+    except BackendNotSupportedError as exc:
+        assert "READ ONLY" in str(exc)
+    else:
+        raise AssertionError("READ ONLY accepted an inferred-age filter")
+
+    import app_v2
+
+    record = {"id": 1, "age_probability_under_59": 0.8}
+    assert "59歳以下確率" in app_v2.display_rows([record]).columns
+    assert "59歳以下確率" not in app_v2.display_rows(
+        [record], include_age_probability=False
+    ).columns
+
+    migration = Path("supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql")
+    assert "age_probability" not in migration.read_text(encoding="utf-8").casefold()
 
 
 def test_read_only_main_cannot_enter_demo_loader_or_write_side_effects():

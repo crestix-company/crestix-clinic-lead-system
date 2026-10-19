@@ -137,7 +137,7 @@ class SupabaseClinicRepository:
         "projection_valid", "tel_match_key", "first_seen_at", "last_seen_at",
         "source_as_of_date", "is_new", "departments_json", "hp_status", "hp_url",
         "hp_rank", "maps_website_url", "clinic_name", "phone", "address", "prefecture",
-        "medical_type", "owner_equal", "designation_date", "age_probability",
+        "medical_type", "owner_equal", "designation_date",
         "signal_count", "hot_status", "treatments_json", "signals_json",
         "maps_presence_status", "maps_profile_url",
     )
@@ -262,7 +262,6 @@ class SupabaseClinicRepository:
             medical_type=d.get("medical_type") or "",
             owner_manager_equal=d.get("owner_equal"),
             designation_date=d.get("designation_date") or "",
-            age_probability_under_59=d.get("age_probability"),
             marketing_signal_count=d.get("signal_count") or 0,
             hot_status=d.get("hot_status") or "通常",
             treatment_categories=d.get("treatments_json") or [],

@@ -152,6 +152,10 @@ def clauses(filters, as_of=None, excluded_ids=None, read_only_ui=False):
     if filters.recent_only:
         add("指定年月日から10年以内", "designation_date<=%s AND recent_until>=%s", day, day)
     if filters.age_min is not None:
+        if read_only_ui:
+            raise BackendNotSupportedError(
+                "年齢推定値の検索はREAD ONLY初回公開では利用できません。"
+            )
         if not 0 <= filters.age_min <= 1:
             raise ValueError("年齢確率は0〜100%で指定してください。")
         add(f"59歳以下確率{filters.age_min:.0%}以上", "age_probability>=%s", filters.age_min)

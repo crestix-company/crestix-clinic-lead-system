@@ -604,7 +604,7 @@ def _email_status_label(email_status):
     return "未調査"
 
 
-def display_rows(records, *, include_email_status=True):
+def display_rows(records, *, include_email_status=True, include_age_probability=True):
     rows = []
     for r in records:
         prob = r.get("age_probability_under_59")
@@ -626,6 +626,8 @@ def display_rows(records, *, include_email_status=True):
             "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))}
         if include_email_status:
             row["Email Status"] = _email_status_label(r.get("email_status"))
+        if not include_age_probability:
+            row.pop("59歳以下確率", None)
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -738,7 +740,12 @@ def listing(store,filters,prefix="list", *, read_only=False):
             email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
             for r in records:
                 r["email_status"] = email_statuses.get(r["id"])
-        st.dataframe(display_rows(records, include_email_status=not read_only),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
+        column_config = {"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn()}
+        if not read_only:
+            column_config["59歳以下確率"] = st.column_config.NumberColumn(format="percent")
+        st.dataframe(display_rows(records, include_email_status=not read_only,
+                                  include_age_probability=not read_only),
+                     hide_index=True, width="stretch", column_config=column_config)
         if not read_only:
             choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
             if choice:
@@ -1466,7 +1473,7 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
 
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
-    age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
+    age = False if read_only else cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
     # 通常営業UIはeffective_hp_rankを使用。Treatment状態はこの判定に影響しない。
     rank_labels = [label for label, _ in HP_RANK_PRESETS]
     default_rank_index = HP_RANK_PRESET_UNRESTRICTED_INDEX if demo else HP_RANK_PRESET_DEFAULT_INDEX

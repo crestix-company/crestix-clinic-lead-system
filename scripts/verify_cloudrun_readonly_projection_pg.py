@@ -79,6 +79,14 @@ def main():
                     "Projection owner must be NOLOGIN/NOBYPASSRLS/NOSUPERUSER")
             _assert(not owns_clinics, "Projection owner must not own public.clinics")
             _assert(not reader_is_member, "Reader must not be able to SET ROLE to projection owner")
+            cur.execute("""
+                SELECT EXISTS (
+                  SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                    AND column_name IN ('age_probability', 'age_probability_under_59')
+                )
+            """)
+            _assert(not cur.fetchone()[0], "Inferred age projection is present in the READ ONLY view")
 
         hp = SupabaseHpResearchRepository(conn)
         clinics = SupabaseClinicRepository(conn, hp)

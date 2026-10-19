@@ -49,7 +49,7 @@ $$;
 -- the input columns needed to construct the public projection. RLS is evaluated for this role.
 GRANT SELECT (
   id, uuid, clinic_name, phone, address, prefecture, medical_type, active,
-  designation_date, recent_until, registration_reason, owner_equal, age_probability,
+  designation_date, recent_until, registration_reason, owner_equal,
   hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json,
   treatments_json, signals_json, first_seen_at, last_seen_at, source_as_of_date,
   is_new, merged_into, tel_match_key, merge_hold, maps_presence_status,
@@ -144,7 +144,7 @@ WITH projected AS (
          c.source_as_of_date, c.is_new, c.departments_json, c.hp_status, c.hp_url,
          c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.address, c.prefecture,
          c.medical_type, c.active, c.designation_date, c.recent_until,
-         c.registration_reason, c.owner_equal, c.age_probability, c.signal_count,
+         c.registration_reason, c.owner_equal, c.signal_count,
          c.hot_status, c.treatments_json, c.signals_json, c.merge_hold,
          c.maps_presence_status, c.maps_profile_url, c.maps_match_method,
          c.maps_checked_at, c.exclude_reason,
@@ -157,7 +157,7 @@ SELECT
   id, uuid, merged_into, tel_match_key, first_seen_at, last_seen_at, source_as_of_date,
   is_new, departments_json, hp_status, hp_url, hp_rank, maps_website_url,
   clinic_name, phone, address, prefecture, medical_type, active, designation_date,
-  recent_until, registration_reason, owner_equal, age_probability, signal_count,
+  recent_until, registration_reason, owner_equal, signal_count,
   hot_status, treatments_json, signals_json, merge_hold, maps_presence_status,
   maps_profile_url, maps_match_method, maps_checked_at, exclude_reason,
   (_effective->'values') AS effective_projection,

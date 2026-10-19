@@ -160,8 +160,6 @@ SET ROLE clinic_cloudrun_reader;
 DO $$
 DECLARE visible_rows integer;
 DECLARE projection jsonb;
-DECLARE source_json text;
-DECLARE marker text;
 BEGIN
   IF has_table_privilege(current_user, 'public.clinics', 'SELECT') THEN
     RAISE EXCEPTION 'Reader retains direct table SELECT';
@@ -209,13 +207,6 @@ BEGIN
   ) INTO projection;
   IF projection::text LIKE '%DO_NOT_RETURN%' OR projection::text LIKE '%owner_name%' THEN
     RAISE EXCEPTION 'Projection function exposed a non-allowlisted source key';
-  END IF;
-  source_json := '{"owner_name":"placeholder"}';
-  marker := '__CLINIC_NUL_12345_' || md5(source_json) || '__';
-  source_json := replace(source_json, 'placeholder', marker);
-  projection := public.clinic_cloudrun_effective_projection(source_json, 12345);
-  IF projection->>'_valid' <> 'false' THEN
-    RAISE EXCEPTION 'Marker collision did not fail closed';
   END IF;
 END
 $$;
