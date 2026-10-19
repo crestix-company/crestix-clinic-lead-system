@@ -115,7 +115,7 @@ No grant or policy is proposed for `provenance.change_history`, `provenance.matc
 This is a review artifact, not an executable migration. Read-only catalog checks confirmed the
 seven tables exist and have RLS enabled; `CONNECT` and `public` USAGE already exist. Do not alter
 role attributes/memberships, existing CRM policies, or RLS enablement. Six-table SQL is shown
-first. The email block is separately conditional on explicit approval to export email addresses.
+first. Email output use is approved, but its SQL block still requires separate database-change approval.
 
 ```sql
 -- PROPOSAL ONLY. Existing target: no CREATE/ALTER ROLE, membership, password, policy
@@ -411,11 +411,19 @@ Session Pooler URL: authentication, `current_user`, `session_user`, `SHOW
 default_transaction_read_only`, `SELECT 1`, representative nationwide query and CSV query;
 then confirm INSERT/UPDATE/DELETE/DDL are denied. Never print the URL.
 
+Credential handling preparation (not performed): an authorized operator should retrieve the
+Session Pooler host/database/user values and reader password from the approved secret source,
+enter the complete DSN into the approved secret-registration interface without placing it in
+shell arguments, shell history, chat, Git, SQL history, or terminal output, and grant access only
+to the Cloud Run service identity through the separately approved deployment process. Validate
+secret version metadata and access policy without reading the secret value. Secret Manager
+registration and Cloud Run changes are prohibited in this task.
+
 ## A担当 handoff / approvals
 
 1. C/A: retain the audit/Email KPI/HP Job/Step 6 bypass and confirm the seven-table dependency.
-   If email exposure is not approved, update C's READ ONLY exporter to omit the email dependency
-   and output column. Confirm normal mode remains unchanged.
+   Email output is approved for IAP users; keep sending, delivery history and Email KPI excluded.
+   Confirm normal mode remains unchanged.
 2. Confirm the deployed Cloud Run secret points to project `hwdvyhunozporfuefteb` and a
    Session Pooler URL, without exposing its value.
 3. DBA/product owner must accept or separately remediate existing INHERIT, the postgres
