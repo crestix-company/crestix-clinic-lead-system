@@ -187,6 +187,11 @@ class _StatefulCursor:
             self.conn.repeatable_read = True
             return
 
+        if q.startswith("SELECT to_regclass('public.sales_entity_clinics')"):
+            # Existing migration-free fixtures exercise the legacy fallback path.
+            self._result = [(None, None, None)]
+            return
+
         if q.startswith("SELECT result_json FROM provenance.import_batches"):
             batch = params[0]
             self._result = (

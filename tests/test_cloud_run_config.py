@@ -67,7 +67,12 @@ def test_dockerignore_excludes_real_clinic_data_and_credentials():
 def test_dockerignore_allowlists_only_the_app_runtime_paths():
     text = _read(".dockerignore")
     allowed = {line.lstrip("!").strip() for line in text.splitlines() if line.startswith("!")}
-    assert allowed == {"app_v2.py", "requirements.txt", "src", "src/**", "config", "config/**"}
+    expected = {"app_v2.py", "requirements.txt", "src", "src/**", "config", "config/**"}
+    # Phase B's one-shot Worker image needs its single entrypoint script.
+    # Keep the strict allowlist: do not grant a general scripts/** exception.
+    if (ROOT / "Dockerfile.cloudrun.worker").is_file():
+        expected.add("scripts/cloud_hp_worker.py")
+    assert allowed == expected
 
 
 class _FakeCursor:

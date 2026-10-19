@@ -78,9 +78,9 @@ def record_from_row(raw, mapping):
 
 
 def new_export_row(data, headers, mapping):
-    """新規医院だけを元の列構成へ配置。確定できない列とUUIDは空欄。"""
+    """新規医院を元の列構成へ配置。未確定UUIDは空欄、確定済み正規UUIDは再利用。"""
     row = [""] * len(headers)
-    values = {field: data.get(field, "") for field in ("clinic_name", "phone", "address", "prefecture")}
+    values = {field: data.get(field, "") for field in ("uuid", "clinic_name", "phone", "address", "prefecture")}
     if mapping.get("prefecture") is not None:
         prefix = PREFECTURE.match(values["address"])
         if prefix:
