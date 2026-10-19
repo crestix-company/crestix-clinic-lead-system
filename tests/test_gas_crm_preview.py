@@ -68,3 +68,9 @@ def test_csv_validation_and_formula_safety():
         read_csv_snapshot(b"a,b\n1,2\n", required_columns=CANDIDATE_COLUMNS)
     with pytest.raises(PreviewInputError):
         read_csv_snapshot(b"x" * 3_000_001, required_columns=CANDIDATE_COLUMNS)
+
+def test_same_clinic_different_campaign_is_legitimate_followup():
+    rows = [candidate(), candidate(campaign_id="next-year", gmail_draft_id="draft-two")]
+    out = preview_cases(rows, [], [mapped()], history_verified=True)
+    assert [r.gas_status for r in out] == ["PREVIEW_OK", "PREVIEW_OK"]
+    assert out[0].operation_key != out[1].operation_key
