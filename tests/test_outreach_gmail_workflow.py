@@ -12,6 +12,7 @@ from src.outreach.gmail_oauth import GmailConnection, REQUIRED_SCOPES
 from src.outreach.gmail_workflow import (
     DraftWorkflowResult, GmailState, classify_target_state, create_gmail_draft,
 )
+from src.outreach.pre_send_review import DRAFT_SAVE_CHECKS, build_draft_save_review
 from src.outreach.targets import EMAIL_FOUND, ArticleState, ClinicTarget
 from src.repository.outreach_delivery_repository import DraftReservation
 
@@ -130,23 +131,38 @@ def make_result(*, article_status=ARTICLE_NOT_LISTED, article_type="UNKNOWN",
         prefecture="東京都", municipality="中央区", departments=("歯科",), treatments=(), hp_rank="A",
         director_name="院長 太郎" if director else "", email=email, email_status=EMAIL_FOUND,
         director_name_confirmed=director, clinic_address="東京都中央区1-2-3",
-        article=ArticleState(article_status, article_type=article_type),
+        article=ArticleState(article_status, article_type=article_type,
+                             clinic_profile_url="https://clinic.mynavi.jp/clinic/example"),
     )
-    return OutreachResult(target=target, status=READY, subject="Clinic Lead subject", body="Preview body")
+    return OutreachResult(target=target, status=READY, subject="Clinic Lead subject", body="Preview body",
+                          example_url="https://clinic.mynavi.jp/article/example")
 
 
 def connection(service):
     return GmailConnection(service, "info@crestix-inc.com", REQUIRED_SCOPES)
 
 
-def create(result=None, *, service=None, repository=None, enabled=True, gmail=None):
+def draft_review(result, campaign_id):
+    review, blockers = build_draft_save_review(
+        result=result, reviewer="Operator", checks={key: True for key in DRAFT_SAVE_CHECKS},
+        campaign_id=campaign_id,
+    )
+    return review
+
+
+def create(result=None, *, service=None, repository=None, enabled=True, gmail=None, review=None):
     service = service or GmailService()
     repository = repository or FakeRepository()
     result = result or make_result()
+    if review is None:
+        review = draft_review(result, "campaign-1")
+        # Invalid target details intentionally remain blocked by the second validation
+        # inside create_gmail_draft; this helper does not loosen those checks.
     outcome = create_gmail_draft(
         result, campaign_id="campaign-1", generation_batch_id="0123456789abcdef0123456789abcdef",
         staff_name="Test Staff", gmail=gmail or connection(service), repository=repository,
         enabled=enabled,
+        draft_save_review=review,
     )
     return outcome, service, repository
 
@@ -203,6 +219,7 @@ def test_gmail_history_before_backfill_and_persisted_backfill_both_block_creatio
     after = create_gmail_draft(
         make_result(), campaign_id="new-campaign", generation_batch_id="0123456789abcdef0123456789abcdef",
         staff_name="Test Staff", gmail=connection(post_service), repository=post_repo, enabled=True,
+        draft_save_review=draft_review(make_result(), "new-campaign"),
     )
     assert after.status == "REVIEW"
     assert post_service.create_calls == 0
@@ -232,6 +249,7 @@ def test_competing_campaigns_are_serialized_by_unique_clinic_guard():
         return create_gmail_draft(
             make_result(), campaign_id=campaign, generation_batch_id="0123456789abcdef0123456789abcdef",
             staff_name="Test Staff", gmail=connection(service), repository=repo, enabled=True,
+            draft_save_review=draft_review(make_result(), campaign),
         )
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(run, ("campaign-a", "campaign-b")))
@@ -312,6 +330,26 @@ def test_missing_oauth_confirmation_flag_disables_draft_creation():
     assert outcome.status == "DISABLED"
     assert service.create_calls == 0
     assert not repo.rows
+
+
+def test_draft_creation_does_not_claim_unconfirmed_i3_send_approval():
+    result = make_result()
+    from src.outreach.pre_send_review import I3Reference, REQUIRED_CHECKS, build_pre_send_review
+    send_review, blockers = build_pre_send_review(
+        result=result, reviewer="IS lead", checks={key: True for key in REQUIRED_CHECKS},
+        i3_reference=I3Reference("", ""), i3_acknowledged=False,
+    )
+    assert any("I3" in reason for reason in blockers)
+    draft_review, draft_blockers = build_draft_save_review(
+        result=result, reviewer="Operator", checks={key: True for key in DRAFT_SAVE_CHECKS},
+        campaign_id="campaign-1",
+    )
+    assert not draft_blockers
+    assert draft_review["i3_definition_status"] == "UNCONFIRMED"
+    outcome, service, repo = create(result, review=draft_review)
+    assert outcome.status == "DRAFT_CREATED"
+    assert service.create_calls == 1
+    assert repo.rows
 
 
 def test_gmail_account_must_be_the_fixed_approved_sender():
@@ -451,6 +489,7 @@ def test_trashed_hold_is_never_auto_recreated_on_retry_and_blocks_other_campaign
     third_outcome = create_gmail_draft(
         make_result(), campaign_id="campaign-2", generation_batch_id="0123456789abcdef0123456789abcdef",
         staff_name="Test Staff", gmail=connection(clean_service), repository=repo, enabled=True,
+        draft_save_review=draft_review(make_result(), "campaign-2"),
     )
     assert third_outcome.status == "REVIEW"
     assert clean_service.create_calls == 0

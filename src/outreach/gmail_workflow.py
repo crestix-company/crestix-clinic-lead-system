@@ -28,6 +28,7 @@ from src.outreach.gmail_drafts import (
     list_existing_messages,
 )
 from src.outreach.gmail_oauth import GmailConnection, REQUIRED_SCOPES
+from src.outreach.pre_send_review import build_draft_save_review
 from src.repository.outreach_delivery_repository import (
     BLOCKING_STATUSES,
     DraftReservation,
@@ -321,12 +322,29 @@ def create_gmail_draft(
     repository: OutreachDeliveryRepository,
     as_of: date | None = None,
     enabled: bool | None = None,
+    draft_save_review: dict | None = None,
 ) -> DraftWorkflowResult:
     """Create one draft after Gmail/ledger checks. No call to any send endpoint exists."""
     if not (gmail_drafts_enabled() if enabled is None else enabled):
         return DraftWorkflowResult("DISABLED", reason="OUTREACH_GMAIL_DRAFTS_ENABLED is not true")
     if not campaign_id.strip():
         return DraftWorkflowResult("REVIEW", reason="Campaign ID is required")
+    if not isinstance(draft_save_review, dict):
+        return DraftWorkflowResult("REVIEW", reason="Draft-save review is required")
+    try:
+        reviewed_at = datetime.fromisoformat(str(draft_save_review.get("reviewed_at") or ""))
+    except ValueError:
+        return DraftWorkflowResult("REVIEW", reason="Pre-send review timestamp is invalid")
+    review_payload, review_blockers = build_draft_save_review(
+        result=result,
+        reviewer=str(draft_save_review.get("reviewed_by") or ""),
+        checks=draft_save_review.get("checks") or {},
+        operation_key=str(draft_save_review.get("operation_key") or ""),
+        campaign_id=campaign_id,
+        reviewed_at=reviewed_at,
+    )
+    if review_blockers:
+        return DraftWorkflowResult("REVIEW", reason="; ".join(review_blockers))
     target = result.target
     if result.status != READY:
         return DraftWorkflowResult("REVIEW", reason="Generated message is not READY")
@@ -404,10 +422,29 @@ def create_gmail_draft(
     if existing != "CLEAR":
         return DraftWorkflowResult(existing, reason="Existing Gmail state blocks new draft")
 
+    operation_id = str(uuid.uuid4())
     try:
-        reservation = _reserve(repository, target=target, result=result,
-                               campaign_id=campaign_id, generation_batch_id=generation_batch_id,
-                               staff_name=staff_name, sender_account=gmail.email_address)
+        reservation = repository.reserve_draft(
+            clinic_id=target.clinic_id,
+            clinic_uuid=target.clinic_uuid,
+            clinic_name=target.clinic_name,
+            clinic_address=target.clinic_address,
+            recipient_email=target.email,
+            sender_account=gmail.email_address,
+            staff_name=staff_name,
+            campaign_id=campaign_id,
+            generation_batch_id=str(uuid.UUID(generation_batch_id)),
+            operation_id=operation_id,
+            listing_status=target.article.status,
+            article_type=target.article.article_type,
+            example_article_url=target.article.example_url,
+            listing_article_url=target.article.listed_url,
+            clinic_profile_url=target.article.clinic_profile_url,
+            subject=result.subject,
+            body_sha256=hashlib.sha256(result.body.encode("utf-8")).hexdigest(),
+            draft_save_review=review_payload,
+            operation_key=review_payload["operation_key"],
+        )
     except Exception:
         return DraftWorkflowResult("REVIEW", reason="Outreach history reservation failed")
     if not reservation.created:

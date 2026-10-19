@@ -135,7 +135,7 @@ def test_verified_override_reclassification_is_0_ready_83_skip_245_hold_and_even
 
 
 class _FakeCursor:
-    def __init__(self, db, guards): self.db = db; self.guards = guards; self.result = None; self.rows = []; self.no_result = False
+    def __init__(self, db, guards, cases): self.db = db; self.guards = guards; self.cases = cases; self.result = None; self.rows = []; self.no_result = False
     def __enter__(self): return self
     def __exit__(self, *_): return False
     def execute(self, sql, params=()):
@@ -143,18 +143,26 @@ class _FakeCursor:
             self.guards.add(params[0])
             self.no_result = True
             self.result = None
+        elif "INSERT INTO outreach.sales_cases" in sql:
+            key, _external, clinic_id, clinic_uuid, campaign_id = params
+            self.cases[key] = (f"sales-case:{key}", clinic_id, clinic_uuid, campaign_id)
+            self.no_result = False
+            self.result = self.cases[key]
+        elif "FROM outreach.sales_cases WHERE operation_key" in sql:
+            self.no_result = False
+            self.result = self.cases.get(params[0])
         elif "INSERT INTO outreach.email_delivery_records" in sql:
             self.no_result = False
             key = params[2]
             existing = self.db.get(key)
-            draft_id, message_id = params[15] or "", params[16] or ""
+            draft_id, message_id = params[16] or "", params[17] or ""
             if existing is None:
                 existing = next((v for v in self.db.values()
                                  if (draft_id and v["gmail_draft_id"] == draft_id)
                                  or (message_id and v["gmail_message_id"] == message_id)), None)
             if existing is None:
-                existing = {"clinic_id": params[3], "status": params[12], "gmail_draft_id": draft_id,
-                            "gmail_message_id": message_id, "gmail_thread_id": params[17] or ""}
+                existing = {"clinic_id": params[4], "sales_case_id": params[3], "status": params[13], "gmail_draft_id": draft_id,
+                            "gmail_message_id": message_id, "gmail_thread_id": params[18] or ""}
                 self.db[key] = existing
                 self.result = (params[0],)
             else:
@@ -176,12 +184,12 @@ class _FakeCursor:
 
 
 class _FakeConnection:
-    def __init__(self): self.rows = {}; self.guards = set()
+    def __init__(self): self.rows = {}; self.guards = set(); self.cases = {}
     class _Transaction:
         def __enter__(self): return self
         def __exit__(self, *_): return False
     def transaction(self): return self._Transaction()
-    def cursor(self): return _FakeCursor(self.rows, self.guards)
+    def cursor(self): return _FakeCursor(self.rows, self.guards, self.cases)
 
 
 def test_repository_backfill_rerun_is_idempotent_and_uses_clinic_id_without_uuid():
@@ -197,6 +205,7 @@ def test_repository_backfill_rerun_is_idempotent_and_uses_clinic_id_without_uuid
     row = next(iter(repo._conn.rows.values()))
     assert row["clinic_id"] == 500 and row["gmail_message_id"] == "sent-msg-500"
     assert row["gmail_thread_id"] == "thread-500"
+    assert row["sales_case_id"].startswith("sales-case:")
 
 
 def test_repository_backfill_rejects_same_gmail_id_for_different_clinic_ids():

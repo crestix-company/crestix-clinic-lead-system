@@ -9,6 +9,8 @@ import streamlit as st
 
 from src.outreach.auto_draft_batch import MAX_AUTO_DRAFTS, plan_auto_drafts, run_approved_batch
 from src.outreach.gmail_workflow import create_gmail_draft, gmail_drafts_enabled
+from src.outreach.pre_send_review import DRAFT_SAVE_CHECKS, build_draft_save_review, configured_i3_reference
+from src.outreach.pre_send_ui import render_pre_send_review_gate
 from src.utils.date_utils import today_japan
 
 
@@ -54,6 +56,8 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
         "記事":r.target.article.status,
         "件名":r.subject,
         "本文":r.body,
+        "実掲載記事/類似記事URL": r.listed_url or r.example_url or (r.first.article.url if r.first else ""),
+        "医院詳細URL": r.target.article.clinic_profile_url,
     } for r in plan.eligible]), hide_index=True, use_container_width=True)
     st.caption("画面上の件名・本文・宛先を一括確認してください。内容の修正が必要な場合は先に生成し直してください。")
 
@@ -81,6 +85,38 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
         key=f"auto_draft_history_{key}",
         help="手動確認の宣言です。自動で過去の全Gmail履歴を検査したという意味ではありません。",
     )
+    reviewer = st.text_input("下書き保存確認担当者", key=f"auto_draft_reviewer_{key}")
+    gmail_states = st.session_state.get("outreach_gmail_states", {})
+    draft_reviews = {}
+    review_blockers = {}
+    with st.expander("医院別の下書き保存確認", expanded=True):
+        for idx, result in enumerate(plan.eligible):
+            clinic_id = result.target.clinic_id
+            gmail_state = gmail_states.get(clinic_id, "未照合")
+            st.markdown(f"**{result.target.clinic_name}｜Clinic {clinic_id}｜Gmail: {gmail_state}**")
+            checks = {
+                "clinic_identity": st.checkbox("医院名・院長名・宛先を確認", key=f"auto_identity_{key}_{idx}"),
+                "template_body": st.checkbox("正式本文を全文確認", key=f"auto_body_{key}_{idx}"),
+                "article_reference": st.checkbox("実掲載記事または類似記事を確認", key=f"auto_article_{key}_{idx}"),
+                "clinic_detail_page": st.checkbox("医院詳細ページを確認", key=f"auto_profile_{key}_{idx}"),
+                "duplicate_clear": st.checkbox("既存Gmail重複なしを確認", disabled=gmail_state != "CLEAR",
+                                                key=f"auto_duplicate_{key}_{idx}"),
+            }
+            if not history_verified or not delivery_ready or gmail_state != "CLEAR":
+                checks["duplicate_clear"] = False
+            payload, blockers = build_draft_save_review(
+                result=result, reviewer=reviewer, checks=checks,
+                operation_key=f"clinic:{clinic_id}:campaign:{campaign_id}", campaign_id=campaign_id,
+            )
+            draft_reviews[id(result)] = payload
+            review_blockers[id(result)] = blockers
+            if blockers:
+                st.caption("未完了: " + " / ".join(blockers))
+    i3_reference = configured_i3_reference()
+    if not i3_reference.configured:
+        st.info("I3正式定義が未確定のため送信前確認は未承認です。これはGmail下書き保存とは別のゲートです。Clinic Leadから送信・予約送信はできません。")
+    else:
+        st.caption(f"I3正式定義参照が設定されています（{i3_reference.definition_id}）。送信判断はGmailでISリーダーが行います。")
     phrase = f"CREATE_{len(plan.eligible)}_GMAIL_DRAFTS"
     typed = st.text_input(f"実行確認語：{phrase}", key=f"auto_draft_phrase_{key}")
     st.caption("処理途中で結果不明または照合エラーを検出すると以降の医院は自動停止します。失敗分を自動再作成しません。")
@@ -94,6 +130,7 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
         and bool(settings.staff.strip()) and all_confirmed and history_confirmed
         and typed == phrase and today_japan() == settings.as_of
         and not st.session_state.get(f"auto_draft_done_{key}")
+        and bool(reviewer.strip()) and all(not review_blockers[id(r)] for r in plan.eligible)
     )
     if st.button("確認済み医院の下書きを自動保存", key=f"auto_draft_execute_{key}",
                  type="primary", disabled=not can_save):
@@ -113,6 +150,7 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
                     staff_name=settings.staff,
                     gmail=gmail, repository=repository,
                     as_of=today_japan(), enabled=feature_enabled,
+                    draft_save_review=draft_reviews[id(result)],
                 )
                 # Each iteration runs the existing Gmail-state and ledger preflight.
                 return response
@@ -139,3 +177,11 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
             "状態":r.status, "Outreach ID":r.outreach_id, "Draft ID":r.gmail_draft_id,
             "理由":r.reason,
         } for r in audit.outcomes]), hide_index=True, use_container_width=True)
+        for idx, outcome in enumerate(audit.outcomes):
+            if idx < len(plan.eligible):
+                result = plan.eligible[idx]
+                with st.expander(f"送信前確認：{result.target.clinic_name}", expanded=False):
+                    render_pre_send_review_gate(
+                        result=result, outcome=outcome, campaign_id=campaign_id,
+                        key=f"auto_send_review_{key}_{idx}",
+                    )

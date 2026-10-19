@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import hashlib
+import json
 import os
 import uuid
 from typing import Any, Callable
@@ -35,8 +36,9 @@ class DraftReservation:
     gmail_draft_id: str = ""
 
 
-def _idempotency_key(clinic_id: int, campaign_id: str) -> str:
-    material = f"clinic-outreach-v1|{int(clinic_id)}|{campaign_id.strip()}".encode()
+def _idempotency_key(clinic_id: int, campaign_id: str, operation_key: str = "") -> str:
+    identity = operation_key.strip() or f"{int(clinic_id)}|{campaign_id.strip()}"
+    material = f"clinic-outreach-v2|{identity}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
@@ -58,6 +60,11 @@ def connect_outreach_database(*, environ=None, connect_fn: Callable[..., Any] | 
         conn = connect_fn(url, connect_timeout=5)
     try:
         with conn.cursor() as cur:
+            if str(env.get("CLINIC_READ_ONLY_UI", "")).strip().casefold() in {"1", "true", "yes", "on"}:
+                # The outreach connection is separate from the main SupabaseRuntimeStore.
+                # Apply the Web read-only boundary here too, before any repository query.
+                cur.execute("SET TRANSACTION READ ONLY")
+                cur.execute("SET default_transaction_read_only = on")
             cur.execute("SELECT current_user")
             original_user = str(cur.fetchone()[0] or "").casefold()
             if original_user != RUNTIME_ROLE:
@@ -151,11 +158,36 @@ class OutreachDeliveryRepository:
         from psycopg.rows import dict_row
         rows = self._select(
             f"SELECT outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,status,"
-            f"gmail_draft_id,gmail_message_id,gmail_thread_id,sent_at,scheduled_at,created_at,updated_at "
+            f"gmail_draft_id,gmail_message_id,gmail_thread_id,sent_at,scheduled_at,created_at,updated_at,"
+            f"clinic_name_snapshot,recipient_email,staff_name,last_error "
             f"FROM {TABLE} WHERE campaign_id=%s ORDER BY clinic_id,created_at",
             (campaign_id.strip(),), row_factory=dict_row,
         )
         return [dict(row) for row in rows]
+
+    def contact_event_counts(self, campaign_id: str) -> dict[str, int]:
+        """Aggregate existing open/click event ledger without exposing request metadata."""
+        if not campaign_id.strip():
+            return {}
+        rows = self._select(
+            "SELECT event_type,count(*) AS event_count FROM outreach.email_contact_events "
+            "WHERE campaign_id=%s GROUP BY event_type",
+            (campaign_id.strip(),),
+        )
+        return {str(event_type).upper(): int(count) for event_type, count in rows}
+
+    def clinic_contact_event_counts(self, campaign_id: str) -> dict[int, dict[str, int]]:
+        if not campaign_id.strip():
+            return {}
+        rows = self._select(
+            "SELECT clinic_id,event_type,count(*) AS event_count FROM outreach.email_contact_events "
+            "WHERE campaign_id=%s GROUP BY clinic_id,event_type",
+            (campaign_id.strip(),),
+        )
+        counts: dict[int, dict[str, int]] = {}
+        for clinic_id, event_type, count in rows:
+            counts.setdefault(int(clinic_id), {})[str(event_type).upper()] = int(count)
+        return counts
 
     def campaign_statuses(self, campaign_id: str) -> dict[int, str]:
         return {int(row["clinic_id"]): str(row["status"])
@@ -220,10 +252,19 @@ class OutreachDeliveryRepository:
                       operation_id: str, status: str = "REVIEW", listing_status: str = "UNCONFIRMED",
                       article_type: str = "UNKNOWN", example_article_url: str = "",
                       listing_article_url: str = "", clinic_profile_url: str = "",
-                      subject: str = "", body_sha256: str = "") -> DraftReservation:
+                      subject: str = "", body_sha256: str = "",
+                      draft_save_review: dict | None = None,
+                      operation_key: str = "") -> DraftReservation:
         if status != "REVIEW":
             raise ValueError("Draft reservation must begin in REVIEW state")
-        key = _idempotency_key(clinic_id, campaign_id)
+        if draft_save_review is not None and (
+            not isinstance(draft_save_review, dict)
+            or draft_save_review.get("stage") != "DRAFT_SAVE"
+            or not draft_save_review.get("reviewed_by")
+        ):
+            raise ValueError("A completed draft-save review is required")
+        operation_key = operation_key.strip() or f"clinic:{int(clinic_id)}:campaign:{campaign_id.strip()}"
+        key = _idempotency_key(clinic_id, campaign_id, operation_key)
         outreach_id = str(uuid.uuid4())
         with self._conn.transaction():
             with self._conn.cursor() as cur:
@@ -251,15 +292,35 @@ class OutreachDeliveryRepository:
                     return DraftReservation(str(existing[0]), str(existing[1]), key, False,
                                             str(existing[2]), str(existing[3] or ""))
                 cur.execute(
+                    """INSERT INTO outreach.sales_cases
+                    (operation_key,source_system,external_case_id,clinic_id,clinic_uuid,campaign_id,is_owner)
+                    VALUES (%s,'CLINIC_LEAD','',%s,%s,%s,%s)
+                    ON CONFLICT (operation_key) DO NOTHING
+                    RETURNING sales_case_id,clinic_id,clinic_uuid,campaign_id""",
+                    (operation_key, int(clinic_id), clinic_uuid, campaign_id, staff_name),
+                )
+                case_row = cur.fetchone()
+                if case_row is None:
+                    cur.execute(
+                        "SELECT sales_case_id,clinic_id,clinic_uuid,campaign_id FROM outreach.sales_cases WHERE operation_key=%s",
+                        (operation_key,),
+                    )
+                    case_row = cur.fetchone()
+                if case_row is None or (int(case_row[1]), str(case_row[2]), str(case_row[3])) != (
+                    int(clinic_id), clinic_uuid, campaign_id
+                ):
+                    raise OutreachDatabaseError("Sales case identity conflicts with the supplied operation key")
+                sales_case_id = str(case_row[0])
+                cur.execute(
                     f"""INSERT INTO {TABLE}
-                    (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,
+                    (outreach_id,operation_id,idempotency_key,sales_case_id,clinic_id,clinic_uuid,
                      clinic_name_snapshot,clinic_address_snapshot,recipient_email,sender_account,
                      staff_name,campaign_id,generation_batch_id,status,listing_status,article_type,
                      example_article_url,listing_article_url,clinic_profile_url,subject,body_sha256,last_error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    ON CONFLICT (clinic_id,campaign_id) DO NOTHING
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING outreach_id,operation_id,status,gmail_draft_id""",
-                    (outreach_id, operation_id, key, int(clinic_id), clinic_uuid, clinic_name,
+                    (outreach_id, operation_id, key, sales_case_id, int(clinic_id), clinic_uuid, clinic_name,
                      clinic_address, recipient_email, sender_account, staff_name, campaign_id,
                      generation_batch_id, status, listing_status, article_type, example_article_url,
                      listing_article_url, clinic_profile_url, subject, body_sha256,
@@ -267,11 +328,21 @@ class OutreachDeliveryRepository:
                 )
                 row = cur.fetchone()
                 created = row is not None
+                if created and draft_save_review:
+                    cur.execute(
+                        """INSERT INTO outreach.email_draft_save_reviews
+                        (outreach_id,sales_case_id,reviewed_by,reviewed_at,checklist,protocol)
+                        VALUES (%s,%s,%s,%s,%s::jsonb,%s)""",
+                        (str(row[0]), sales_case_id, draft_save_review["reviewed_by"],
+                         draft_save_review["reviewed_at"],
+                         json.dumps(draft_save_review["checks"], ensure_ascii=False, sort_keys=True),
+                         draft_save_review["protocol"]),
+                    )
                 if row is None:
                     cur.execute(
                         f"SELECT outreach_id,operation_id,status,gmail_draft_id FROM {TABLE} "
-                        "WHERE clinic_id=%s AND campaign_id=%s",
-                        (int(clinic_id), campaign_id),
+                        "WHERE idempotency_key=%s",
+                        (key,),
                     )
                     row = cur.fetchone()
                 if row is None:
@@ -298,6 +369,37 @@ class OutreachDeliveryRepository:
                 )
                 updated = cur.rowcount == 1
         return updated
+
+    def record_pre_send_review(self, *, outreach_id: str, review: dict) -> bool:
+        """Append an IS lead send-readiness attestation for an existing Gmail draft.
+
+        This records a review only. It does not send, schedule, or change Gmail state.
+        """
+        if (not isinstance(review, dict) or not review.get("reviewed_by")
+                or review.get("i3_definition_status") != "CONFIRMED"):
+            raise ValueError("A confirmed I3 send review is required")
+        reviewed_at = datetime.fromisoformat(str(review["reviewed_at"]))
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT sales_case_id,status,gmail_draft_id FROM {TABLE} "
+                    "WHERE outreach_id=%s FOR UPDATE",
+                    (outreach_id,),
+                )
+                row = cur.fetchone()
+                if (not row or str(row[1]) != "DRAFT" or not str(row[2] or "")):
+                    raise OutreachDatabaseError("Only a verified existing Gmail DRAFT can receive send review")
+                cur.execute(
+                    """INSERT INTO outreach.email_pre_send_reviews
+                    (outreach_id,sales_case_id,reviewed_by,reviewed_at,i3_definition_id,i3_definition_url,
+                     i3_definition_status,checklist,protocol)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)""",
+                    (outreach_id, str(row[0]), review["reviewed_by"], reviewed_at,
+                     review["i3_definition_id"], review["i3_definition_url"],
+                     review["i3_definition_status"],
+                     json.dumps(review["checks"], ensure_ascii=False, sort_keys=True), review["protocol"]),
+                )
+        return True
 
     def sync_status(self, *, outreach_id: str, status: str, gmail_draft_id: str = "",
                     gmail_message_id: str = "", gmail_thread_id: str = "",
@@ -344,6 +446,7 @@ class OutreachDeliveryRepository:
         outreach_id = stable_operation_id
         batch_id = str(uuid_module.uuid5(uuid_module.NAMESPACE_URL, "batch|" + key))
         campaign_id = f"gmail-history:{gmail_kind}:{hashlib.sha256(gmail_id.encode()).hexdigest()[:24]}"
+        sales_case_key = f"gmail-history-case-v1|{int(clinic_id)}|{gmail_kind}|{gmail_id.strip()}"
         with self._conn.transaction():
             with self._conn.cursor() as cur:
                 cur.execute(
@@ -352,20 +455,42 @@ class OutreachDeliveryRepository:
                     VALUES (%s,%s,%s) ON CONFLICT (clinic_id) DO NOTHING""",
                     (int(clinic_id), campaign_id, outreach_id),
                 )
+                cur.execute(
+                    """INSERT INTO outreach.sales_cases
+                    (operation_key,source_system,external_case_id,clinic_id,clinic_uuid,campaign_id,is_owner)
+                    VALUES (%s,'GMAIL_BACKFILL',%s,%s,%s,%s,'Gmail history backfill')
+                    ON CONFLICT (operation_key) DO NOTHING
+                    RETURNING sales_case_id,clinic_id,clinic_uuid,campaign_id""",
+                    (sales_case_key, "", int(clinic_id),
+                     clinic_uuid or "", campaign_id),
+                )
+                case_row = cur.fetchone()
+                if case_row is None:
+                    cur.execute(
+                        "SELECT sales_case_id,clinic_id,clinic_uuid,campaign_id "
+                        "FROM outreach.sales_cases WHERE operation_key=%s",
+                        (sales_case_key,),
+                    )
+                    case_row = cur.fetchone()
+                if case_row is None or (int(case_row[1]), str(case_row[2]), str(case_row[3])) != (
+                    int(clinic_id), clinic_uuid or "", campaign_id
+                ):
+                    raise OutreachDatabaseError("Gmail backfill sales-case identity collision requires HOLD")
+                sales_case_id = str(case_row[0])
                 # No RETURNING clause: INSERT may affect zero rows when a guard
                 # already exists for this Clinic ID. The unique Clinic ID key
                 # intentionally reuses that guard across campaigns; never read
                 # a result row or weaken the guard on conflict.
                 cur.execute(
                     f"""INSERT INTO {TABLE}
-                    (outreach_id,operation_id,idempotency_key,clinic_id,clinic_uuid,
+                    (outreach_id,operation_id,idempotency_key,sales_case_id,clinic_id,clinic_uuid,
                      clinic_name_snapshot,clinic_address_snapshot,recipient_email,sender_account,
                      staff_name,campaign_id,generation_batch_id,status,listing_status,article_type,
                      subject,body_sha256,gmail_draft_id,gmail_message_id,gmail_thread_id,last_error)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'UNCONFIRMED','UNKNOWN',
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'UNCONFIRMED','UNKNOWN',
                      %s,%s,%s,%s,%s,'READ-ONLY source verified by operator')
                     ON CONFLICT DO NOTHING RETURNING outreach_id""",
-                    (outreach_id, operation_id, idem, int(clinic_id), clinic_uuid or None,
+                    (outreach_id, operation_id, idem, sales_case_id, int(clinic_id), clinic_uuid or None,
                      clinic_name, clinic_address or "", recipient_email or "", sender_account,
                      "Gmail history backfill", campaign_id, batch_id, status,
                      f"Historical Gmail {gmail_kind}", hashlib.sha256(key.encode()).hexdigest(),
