@@ -11,18 +11,23 @@ CLOUD_RUN_PROJECT/CLOUD_RUN_REGION/CLOUD_RUN_HP_WORKER_JOB_NAME are all set AND
 a human has separately deployed the Cloud Run Job (see
 docs/cloud_run_on_demand_hp_implementation_plan.md, PR B/D). Importing or unit
 testing this module never creates, calls, or bills any GCP resource: the
-Google API client is constructed lazily, only inside default_execute_fn()'s
-returned closure, never at import time or by any other function here.
+Google API client is constructed lazily, only inside default_execute_fn()'s/
+default_get_operation_fn()'s returned closures, never at import time or by any
+other function here.
 
-Known open design question (not resolved by this module): which Supabase DB
-role performs job creation/pause/resume when CLINIC_HP_EXECUTOR=cloud_run --
-a dedicated least-privilege job-control role, or delegating job creation to
-the Worker itself -- is explicitly left unresolved in the implementation plan
-(PR B, "重要" paragraph) and requires a human decision plus (if a new role is
-chosen) out-of-band Postgres role provisioning that this codebase does not
-perform. This module reuses the existing CLINIC_WRITE_BACKEND/
-SUPABASE_RUNTIME_DB_URL write path unchanged; it does not create, grant, or
-assume any new role.
+What this module now enforces beyond a single API call (review follow-up on
+PR #106):
+- Job control (create/pause/resume) is routed through
+  src.cloud_run.job_control's dedicated connection, kept separate from the
+  general CLINIC_WRITE_BACKEND write path (see job_control.py for why).
+- Every dispatch outcome is persisted via src.cloud_run.dispatch_state, and a
+  new dispatch is refused outright (BLOCKED_PENDING_RECONCILE, no API call
+  made) while a previous DISPATCH_UNKNOWN for the same job id has not been
+  reconciled -- this survives a Cloud Run Web container restart (min
+  instances = 0), unlike Streamlit session_state.
+- Monthly execution/clinic-count budgets (src.cloud_run.usage_budget) are
+  checked before every dispatch and before a new HP job is even created, so a
+  budget refusal never leaves an orphaned, undispatchable job row behind.
 """
 from __future__ import annotations
 
@@ -43,6 +48,11 @@ JOB_NAME_ENV_VAR = "CLOUD_RUN_HP_WORKER_JOB_NAME"
 # まで自動調査" mode stays local-only (see allow_unlimited_auto_run below).
 CLOUD_RUN_MAX_SINGLE_JOB_COUNT = 50
 LOCAL_MAX_SINGLE_JOB_COUNT = 500
+
+# Dispatch outcomes decided entirely at this layer (never returned by
+# src.cloud_run.job_dispatch itself, which only knows about one API call).
+BLOCKED_PENDING_RECONCILE = "BLOCKED_PENDING_RECONCILE"
+BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 
 
 class CloudRunNotConfiguredError(RuntimeError):
@@ -108,16 +118,102 @@ def default_execute_fn(env=None):
     return execute_fn
 
 
-def dispatch_hp_job(job_id, *, env=None, execute_fn=None):
+def default_get_operation_fn(env=None):
+    """Build the real, Google-authenticated long-running Operations `get`
+    caller, used only for reconcile_hp_job_dispatch() -- never to start a new
+    Execution. Lazily constructed for the same reason as default_execute_fn()."""
+    def get_operation_fn(operation_name):
+        from googleapiclient.discovery import build
+        import google.auth
+
+        credentials, _ = google.auth.default()
+        client = build("run", "v2", credentials=credentials, cache_discovery=False)
+        return client.operations().get(name=operation_name).execute()
+
+    return get_operation_fn
+
+
+def _default_job_control_conn(env=None):
+    from src.cloud_run.job_control import job_control_write_repositories
+
+    repositories = job_control_write_repositories(env)
+    return repositories.jobs._conn
+
+
+def precheck_budget(requested_clinic_count, *, env=None, job_control_conn=None):
+    """Read-only budget check, meant to run BEFORE a new HP research job row
+    is even created -- a budget refusal must never leave an orphaned,
+    undispatchable job behind. Returns (allowed, reason)."""
+    from src.cloud_run.usage_budget import check_budget
+
+    conn = job_control_conn or _default_job_control_conn(env)
+    return check_budget(conn, requested_clinic_count, env=env)
+
+
+def dispatch_hp_job(job_id, *, clinic_count=0, env=None, execute_fn=None, job_control_conn=None):
     """Start exactly one Execution for an already-created HP research job id.
 
     `job_id` must already exist as a research_jobs row (created the same way
     the local "指定件数だけ調査"/再開 path already creates/owns it) -- this
     function only ever overrides HP_WORKER_JOB_ID, never anything else.
-    """
-    from src.cloud_run.job_dispatch import run_hp_worker_job
 
+    `clinic_count` is the number of *new* clinics this dispatch call commits
+    to the monthly budget: pass the job's size when first dispatching a freshly
+    created job, and 0 when merely resuming an already-budgeted job (resuming
+    does not add new clinics, only a new Execution attempt).
+
+    Every call persists its outcome via src.cloud_run.dispatch_state,
+    regardless of whether the Jobs API was reached at all -- BLOCKED_PENDING_
+    RECONCILE and BUDGET_EXCEEDED are both final, visible outcomes callers
+    must not silently retry.
+    """
+    from src.cloud_run.dispatch_state import may_dispatch, record_dispatch_state
+    from src.cloud_run.job_dispatch import DispatchResult, run_hp_worker_job
+    from src.cloud_run.usage_budget import check_budget, record_dispatch_usage
+
+    # Cheap, I/O-free config validation first: an unconfigured deployment must
+    # fail with a clear config error before this ever opens a DB connection.
     resource_name = job_resource_name(env)
+
+    conn = job_control_conn or _default_job_control_conn(env)
+
+    if not may_dispatch(conn, job_id):
+        return DispatchResult(status=BLOCKED_PENDING_RECONCILE, detail=(
+            "前回の起動結果が未確認（DISPATCH_UNKNOWN）のまま残っています。"
+            "照合（reconcile_hp_job_dispatch）を先に行ってください。再発行は行いません。"
+        ))
+
+    allowed, reason = check_budget(conn, clinic_count, env=env)
+    if not allowed:
+        return DispatchResult(status=BUDGET_EXCEEDED, detail=reason)
+
     if execute_fn is None:
         execute_fn = default_execute_fn(env)
-    return run_hp_worker_job(execute_fn=execute_fn, job_resource_name=resource_name, clinic_job_id=job_id)
+    result = run_hp_worker_job(execute_fn=execute_fn, job_resource_name=resource_name, clinic_job_id=job_id)
+
+    record_dispatch_state(
+        conn, job_id, status=result.status,
+        operation_name=result.operation_name, execution_name=result.execution_name, detail=result.detail,
+    )
+    if result.status == "DISPATCHED":
+        record_dispatch_usage(conn, clinic_count)
+    return result
+
+
+def reconcile_hp_job_dispatch(job_id, *, env=None, get_operation_fn=None, job_control_conn=None):
+    """Resolve a previously-DISPATCH_UNKNOWN outcome by polling its Operation.
+    Never starts a new Execution. No-op if nothing is pending for this job id."""
+    from src.cloud_run.dispatch_state import reconcile_pending_dispatch
+
+    conn = job_control_conn or _default_job_control_conn(env)
+    if get_operation_fn is None:
+        get_operation_fn = default_get_operation_fn(env)
+    return reconcile_pending_dispatch(conn, job_id, get_operation_fn=get_operation_fn)
+
+
+def get_dispatch_state(job_id, *, env=None, job_control_conn=None):
+    """Read-only lookup of the last recorded dispatch outcome, for UI display."""
+    from src.cloud_run.dispatch_state import get_dispatch_state as _get_dispatch_state
+
+    conn = job_control_conn or _default_job_control_conn(env)
+    return _get_dispatch_state(conn, job_id)

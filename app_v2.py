@@ -381,18 +381,37 @@ def auto_hp_runner_for(path):
     return AutoHpRunner()
 
 
-def _dispatch_cloud_hp_job(jid):
+def _create_cloud_hp_job(prefecture, limit, force=False, medical_types=None):
+    """CLINIC_HP_EXECUTOR=cloud_run専用：HP Job制御専用のDB資格情報でJobを作る。
+
+    Webの一般WRITE経路（write_repositories_for/CLINIC_WRITE_BACKEND、Comdesk取込・
+    age model更新等が使う）とは別の接続（src.cloud_run.job_control、
+    SUPABASE_JOB_CONTROL_DB_URL未設定時はSUPABASE_RUNTIME_DB_URLへフォールバック）を使う。
+    """
+    from src.cloud_run.job_control import job_control_write_repositories
+    return job_control_write_repositories().auto_hp.create_single_job(prefecture, medical_types, force, limit)
+
+
+def _pause_cloud_hp_job(jid):
+    """CLINIC_HP_EXECUTOR=cloud_run専用：Job制御専用のDB資格情報でpauseする。"""
+    from src.cloud_run.job_control import job_control_write_repositories
+    job_control_write_repositories().jobs.pause_job(jid)
+
+
+def _dispatch_cloud_hp_job(jid, clinic_count=0):
     """CLINIC_HP_EXECUTOR=cloud_run専用：既存Job IDに対してCloud Run Executionを1つ起動する。
 
-    結果（成功／起動結果不明／拒否）はsession_stateに保存し、次のrerunで
-    Step5セクションの先頭に表示する。DISPATCH_UNKNOWNの場合は絶対に自動再試行しない
-    （Cloud Run Executionsコンソールでの照合を人間に促す）。
+    結果（成功／起動結果不明／予算超過／ブロック／拒否）はsession_stateに保存し、
+    次のrerunでStep5セクションの先頭に表示する。DISPATCH_UNKNOWNの場合は絶対に
+    自動再試行しない（照合＝reconcile_hp_job_dispatchを人間に促す）。
     """
-    from src.cloud_run.hp_executor import dispatch_hp_job, CloudRunNotConfiguredError
+    from src.cloud_run.hp_executor import (
+        BLOCKED_PENDING_RECONCILE, BUDGET_EXCEEDED, CloudRunNotConfiguredError, dispatch_hp_job,
+    )
     from src.cloud_run.job_dispatch import DISPATCHED, DISPATCH_UNKNOWN
 
     try:
-        result = dispatch_hp_job(jid)
+        result = dispatch_hp_job(jid, clinic_count=clinic_count)
     except CloudRunNotConfiguredError as exc:
         st.session_state["cloud_hp_dispatch_message"] = ("error", str(exc))
         return
@@ -403,12 +422,45 @@ def _dispatch_cloud_hp_job(jid):
     elif result.status == DISPATCH_UNKNOWN:
         st.session_state["cloud_hp_dispatch_message"] = (
             "warning",
-            "Cloud Run Jobの起動結果が不明です。Cloud Run ExecutionsコンソールでJobの状態を確認し、"
-            "実行中であることを確認してから次の操作をしてください。自動的な再実行は行いません。",
+            "Cloud Run Jobの起動結果が不明です。下の「起動結果を照合」を実行して確認してください。"
+            "自動的な再実行は行いません。",
         )
+    elif result.status == BLOCKED_PENDING_RECONCILE:
+        st.session_state["cloud_hp_dispatch_message"] = ("warning", result.detail)
+    elif result.status == BUDGET_EXCEEDED:
+        st.session_state["cloud_hp_dispatch_message"] = ("error", result.detail)
     else:
         st.session_state["cloud_hp_dispatch_message"] = (
             "error", "Cloud Run Jobの起動が拒否されました。設定を確認してください。"
+        )
+
+
+def _reconcile_cloud_hp_job(jid):
+    """CLINIC_HP_EXECUTOR=cloud_run専用：DISPATCH_UNKNOWNのOperationを照合する。
+
+    新しいExecutionは絶対に起動しない。結果はsession_stateに保存して表示する。
+    """
+    from src.cloud_run.dispatch_state import STATUS_CONFIRMED_RUNNING, STATUS_SAFE_TO_RETRY
+    from src.cloud_run.hp_executor import CloudRunNotConfiguredError, reconcile_hp_job_dispatch
+
+    try:
+        state = reconcile_hp_job_dispatch(jid)
+    except CloudRunNotConfiguredError as exc:
+        st.session_state["cloud_hp_dispatch_message"] = ("error", str(exc))
+        return
+    if state is None:
+        st.session_state["cloud_hp_dispatch_message"] = ("info", "照合対象の未確認Executionはありません。")
+    elif state.get("status") == STATUS_CONFIRMED_RUNNING:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "success", "Executionは実行中であることを確認しました。再発行は不要です。"
+        )
+    elif state.get("status") == STATUS_SAFE_TO_RETRY:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "success", "ExecutionはOperationレベルで失敗していたことを確認しました。再発行できます。"
+        )
+    else:
+        st.session_state["cloud_hp_dispatch_message"] = (
+            "warning", "まだ起動結果を確認できません。しばらくしてから再度照合してください。"
         )
 
 
@@ -1023,11 +1075,20 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0,
             key="simple_start", use_container_width=True,
         ):
-            jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
-            st.session_state["active_job"] = jid
             if cloud_run_executor:
-                _dispatch_cloud_hp_job(jid)
+                from src.cloud_run.hp_executor import precheck_budget
+                # Budget is checked BEFORE a job row exists: a refusal must never
+                # leave an orphaned, undispatchable research_jobs row behind.
+                allowed, reason = precheck_budget(actual)
+                if not allowed:
+                    st.session_state["cloud_hp_dispatch_message"] = ("error", reason)
+                else:
+                    jid = _create_cloud_hp_job(pref, int(count), force, research_medical_types)
+                    st.session_state["active_job"] = jid
+                    _dispatch_cloud_hp_job(jid, clinic_count=actual)
             else:
+                jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
+                st.session_state["active_job"] = jid
                 runner.start(store, jid, TavilySearchProvider(""))
             st.rerun()
     else:
@@ -1091,7 +1152,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
         can_pause = not write_disabled and (runner.running() or current["status"] == "RUNNING")
         if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
-            write_repositories_for(store).jobs.pause_job(current["id"])
+            if cloud_run_executor:
+                _pause_cloud_hp_job(current["id"])
+            else:
+                write_repositories_for(store).jobs.pause_job(current["id"])
             st.rerun()
 
         can_resume = (
@@ -1103,10 +1167,26 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         if controls[1].button("この調査を再開", disabled=not can_resume, key="simple_resume", use_container_width=True):
             st.session_state["active_job"] = current["id"]
             if cloud_run_executor:
-                _dispatch_cloud_hp_job(current["id"])
+                # Resuming does not add new clinics to the monthly budget -- only a
+                # fresh Execution attempt, which dispatch_hp_job's own
+                # may_dispatch()/check_budget() guards still gate.
+                _dispatch_cloud_hp_job(current["id"], clinic_count=0)
             else:
                 runner.start(store, current["id"], TavilySearchProvider(""))
             st.rerun()
+
+        if cloud_run_executor:
+            from src.cloud_run.hp_executor import get_dispatch_state
+            from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN
+            try:
+                dispatch_state = get_dispatch_state(current["id"])
+            except Exception:
+                dispatch_state = None
+            if dispatch_state and dispatch_state.get("status") == STATUS_DISPATCH_UNKNOWN:
+                st.warning("このJobは前回の起動結果が未確認です。再開の前に照合してください。")
+                if st.button("起動結果を照合", key="simple_reconcile_dispatch", use_container_width=True):
+                    _reconcile_cloud_hp_job(current["id"])
+                    st.rerun()
 
         can_reset = not write_disabled and not runner.running() and current["status"] != "RUNNING"
         if controls[2].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
@@ -1582,7 +1662,11 @@ def main():
             _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
     try:
         store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
-        if not read_only:
+        if not read_only and not is_cloud_run_executor():
+            # refresh_age_model() is a general write unrelated to HP Job control.
+            # CLINIC_HP_EXECUTOR=cloud_run is meant to run with a least-privilege
+            # job-control-only DB role (see src.cloud_run.job_control); it must
+            # never also need this broader write capability on every page load.
             write_repositories_for(store).clinics.refresh_age_model()
     except Exception as exc:
         if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):

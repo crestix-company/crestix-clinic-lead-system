@@ -94,7 +94,8 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple = source[simple_start:simple_end]
 
     assert "nav_options = NAV[:2] if read_only else NAV" in main
-    assert "if not read_only:\n            write_repositories_for(store).clinics.refresh_age_model()" in main
+    assert "if not read_only and not is_cloud_run_executor():" in main
+    assert "write_repositories_for(store).clinics.refresh_age_model()" in main
     assert "if not read_only and auto_state.get" in simple
     assert "write_disabled = demo or read_only" in simple
     assert "READ ONLY画面確認中" in simple

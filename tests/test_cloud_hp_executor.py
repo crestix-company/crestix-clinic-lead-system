@@ -5,6 +5,7 @@
 import pytest
 
 from src.cloud_run import hp_executor
+from tests.test_cloud_run_job_control import FakeSettingsConnection
 
 
 def test_default_mode_is_local_when_unset():
@@ -51,24 +52,191 @@ def test_job_resource_name_builds_expected_path():
     )
 
 
+CLOUD_RUN_ENV = {
+    "CLOUD_RUN_PROJECT": "my-project",
+    "CLOUD_RUN_REGION": "asia-northeast1",
+    "CLOUD_RUN_HP_WORKER_JOB_NAME": "clinic-lead-hp-worker",
+}
+JOB_ID = "0123456789abcdef0123456789abcdef"
+
+
 def test_dispatch_hp_job_uses_injected_execute_fn_and_never_touches_google_auth():
-    env = {
-        "CLOUD_RUN_PROJECT": "my-project",
-        "CLOUD_RUN_REGION": "asia-northeast1",
-        "CLOUD_RUN_HP_WORKER_JOB_NAME": "clinic-lead-hp-worker",
-    }
     captured = {}
 
     def fake_execute(request):
         captured["request"] = request
-        return {"metadata": {"name": "op/1"}}
+        return {"name": "op/1", "metadata": {"name": "exec/1"}}
 
-    job_id = "0123456789abcdef0123456789abcdef"
-    result = hp_executor.dispatch_hp_job(job_id, env=env, execute_fn=fake_execute)
+    conn = FakeSettingsConnection()
+    result = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=fake_execute, job_control_conn=conn,
+    )
     assert result.status == "DISPATCHED"
     assert captured["request"]["name"] == (
         "projects/my-project/locations/asia-northeast1/jobs/clinic-lead-hp-worker"
     )
+
+
+def test_dispatch_hp_job_persists_outcome_and_records_usage_only_on_dispatched():
+    from src.cloud_run.dispatch_state import STATUS_DISPATCHED, get_dispatch_state
+    from src.cloud_run.usage_budget import read_usage
+
+    conn = FakeSettingsConnection()
+    hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV,
+        execute_fn=lambda request: {"name": "op/1", "metadata": {"name": "exec/1"}},
+        job_control_conn=conn,
+    )
+    state = get_dispatch_state(conn, JOB_ID)
+    assert state["status"] == STATUS_DISPATCHED
+    assert read_usage(conn) == {"executions": 1, "clinics": 25}
+
+
+def test_dispatch_hp_job_is_blocked_while_a_prior_unknown_is_unreconciled():
+    from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN, record_dispatch_state
+    from src.cloud_run.usage_budget import read_usage
+
+    conn = FakeSettingsConnection()
+    record_dispatch_state(conn, JOB_ID, status=STATUS_DISPATCH_UNKNOWN, operation_name="op/stale")
+
+    def must_not_be_called(request):
+        raise AssertionError("the Jobs API must never be called while BLOCKED_PENDING_RECONCILE")
+
+    result = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=must_not_be_called, job_control_conn=conn,
+    )
+    assert result.status == hp_executor.BLOCKED_PENDING_RECONCILE
+    assert read_usage(conn) == {"executions": 0, "clinics": 0}
+
+
+def test_dispatch_hp_job_is_refused_once_monthly_budget_is_exhausted():
+    from src.cloud_run.usage_budget import record_dispatch_usage
+
+    conn = FakeSettingsConnection()
+    env = dict(CLOUD_RUN_ENV, CLOUD_RUN_MAX_MONTHLY_EXECUTIONS="1")
+    record_dispatch_usage(conn, 10)
+
+    def must_not_be_called(request):
+        raise AssertionError("the Jobs API must never be called once the monthly budget is exhausted")
+
+    result = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=5, env=env, execute_fn=must_not_be_called, job_control_conn=conn,
+    )
+    assert result.status == hp_executor.BUDGET_EXCEEDED
+
+
+def test_precheck_budget_runs_before_any_job_row_would_be_created():
+    from src.cloud_run.usage_budget import record_dispatch_usage
+
+    conn = FakeSettingsConnection()
+    env = {"CLOUD_RUN_MAX_MONTHLY_CLINICS": "30"}
+    record_dispatch_usage(conn, 20)
+    allowed, reason = hp_executor.precheck_budget(20, env=env, job_control_conn=conn)
+    assert allowed is False
+    assert reason != ""
+
+
+def test_reconcile_hp_job_dispatch_resolves_unknown_to_confirmed_running():
+    from src.cloud_run.dispatch_state import STATUS_CONFIRMED_RUNNING, STATUS_DISPATCH_UNKNOWN, record_dispatch_state
+
+    conn = FakeSettingsConnection()
+    record_dispatch_state(conn, JOB_ID, status=STATUS_DISPATCH_UNKNOWN, operation_name="op/1")
+    resolved = hp_executor.reconcile_hp_job_dispatch(
+        JOB_ID, get_operation_fn=lambda name: {"name": name, "done": False}, job_control_conn=conn,
+    )
+    assert resolved["status"] == STATUS_CONFIRMED_RUNNING
+
+
+def test_get_dispatch_state_wrapper_reads_the_persisted_outcome():
+    conn = FakeSettingsConnection()
+    hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV,
+        execute_fn=lambda request: {"name": "op/1", "metadata": {"name": "exec/1"}},
+        job_control_conn=conn,
+    )
+    state = hp_executor.get_dispatch_state(JOB_ID, job_control_conn=conn)
+    assert state["status"] == "DISPATCHED"
+
+
+def test_dispatch_is_fire_and_forget_not_tied_to_the_calling_request():
+    """A Cloud Run Job Execution must keep running after the triggering HTTP
+    request/browser session ends -- dispatch_hp_job must not block waiting for
+    the Execution, only for the single `run` API call to return."""
+    import time
+
+    conn = FakeSettingsConnection()
+    call_count = {"n": 0}
+
+    def fake_execute(request):
+        call_count["n"] += 1
+        return {"name": "op/1", "metadata": {"name": "exec/1"}}
+
+    start = time.monotonic()
+    hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=fake_execute, job_control_conn=conn,
+    )
+    elapsed = time.monotonic() - start
+    assert call_count["n"] == 1
+    assert elapsed < 1.0  # no polling/sleep loop waiting for the Execution itself
+
+
+def test_full_unknown_then_reconcile_then_retry_scenario():
+    """End-to-end scenario covering PR review item 4: a dispatch that comes
+    back DISPATCH_UNKNOWN must block any further dispatch for the same job id
+    until reconciled, and only then (once reconciled as failed) allow a fresh
+    dispatch -- at no point does a second Execution get started while the
+    first is unresolved.
+
+    Seeds the "unknown, with an Operation name" state directly via
+    record_dispatch_state(), since that is the realistic reconcilable case
+    (an ambiguous error after the Operation was created). A pure connection
+    timeout with zero response received carries no Operation name at all and
+    is a known, documented limit of operation-based reconciliation -- see
+    job_dispatch.reconcile_operation's docstring; recovering that case would
+    need a different strategy (listing Executions for the Job, not polling
+    one Operation) and is not implemented here.
+    """
+    from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN, STATUS_SAFE_TO_RETRY, record_dispatch_state
+
+    conn = FakeSettingsConnection()
+    calls = []
+
+    record_dispatch_state(
+        conn, JOB_ID, status=STATUS_DISPATCH_UNKNOWN,
+        operation_name="projects/p/locations/r/operations/op-ambiguous",
+    )
+
+    def must_not_be_called(request):
+        raise AssertionError("retry attempted before reconciliation")
+
+    blocked = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=must_not_be_called, job_control_conn=conn,
+    )
+    assert blocked.status == hp_executor.BLOCKED_PENDING_RECONCILE
+    assert calls == []
+
+    resolved = hp_executor.reconcile_hp_job_dispatch(
+        JOB_ID, get_operation_fn=lambda name: {"name": name, "done": True, "error": {"code": 13}},
+        job_control_conn=conn,
+    )
+    assert resolved["status"] == STATUS_SAFE_TO_RETRY
+
+    def second_attempt_succeeds(request):
+        calls.append("retry")
+        return {"name": "op/2", "metadata": {"name": "exec/2"}}
+
+    retried = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=second_attempt_succeeds, job_control_conn=conn,
+    )
+    assert retried.status == "DISPATCHED"
+    assert calls == ["retry"]
+
+
+def test_reconcile_hp_job_dispatch_never_starts_a_new_execution():
+    """reconcile_hp_job_dispatch takes get_operation_fn, never execute_fn --
+    there is no code path here that can call jobs().run()."""
+    import inspect
+    assert "execute_fn" not in inspect.signature(hp_executor.reconcile_hp_job_dispatch).parameters
 
 
 def test_dispatch_hp_job_without_execute_fn_requires_cloud_run_config_first():

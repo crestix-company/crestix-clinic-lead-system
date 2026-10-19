@@ -146,6 +146,14 @@ def reconcile_operation(*, get_operation_fn, operation_name):
       confirmed (no operation_name to check, the lookup raised, or the
       response was unusable) -- do not retry; this needs a human/Console
       check, exactly like the original DISPATCH_UNKNOWN.
+
+    Known limitation: this can only reconcile a DISPATCH_UNKNOWN that actually
+    captured an operation_name. A pure connection-level timeout where no HTTP
+    response was ever received carries no operation_name at all and will
+    always resolve to RECONCILE_STILL_UNKNOWN here -- there is nothing to
+    poll. Recovering that specific case would require a different strategy
+    (listing Executions for the Job and matching by time window/labels, via
+    `executions().list()`), which is not implemented in this module.
     """
     if not operation_name:
         return RECONCILE_STILL_UNKNOWN
