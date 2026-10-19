@@ -103,30 +103,21 @@ IAP-authorized internal users. This approves the data-use specification only; it
 authorize database privilege application or deployment. Sending, delivery history and Email KPI
 remain out of scope.
 
-### PR #120 integration delta (2026-10-19)
+### PR #119/#120 integrated verification (2026-10-19)
 
-PR #120 head `9eacb826107bbeebcb455764eadd5ee473649c61` was compared with PR #119 head
-`fef6b9f430b19e34dde2b41c97329ab333302ee1`. The integrated code does **not** preserve the
-seven-table READ ONLY boundary described above. It removes the READ ONLY-specific query/export
-methods and routes the screens through shared methods again:
+A担当 reports completing a temporary integration verification at commit
+`a7d581025afaa37ce807748cc5aee3b55b94f444`. According to that verification, the PR #119
+READ ONLY-specific query/count/export paths, Gmail draft save guards, and READ ONLY export tests
+are retained; captured SQL stays within the seven-table allowlist and does not reference audit,
+history, Email KPI, HP Job, or Step 6 tables. The focused suite passed 24 tests and full pytest
+passed 2201 tests with 55 skipped.
 
-- `simple_workflow_ui()` calls `store.metrics()`, whose SQL reads `provenance.match_reviews` and
-  `provenance.source_records`; it also calls `show_email_research_metrics()`.
-- The shared listing calls `email_repositories_for_ui().email_research.status_for_ids()`, which
-  reads `email_research.clinic_email_status` on the separate Email DB connection when configured.
-- The listing exposes a detail action; `details()` can read `provenance.change_history`.
-- `simple_sales_ui()` calls `store.revision()`, reading `provenance.change_history`, and uses
-  the shared exporter instead of the revision-free READ ONLY exporter.
-- The `sales_pairs` filter translation again contains `research.research_results`; if that
-  filter reaches either initial screen, it is outside the seven-table allowlist.
-- PR #120 deletes the READ ONLY export regression test file that asserted the excluded-table
-  boundary.
-
-These findings are not a reason to expand the database grants. The seven-table proposal remains
-the approved least-privilege target. **PR #119/#120 integration is not aligned with that target**;
-C should restore READ ONLY-specific bypasses or suppress those UI reads before any database
-grant is applied. Do not grant audit/history, Email KPI/status, or `research.*` objects to make
-the current code pass.
+This supersedes the earlier assessment that the PR #119/#120 integration removed those
+protections. The seven-table permissions proposal above remains unchanged. These are application
+integration test results only: they do not validate live RLS visibility, the production role's
+effective grants, nationwide row counts, Session Pooler authentication, or Cloud Run's deployed
+database target. Production DB readiness therefore remains subject to the live-connection and
+catalog blockers below.
 
 ## Out of scope
 
