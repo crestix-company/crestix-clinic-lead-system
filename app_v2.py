@@ -604,11 +604,11 @@ def _email_status_label(email_status):
     return "未調査"
 
 
-def display_rows(records):
+def display_rows(records, *, include_email_status=True):
     rows = []
     for r in records:
         prob = r.get("age_probability_under_59")
-        rows.append({"管理番号":r["id"],"UUID":r.get("uuid",""),"医院名":r.get("clinic_name",""),"電話番号":r.get("phone",""),
+        row = {"管理番号":r["id"],"UUID":r.get("uuid",""),"医院名":r.get("clinic_name",""),"電話番号":r.get("phone",""),
             "住所":r.get("address",""),"医科/歯科":r.get("medical_type",""),"診療科":r.get("departments",""),
             "開設者":r.get("owner_name",""),"管理者":r.get("manager_name",""),
             "開設者＝管理者":"不明" if r.get("owner_manager_equal") is None else "一致" if r["owner_manager_equal"] else "不一致",
@@ -623,8 +623,10 @@ def display_rows(records):
             "治療カテゴリ":" / ".join(r.get("website_treatment_categories") or r.get("treatment_categories",[])),
             "治療カテゴリ状態":TREATMENT_STATUS_DISPLAY_LABELS.get(r.get("treatment_status"),"不明"),
             "集客投資シグナル数":r.get("marketing_signal_count",0),
-            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[])),
-            "Email Status":_email_status_label(r.get("email_status"))})
+            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))}
+        if include_email_status:
+            row["Email Status"] = _email_status_label(r.get("email_status"))
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -713,29 +715,34 @@ def manual_form(store,r):
         st.rerun()
 
 
-def listing(store,filters,prefix="list"):
-    count = store.count(filters)
+def listing(store,filters,prefix="list", *, read_only=False):
+    count = (store.count_read_only_ui(filters)
+             if read_only and hasattr(store, "count_read_only_ui") else store.count(filters))
     st.write(f"対象：{count:,}件")
     size = st.selectbox("1ページの表示件数",[25,50,100,200],index=1,key=prefix+"_size")
     pages = max(1,(count+size-1)//size)
     if st.session_state.get(prefix+"_page",1)>pages:
         st.session_state[prefix+"_page"] = 1
     number = st.number_input("ページ",1,pages,1,key=prefix+"_page")
-    records = store.query(filters,limit=size,offset=(number-1)*size)
+    records = (store.query_read_only_ui(filters,limit=size,offset=(number-1)*size)
+               if read_only and hasattr(store, "query_read_only_ui")
+               else store.query(filters,limit=size,offset=(number-1)*size))
     if records:
         statuses = store.treatment_status_for_ids([r["id"] for r in records])
         for r in records:
             r["treatment_status"] = statuses.get(r["id"])
-        from src.repository.email_database import email_repositories_for_ui
-        email_repos = email_repositories_for_ui()
-        email_repo = email_repos.email_research if email_repos is not None else None
-        email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
-        for r in records:
-            r["email_status"] = email_statuses.get(r["id"])
-        st.dataframe(display_rows(records),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
-        choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
-        if choice:
-            details(store,choice)
+        if not read_only:
+            from src.repository.email_database import email_repositories_for_ui
+            email_repos = email_repositories_for_ui()
+            email_repo = email_repos.email_research if email_repos is not None else None
+            email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
+            for r in records:
+                r["email_status"] = email_statuses.get(r["id"])
+        st.dataframe(display_rows(records, include_email_status=not read_only),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
+        if not read_only:
+            choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
+            if choice:
+                details(store,choice)
 
 
 def upload_table(upload,prefix):
@@ -937,6 +944,20 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
 
 
 def simple_workflow_ui(store, demo, *, read_only=False):
+    if read_only:
+        st.header("クリニック営業マスター")
+        st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
+        filters = Filters(active_only=False, hp_only=False)
+        total = store.count(filters)
+        with_uuid = store.count(replace(filters, uuid_mode="あり"))
+        st.subheader("現在の医院データ")
+        columns = st.columns(2)
+        columns[0].metric("医院マスター（営業対象外施設を除く）", f"{total:,}件")
+        columns[1].metric("既存UUIDあり", f"{with_uuid:,}件")
+        show_web_research_metrics(store)
+        st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
+        return
+
     write_disabled = demo or read_only
     metrics = store.metrics()
 
@@ -1388,7 +1409,7 @@ def comdesk_sync_candidates(store, page_size=50000):
     ]
     return candidates
 
-def simple_sales_ui(store, demo=False):
+def simple_sales_ui(store, demo=False, *, read_only=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
     st.subheader("Webサイト調査状況")
@@ -1484,7 +1505,9 @@ def simple_sales_ui(store, demo=False):
     non_ab_only_selected = bool(hp_ranks) and not export_ranks
     sales_filters = replace(filters, effective_ranks=export_ranks)
     try:
-        count = 0 if non_ab_only_selected else store.count(sales_filters)
+        count = (0 if non_ab_only_selected else
+                 store.count_read_only_ui(sales_filters)
+                 if read_only and hasattr(store, "count_read_only_ui") else store.count(sales_filters))
     except SalesClassificationUnavailableError as exc:
         st.error(str(exc))
         return
@@ -1504,7 +1527,7 @@ def simple_sales_ui(store, demo=False):
         if non_ab_only_selected:
             st.info("選択したHP ABC判定には営業対象のA/Bが含まれないため、対象医院は0件です。")
         else:
-            listing(store, sales_filters, "simple_sales_results")
+            listing(store, sales_filters, "simple_sales_results", read_only=read_only)
 
     st.subheader("営業対象をComdesk形式で出力")
     st.caption(
@@ -1512,8 +1535,15 @@ def simple_sales_ui(store, demo=False):
         "治療カテゴリを選択していない場合は治療カテゴリでは絞り込みません。"
         "HP ABC判定は営業対象のA/B条件を反映します。"
     )
+    readonly_export_over_limit = read_only and count > 100000
+    if readonly_export_over_limit:
+        st.warning(
+            f"READ ONLY出力は100,000件までです。現在の条件は{count:,}件のため、"
+            "一部のみのファイルを誤って出力しないようダウンロードを停止しました。条件を絞ってください。"
+        )
     sales_export_signature = json.dumps(
-        [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS, store.revision(), count],
+        [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS,
+         None if read_only else store.revision(), count],
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -1521,12 +1551,14 @@ def simple_sales_ui(store, demo=False):
         f"営業対象 {count:,}件をComdesk形式で出力",
         type="primary",
         key="simple_sales_filtered_export",
-        disabled=demo or count == 0,
+        disabled=demo or count == 0 or readonly_export_over_limit,
         use_container_width=True,
     ):
         st.session_state["simple_sales_filtered_export_files"] = {
             "signature": sales_export_signature,
-            "files": store.export(sales_filters),
+            "files": (store.export_read_only(sales_filters)
+                      if read_only and hasattr(store, "export_read_only")
+                      else store.export(sales_filters)),
         }
     sales_output = st.session_state.get("simple_sales_filtered_export_files")
     if sales_output and sales_output["signature"] == sales_export_signature:
@@ -1727,8 +1759,11 @@ def main():
     with st.sidebar:
         nav_options = NAV[:2] if read_only else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
-        with st.expander("開発・確認用", expanded=False):
-            demo = st.toggle("サンプルモード", key="sample_mode")
+        if read_only:
+            demo = False
+        else:
+            with st.expander("開発・確認用", expanded=False):
+                demo = st.toggle("サンプルモード", key="sample_mode")
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
@@ -1777,7 +1812,7 @@ def main():
     if nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
-        simple_sales_ui(store, demo)
+        simple_sales_ui(store, demo, read_only=read_only)
     elif nav == "Email調査":
         email_research_page(store)
     elif nav == "メール送付文章":

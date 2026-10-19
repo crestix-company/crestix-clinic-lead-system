@@ -83,7 +83,7 @@ def _minus_one_year(iso_date):
         return d.replace(year=d.year - 1, day=28).isoformat()
 
 
-def clauses(filters, as_of=None, excluded_ids=None):
+def clauses(filters, as_of=None, excluded_ids=None, read_only_ui=False):
     """Mirrors src.master.filters.clauses() field-for-field, Postgres dialect only.
     Returns [(label, sql_with_%s_placeholders, [args])]. Raises for UNSUPPORTED_FIELDS;
     silently skips POST_FILTER_FIELDS (callers must apply those separately in Python).
@@ -267,6 +267,17 @@ def clauses(filters, as_of=None, excluded_ids=None):
                 params.append(list(definition.evidence_keywords))
             evidence += ")"
             sidecar = sidecar_treatment_category(department, treatment)
+            if read_only_ui:
+                # The Cloud Run reader role is not granted internal research history. Keep the
+                # selected treatment filter on confirmed treatment sidecar evidence only.
+                if sidecar:
+                    pair_sql.append(
+                        "(departments_json ? %s AND EXISTS(SELECT 1 FROM treatment.clinic_treatment_research tr "
+                        "WHERE tr.clinic_id=clinics.id AND tr.research_status='CONFIRMED' "
+                        "AND tr.treatment_category_name=%s))"
+                    )
+                    pair_args.extend([department, sidecar])
+                continue
             if sidecar:
                 evidence = (
                     "(" + evidence + " OR EXISTS(SELECT 1 FROM treatment.clinic_treatment_research tr "
@@ -315,8 +326,8 @@ def clauses(filters, as_of=None, excluded_ids=None):
     return steps
 
 
-def where(filters, as_of=None, excluded_ids=None):
-    steps = clauses(filters, as_of, excluded_ids=excluded_ids)
+def where(filters, as_of=None, excluded_ids=None, read_only_ui=False):
+    steps = clauses(filters, as_of, excluded_ids=excluded_ids, read_only_ui=read_only_ui)
     sql = " AND ".join(["merged_into IS NULL", "merge_hold=false"] + [s for _, s, _ in steps])
     args = [a for _, _, args in steps for a in args]
     return sql, args
