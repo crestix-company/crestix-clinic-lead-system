@@ -93,3 +93,89 @@ def test_importing_app_v2_never_requires_job_control_db_url(monkeypatch):
     import importlib
     import app_v2
     importlib.reload(app_v2)  # must not raise JobControlNotConfiguredError
+
+
+def test_read_only_workflow_uses_clinic_projection_only(monkeypatch):
+    import app_v2
+
+    class Store:
+        def __init__(self):
+            self.calls = []
+
+        def count(self, filters):
+            self.calls.append(("count", filters))
+            return 2
+
+        def query(self, filters, *, limit):
+            self.calls.append(("query", filters, limit))
+            return [{"id": 1, "clinic_name": "A Clinic"}, {"id": 2, "clinic_name": "B Clinic"}]
+
+    class StreamlitStub:
+        def __getattr__(self, name):
+            return lambda *args, **kwargs: None
+
+    store = Store()
+    monkeypatch.setattr(app_v2, "st", StreamlitStub())
+    app_v2.simple_workflow_ui(store, demo=False, read_only=True)
+
+    assert [call[0] for call in store.calls] == ["count", "query"]
+    assert store.calls[0][1].scope == app_v2.SCOPE_ALL
+    assert store.calls[0][1].active_only is False
+
+
+def test_read_only_sales_export_avoids_revision_and_uses_narrow_export():
+    source = _app_source()
+    start = source.index("def simple_sales_ui")
+    end = source.index("def advanced_ui", start)
+    sales = source[start:end]
+    assert '"read_only" if read_only else store.revision()' in sales
+    assert "store.export_read_only(sales_filters) if read_only else store.export(sales_filters)" in sales
+    listing_start = source.index("def listing(")
+    listing_end = source.index("def upload_table", listing_start)
+    listing = source[listing_start:listing_end]
+    assert "if not read_only:" in listing
+    assert "email_repo.status_for_ids" in listing
+
+
+def test_read_only_export_contract_does_not_read_provenance_or_email():
+    from types import SimpleNamespace
+
+    from src.master.comdesk import COMDESK_EXPORT_HEADERS
+    from src.master.filters import Filters
+    from src.repository.runtime_store import SupabaseRuntimeStore
+
+    record = {
+        "id": 7,
+        "clinic_name": "Sample Clinic",
+        "phone": "03-1234-5678",
+        "prefecture": "東京都",
+        "address": "東京都千代田区1-2-3",
+        "effective_hp_rank": "A",
+    }
+
+    class Clinics:
+        _conn = object()
+
+        def __init__(self):
+            self.queries = []
+
+        def count(self, filters, as_of=None):
+            return 1
+
+        def query(self, filters, limit, offset=0, as_of=None):
+            self.queries.append((filters, limit, offset, as_of))
+            return [record]
+
+    clinics = Clinics()
+    store = SupabaseRuntimeStore(repositories=SimpleNamespace(clinics=clinics))
+    filters = Filters(active_only=False, hp_only=False)
+    count = store.count(filters)
+    files = store.export_read_only(filters)
+    rows = files["final_comdesk_import.csv"].decode("utf-8-sig").splitlines()
+
+    assert list(__import__("csv").reader([rows[0]]))[0] == COMDESK_EXPORT_HEADERS
+    assert len(rows) - 1 == count == 1
+    assert len(list(__import__("csv").reader([rows[1]]))[0]) == len(COMDESK_EXPORT_HEADERS)
+    assert list(__import__("csv").reader([rows[1]]))[0][-2:] == ["A", ""]
+    assert len(clinics.queries) == 1
+    assert clinics.queries[0][0] == filters

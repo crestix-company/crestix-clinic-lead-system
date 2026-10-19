@@ -450,6 +450,30 @@ class SupabaseRuntimeStore:
         }
 
     @_retry_closed_read_connection
+    def export_read_only(self, filters, as_of=None):
+        """Export the fixed clinic projection without provenance or email lookups.
+
+        Cloud Run's IAP-protected reader intentionally has no access to stored Comdesk
+        source rows/templates, audit history, or email enrichment. Use verified clinic
+        fields to build the same fixed-width file contract and leave the email column blank.
+        """
+        from src.master.fixed_export import fixed_row
+
+        records = self.query(filters, limit=100000, as_of=as_of)
+        rows = []
+        for record in records:
+            rank = str(record.get("effective_hp_rank") or "").strip().upper()
+            if rank not in {"A", "B", "C", "D"}:
+                rank = ""
+            rows.append([*fixed_row(record), rank, ""])
+        import pandas as pd
+        frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
+        return {
+            "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
+        }
+
+    @_retry_closed_read_connection
     def export_management_csv(self):
         rows = self.query(Filters(active_only=False, hp_only=False), limit=100000)
         keys = sorted({k for row in rows for k in row})

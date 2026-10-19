@@ -713,7 +713,7 @@ def manual_form(store,r):
         st.rerun()
 
 
-def listing(store,filters,prefix="list"):
+def listing(store,filters,prefix="list",*,read_only=False):
     count = store.count(filters)
     st.write(f"対象：{count:,}件")
     size = st.selectbox("1ページの表示件数",[25,50,100,200],index=1,key=prefix+"_size")
@@ -726,16 +726,19 @@ def listing(store,filters,prefix="list"):
         statuses = store.treatment_status_for_ids([r["id"] for r in records])
         for r in records:
             r["treatment_status"] = statuses.get(r["id"])
-        from src.repository.email_database import email_repositories_for_ui
-        email_repos = email_repositories_for_ui()
-        email_repo = email_repos.email_research if email_repos is not None else None
-        email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
+        email_statuses = {}
+        if not read_only:
+            from src.repository.email_database import email_repositories_for_ui
+            email_repos = email_repositories_for_ui()
+            email_repo = email_repos.email_research if email_repos is not None else None
+            email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
         for r in records:
             r["email_status"] = email_statuses.get(r["id"])
         st.dataframe(display_rows(records),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
-        choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
-        if choice:
-            details(store,choice)
+        if not read_only:
+            choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
+            if choice:
+                details(store,choice)
 
 
 def upload_table(upload,prefix):
@@ -937,6 +940,22 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
 
 
 def simple_workflow_ui(store, demo, *, read_only=False):
+    if read_only:
+        # The operational workflow reads job, import-history, email and audit state even
+        # when every mutation button is disabled. Keep this view to the national clinic
+        # population and its ordinary clinic/HP projection in READ ONLY deployments.
+        filters = Filters(active_only=False, hp_only=False, scope=SCOPE_ALL)
+        count = store.count(filters)
+        records = store.query(filters, limit=100)
+        st.header("医院データ閲覧")
+        st.caption("READ ONLY表示です。全国の医院データは「営業対象・出力」から条件を指定して閲覧・CSV出力できます。")
+        st.metric("全国の医院", f"{count:,}件")
+        if records:
+            st.dataframe(display_rows(records), hide_index=True, width="stretch")
+        else:
+            st.info("表示できる医院データがありません。")
+        return
+
     write_disabled = demo or read_only
     metrics = store.metrics()
 
@@ -1388,7 +1407,7 @@ def comdesk_sync_candidates(store, page_size=50000):
     ]
     return candidates
 
-def simple_sales_ui(store, demo=False):
+def simple_sales_ui(store, demo=False, *, read_only=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
     st.subheader("Webサイト調査状況")
@@ -1405,8 +1424,8 @@ def simple_sales_ui(store, demo=False):
             prefs = [r[0] for r in c.execute(
                 "SELECT DISTINCT prefecture FROM clinics WHERE prefecture<>'' ORDER BY prefecture"
             )]
-    pref_default = ["東京都"] if "東京都" in prefs else []
-    med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_sales_medical_type")
+    pref_default = [] if read_only else (["東京都"] if "東京都" in prefs else [])
+    med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=2 if read_only else 0, key="simple_sales_medical_type")
     sales_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
     pref = st.multiselect("都道府県", prefs, default=pref_default, key="simple_sales_pref")
     deps = st.multiselect("診療科", DEPARTMENTS, key="simple_sales_departments")
@@ -1436,7 +1455,7 @@ def simple_sales_ui(store, demo=False):
         sales_pairs.extend((department, treatment) for treatment in selected)
 
     status_preview_filters = Filters(
-        active_only=True, hp_only=False, medical_types=sales_medical_types,
+        active_only=not read_only, hp_only=False, medical_types=sales_medical_types,
         prefectures=pref, departments=deps, sales_pairs=sales_pairs, scope=scope,
     )
     ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
@@ -1448,7 +1467,7 @@ def simple_sales_ui(store, demo=False):
     age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
     # 通常営業UIはeffective_hp_rankを使用。Treatment状態はこの判定に影響しない。
     rank_labels = [label for label, _ in HP_RANK_PRESETS]
-    default_rank_index = HP_RANK_PRESET_UNRESTRICTED_INDEX if demo else HP_RANK_PRESET_DEFAULT_INDEX
+    default_rank_index = HP_RANK_PRESET_UNRESTRICTED_INDEX if demo or read_only else HP_RANK_PRESET_DEFAULT_INDEX
     rank_choice = cols[2].selectbox("HP ABC判定", rank_labels, index=default_rank_index, key="simple_sales_hp_rank_preset")
     hp_ranks = dict(HP_RANK_PRESETS)[rank_choice]
     site_type_label = cols[3].selectbox(
@@ -1500,11 +1519,20 @@ def simple_sales_ui(store, demo=False):
             f"｜営業利用可能(A+B+C)：{summary['sales_usable']:,}件"
         )
 
+    if read_only:
+        with st.expander("医院一覧・全国閲覧", expanded=True):
+            browse_count = store.count(filters)
+            st.metric("一覧条件の医院", f"{browse_count:,}件")
+            listing(store, filters, "simple_sales_browse", read_only=True)
+
     with st.expander("対象医院を確認", expanded=False):
         if non_ab_only_selected:
             st.info("選択したHP ABC判定には営業対象のA/Bが含まれないため、対象医院は0件です。")
         else:
-            listing(store, sales_filters, "simple_sales_results")
+            if read_only:
+                listing(store, sales_filters, "simple_sales_results", read_only=True)
+            else:
+                listing(store, sales_filters, "simple_sales_results")
 
     st.subheader("営業対象をComdesk形式で出力")
     st.caption(
@@ -1513,7 +1541,8 @@ def simple_sales_ui(store, demo=False):
         "HP ABC判定は営業対象のA/B条件を反映します。"
     )
     sales_export_signature = json.dumps(
-        [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS, store.revision(), count],
+        [str(store.path), asdict(sales_filters), COMDESK_EXPORT_HEADERS,
+         "read_only" if read_only else store.revision(), count],
         ensure_ascii=False,
         sort_keys=True,
     )
@@ -1526,7 +1555,7 @@ def simple_sales_ui(store, demo=False):
     ):
         st.session_state["simple_sales_filtered_export_files"] = {
             "signature": sales_export_signature,
-            "files": store.export(sales_filters),
+            "files": store.export_read_only(sales_filters) if read_only else store.export(sales_filters),
         }
     sales_output = st.session_state.get("simple_sales_filtered_export_files")
     if sales_output and sales_output["signature"] == sales_export_signature:
@@ -1777,7 +1806,7 @@ def main():
     if nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
-        simple_sales_ui(store, demo)
+        simple_sales_ui(store, demo, read_only=read_only)
     elif nav == "Email調査":
         email_research_page(store)
     elif nav == "メール送付文章":
