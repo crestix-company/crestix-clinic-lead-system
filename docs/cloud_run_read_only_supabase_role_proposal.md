@@ -21,6 +21,13 @@ The target Cloud Run secret was not inspected, so this project cannot be confirm
 deployed Cloud Run target. Do not apply until `INHERIT`, its membership edge to `postgres`, and
 the existing broad clinic SELECT are explicitly accepted or separately remediated.
 
+> **Current execution status at PR head `fcf34c59fd38d37f6c3b9d2ef0d8c0aaae174eb2`:** the
+> earlier direct `public.clinics` GRANT snippets below are historical proposals and are
+> superseded. In particular, do not execute any snippet granting `effective_json`. The selected
+> path is the isolated projection view described in “Final effective_json projection decision”;
+> its exact DDL is not ready to execute until C's isolated implementation tests and approvals
+> pass. This PR contains design only; no database change was made.
+
 ## Revision and target verification
 
 - The latest `origin/main` was fetched for this task; it resolved to `720f986`
