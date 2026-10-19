@@ -12,7 +12,7 @@ national clinic rows (`USING (true)`), because IAP is the application access bou
 purpose is nationwide browsing/export. This is a broad data scope, so the IAP audience and
 application export columns must be reviewed before enabling it.
 
-**Safety result: conditional / not yet ready to apply.** Read-only catalog checks were run
+**Safety result: NO-GO for DB application pending separate approval and remediation.** Read-only catalog checks were run
 against Supabase project `hwdvyhunozporfuefteb` on 2026-10-19. The existing role is a login,
 `INHERIT`, and `NOBYPASSRLS`; it is not a member of any other role. `public.clinics` is the only
 allowlisted object with effective SELECT today, and that grant covers all columns. The other
@@ -50,7 +50,7 @@ four browse tables.
 | `treatment.clinic_research_status` | Per-clinic treatment research state | `SELECT` |
 | `provenance.comdesk_original_rows` | Preserve original Comdesk values/UUID for standard export | Column SELECT: `id, clinic_id, template_id, row_json, uuid` |
 | `provenance.templates` | Restore original source-column order/mapping | Column SELECT: `id, headers_json, mapping_json` |
-| `public.clinic_email_enrichment` | Append official verified email in standard export | Conditional column SELECT: `clinic_id, email, status, verified_on_official` |
+| `public.clinic_email_enrichment` | Append officially verified clinic contact email in standard export (approved for IAP users) | Column SELECT: `clinic_id, email, status, verified_on_official`; RLS restricts visible rows |
 
 Column scope for the other four tables: `public.clinics` remains all existing columns under its
 direct table-level grant (`id, uuid, clinic_name, phone, address, phone_norm, name_norm,
@@ -81,7 +81,7 @@ those objects for the initial release.
 |---|---|---|
 | Browse and filters | `public.clinics`, `hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`, `treatment.clinic_research_status` | Required, unchanged. |
 | Standard CSV/Excel compatibility | `provenance.comdesk_original_rows`, `provenance.templates` | Required by PR #119 to preserve original Comdesk values and mapping. |
-| Verified-email export | `public.clinic_email_enrichment` | Required for full normal-output parity; grant/policy blocked pending explicit internal approval. Without approval, C must disable/omit that column or this exporter cannot run under the reader role. |
+| Verified-email export | `public.clinic_email_enrichment` | Required and specification approved for IAP-authorized CSV/Excel. Database application remains unapproved; sending, delivery history and Email KPI are excluded. |
 | Deferred | `provenance.change_history`, `provenance.match_reviews`, `provenance.source_records`, Step 6 Comdesk linkage/history, Email KPI and delivery state, HP Job/research-job tables | No initial grant. READ ONLY UI must bypass these paths. |
 
 PR #119 head was fetched and reviewed. The export tests verify identical READ ONLY and normal
@@ -98,9 +98,10 @@ or prove nationwide row counts through the Session Pooler.
 PR #119's READ ONLY workflow bypasses `metrics()` and email statuses, does not call HP Job,
 Step 6, or change-history paths, and uses the standard exporter for source row/template mapping
 and verified email. The verified-email filter is exact in both SQL and `_verified_email_map()`.
-However, no evidence in this task or PR establishes approval to distribute email addresses to
-all IAP users. Treat this data exposure as **unapproved / hold** until the owner explicitly
-confirms it; standard file parity for non-email fields can proceed independently.
+The owner has approved output of official-HP-confirmed contact emails to CSV/Excel for
+IAP-authorized internal users. This approves the data-use specification only; it does not
+authorize database privilege application or deployment. Sending, delivery history and Email KPI
+remain out of scope.
 
 ## Out of scope
 
@@ -157,19 +158,23 @@ CREATE POLICY clinic_cloudrun_reader_select ON provenance.templates
 ```
 
 `public.clinics` already has a direct table-level SELECT grant to this role, so all its 41
-catalog columns remain accessible. Changing/revoking that grant would be a separate privilege
-change and is not included. Other table grants are limited to columns read by the browse/filter
-and export paths. The provenance column grants are the exact columns referenced by the exporter;
+catalog columns remain accessible. This exceeds the UI projection: `base_json`,
+`registration_reason`, `exclude_reason`, Maps provenance fields and other unused source fields
+are not needed to render/export these screens. The adapter also needs columns used in search,
+filter predicates and sorting. A precise replacement allowlist must be generated and tested
+against every PR #119 SQL expression. Since column-level replacement requires REVOKE of the
+existing table grant, that separate privilege change remains a least-privilege blocker and is
+not included here. Other table grants are limited to columns read by the browse/filter and
+export paths. The provenance column grants are the exact columns referenced by the exporter;
 `id` is also needed for the `ORDER BY` on original rows. PR #119 currently selects all
 templates, but the proposed templates RLS policy limits visible rows to template IDs referenced
 by stored Comdesk rows. It depends on the reader policy/grant on `comdesk_original_rows`.
 
-Email access is **not yet approved** based on available evidence. If the data owner explicitly
-approves email addresses for IAP-authorized CSV/Excel downloads, append this conditional SQL;
-otherwise leave it unapplied and do not enable an exporter that requires it:
+Email output is **specification-approved; database application is not approved**. The following
+is part of the proposed seven-table delta, but must remain unapplied until separate DB approval:
 
 ```sql
--- CONDITIONAL: only after explicit data-owner approval for email CSV/Excel output.
+-- APPROVED USE SPECIFICATION; NOT APPROVED FOR EXECUTION in this task.
 GRANT SELECT (clinic_id, email, status, verified_on_official)
   ON TABLE public.clinic_email_enrichment TO clinic_cloudrun_reader;
 CREATE POLICY clinic_cloudrun_reader_select ON public.clinic_email_enrichment
@@ -184,7 +189,10 @@ This RLS predicate is a safe narrowing of PR #119's SQL filter
 blank addresses and deduplicates case-insensitively. Thus only nonempty official verified
 addresses are exposed/output. At the last live check the table had zero rows, so the current
 status distribution and match counts cannot be validated. Enrichment evidence/source columns
-are not granted.
+are not granted. Validate in a disposable isolated database with fixtures: valid status +
+official=true + nonblank email must be visible; wrong status, false/null official flag, and
+blank/whitespace/null email must be hidden. Connect as the reader to assert visibility, test
+export output and row alignment, and assert writes fail. Never seed fixtures in production.
 
 Immediately before approved execution, check for policy-name conflicts again. If a name exists,
 stop for review; never replace or drop it. Do not use `FORCE ROW LEVEL SECURITY`.
@@ -379,8 +387,8 @@ CREATE ROLE clinic_cloudrun_reader
   permits temporary objects but not persistent writes to CRM tables; no PUBLIC/database ACL was
   changed.
 - The live `clinic_email_enrichment` table had zero rows, so status distribution cannot validate
-  the verified-email row predicate. Public docs and PR #119 contain no explicit approval to
-  export addresses; access is withheld pending data-owner approval.
+  the verified-email row predicate. Email CSV/Excel use is approved for IAP users, but DB
+  privilege application remains unapproved.
 - Add policies only for `clinic_cloudrun_reader`; do not drop, replace, or widen existing
   policies. All seven targets already have RLS enabled. Any other PUBLIC or inherited privileges
   must be reviewed separately before production use.
