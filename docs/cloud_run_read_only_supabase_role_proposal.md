@@ -1176,6 +1176,54 @@ policies, grants and roles are never part of either rollback.
 No authentication check, Secret Manager inspection, database query, grant, policy, migration,
 Cloud Run/IAM change, or merge was performed for this approval summary. The prior report's
 Reader password/secret status remains unknown; the prior Cloud Run report indicated the runtime
-DB Secret was absent. PR #118 is Draft, with base main at
-`c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` and proposal head
-`e6bb19e33cb794f575b8b567680c2b794e529ca1` before this documentation update.
+DB Secret was absent. PR #118 remains Draft; confirm its live head in GitHub before applying.
+
+## Decision sheet: remaining choices only
+
+### `effective_json` alternatives
+
+| Choice | Benefit | Risk / work | Recommendation |
+|---|---|---|---|
+| Grant `effective_json` with the narrowed direct-column grant | Fastest path; preserves the current adapter's clinic projection, exclusion and export behavior. | Exposes every current and future key in the JSON, including owner/manager personal names, clinic contact data, operating details and source-specific values. IAP does not constrain direct SQL through the service credential. | **Do not approve by default.** Allow only as a documented, named data-owner exception that explicitly accepts the full JSON payload. |
+| Replace raw JSON reads with an approved projection | Data exposure is bounded to reviewed display/filter/export fields; keeps the remaining column grants least-privilege in substance. | Requires an application/view adaptation and role-scoped validation before applying the grant; cannot be achieved by omitting `effective_json` from GRANT while current SQL still selects/filters it. | **Recommended.** This is the default release path absent the explicit exception above. |
+
+### Existing Reader attributes and membership
+
+- `INHERIT`: under the audited membership graph, the Reader was not itself a member of another
+  role, so no other role privileges were then inherited. It is acceptable only with a fresh
+  pre-apply membership check and an operational rule that no broader role is later granted to
+  this Reader. No role attribute change is part of this proposal.
+- Reverse edge (`postgres` is a member of `clinic_cloudrun_reader`, ADMIN OPTION): this does not
+  grant the Reader postgres privileges. It lets the postgres-side member assume/manage the
+  Reader membership. Accept only if the DBA confirms this edge is intentional; do not modify it
+  in this change.
+- PUBLIC `TEMP`: permits session temporary objects, not persistent writes to Clinic Master or
+  CRM tables. Treat as a limited residual capability and accept only after confirming effective
+  persistent write privileges remain false. Do not revoke database-wide PUBLIC TEMP here.
+- Existing `public.clinics` table SELECT: the proposed `REVOKE` affects only the Reader's
+  all-column grant, then grants the approved column list. No CRM role ACL or CRM RLS policy is
+  targeted. If this direct grant was not the only SELECT source at preflight, stop; the column
+  revoke would not by itself remove PUBLIC or inherited access.
+
+### Approver sign-off and shortest execution sequence
+
+Record these decisions before any database command is run:
+
+1. Service owner: approve the candidate project as the actual Cloud Run DB target and select the
+   existing `clinic_cloudrun_reader` role.
+2. Data owner: approve either (a) the complete `effective_json` payload as an explicit exception,
+   or (b) require the projection/UI change. The recommended default is (b).
+3. DBA/security owner: accept the audited INHERIT/reverse membership/TEMP posture, approve the
+   exact seven-table transaction, and select security rollback (remove Reader access) versus
+   exact pre-change ACL restoration (which restores all 41 clinic columns).
+4. Credential owner: confirm through the secure credential channel that the dedicated Reader
+   credential is ready. No password, URL, secret value or authentication status is to be sent in
+   chat, Git, shell arguments or logs.
+5. After these approvals: DBA reruns preflight catalog checks and policy collision guard; applies
+   the reviewed transaction; service owner configures the approved Secret/IAM reference under a
+   separate change; then the dedicated Reader post-apply and app acceptance gates are run.
+
+Until sign-offs 1–4 exist and the selected `effective_json` path is implemented/approved, the
+SQL is review-ready but not execution-authorized. This document contains no live connection
+parameters; an authorized operator retrieves them from the approved Dashboard at connection
+time. Do not disclose them in PR text or command history.
