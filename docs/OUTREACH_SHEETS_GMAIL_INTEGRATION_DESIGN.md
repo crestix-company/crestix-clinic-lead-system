@@ -50,7 +50,7 @@ Keep the Google Form → existing GAS → Sheets path unchanged. Full import is 
 
 ## Proposed normalized tables
 
-The migration file is an unapplied proposal and assumes the existing delivery-ledger migration and a separately provisioned restricted database role. Tables and key controls:
+The migration file `supabase/migrations/20261019160000_outreach_full_sheets_gmail_integration.sql` is an unapplied proposal and assumes the existing delivery-ledger migration and a separately provisioned restricted database role. It is deliberately numbered after the #112 migrations (`20261019140000` through `20261019151000`). Tables and key controls:
 
 | Table | Purpose / integrity |
 |---|---|
@@ -67,7 +67,7 @@ The migration file is an unapplied proposal and assumes the existing delivery-le
 | `outreach.sync_jobs`, `sync_errors` | Idempotent sync operation, cursors, counts and retryable row failures |
 | `outreach.audit_events` | Actor/action/entity hashes, append-only |
 
-Every new table enables and forces RLS, revokes public/anon/authenticated/runtime access, and grants only the restricted outreach role. Append-only evidence tables revoke UPDATE/DELETE/TRUNCATE; mutable state tables grant column-scoped updates. The existing PR #112 `clinic_draft_guard` remains the atomic, Clinic-ID-wide draft reservation guard; this integration does not remove it. Gmail historical records may be retained per observed Draft/Message ID, while new drafting still follows the existing guard. The role itself is not created by this proposal. Supabase documents that RLS and SQL privileges work together; production deployment still requires reviewed policies, role grants and connection verification ([Supabase RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)). Migration is not applied.
+Every new table enables and forces RLS, revokes public/anon/authenticated/runtime access, and grants only the restricted outreach role. Append-only evidence tables revoke UPDATE/DELETE/TRUNCATE; mutable state tables grant column-scoped updates. The existing PR #112 `clinic_draft_guard` remains the atomic, Clinic-ID-wide draft reservation guard; this integration does not remove it. Gmail historical records may be retained per observed Draft/Message ID, while new drafting still follows the existing guard. The role itself is not created by this proposal. Supabase documents that RLS and SQL privileges work together; production deployment still requires reviewed policies, role grants and connection verification ([Supabase RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)). Migration is not applied. The shadow project's migration-history mismatch and required reconciliation sequence are documented in [the migration-history reconciliation runbook](supabase_migration/37_outreach_migration_history_reconciliation.md); do not run `db push` until that crosswalk is reviewed and approved.
 
 ## Local UI and boundary
 

@@ -120,6 +120,10 @@ def test_tracking_event_is_idempotent_privacy_minimized_and_click_url_is_validat
 
 def test_schema_proposal_is_additive_idempotent_and_rls_restricted_without_send_path():
     migration = next(Path("supabase/migrations").glob("*outreach_full_sheets_gmail_integration.sql"))
+    assert migration.name.startswith("20261019160000_")
+    history_migrations = sorted(Path("supabase/migrations").glob("202610191[45]*.sql"))
+    assert history_migrations
+    assert all(item.name[:14] < migration.name[:14] for item in history_migrations)
     sql = migration.read_text()
     for table in (
         "sales_cases", "email_draft_save_reviews", "email_pre_send_reviews", "gmail_messages", "email_state_history",
