@@ -47,13 +47,16 @@ $$;
 
 -- Deliberately no table-wide privilege and no access to evidence JSON. The role can read only
 -- the input columns needed to construct the public projection. RLS is evaluated for this role.
+-- maps_match_method/maps_checked_at and the function's treatment_status key are not read by
+-- the READ ONLY adapter anywhere (src/repository/supabase_adapter.py); omitted here rather than
+-- granted-but-unused, per the data-minimization review of this view's column set.
 GRANT SELECT (
   id, uuid, clinic_name, phone, address, prefecture, medical_type, active,
   designation_date, recent_until, registration_reason, owner_equal,
   hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json,
   treatments_json, signals_json, first_seen_at, last_seen_at, source_as_of_date,
   is_new, merged_into, tel_match_key, merge_hold, maps_presence_status,
-  maps_profile_url, maps_website_url, maps_match_method, maps_checked_at,
+  maps_profile_url, maps_website_url,
   exclude_reason, effective_json
 ) ON TABLE public.clinics TO clinic_cloudrun_projection_owner;
 
@@ -64,7 +67,23 @@ CREATE POLICY clinic_cloudrun_projection_owner_select ON public.clinics
 -- converting that value to database text. Replace only unescaped NUL escape tokens with a
 -- row-specific marker before parsing. Literal backslash-u0000 text remains untouched. The
 -- function returns only an allowlisted projection; it never returns the parsed source object.
-CREATE OR REPLACE FUNCTION public.clinic_cloudrun_effective_projection(source_json text, clinic_id bigint)
+-- Collision guard: CREATE OR REPLACE would silently redefine (or hide a naming collision
+-- with) any pre-existing same-signature function. Abort instead, mirroring the role-
+-- existence check above; a human must resolve a real collision, not have this migration
+-- paper over it.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_proc p
+    JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname = 'public' AND p.proname = 'clinic_cloudrun_effective_projection'
+  ) THEN
+    RAISE EXCEPTION 'public.clinic_cloudrun_effective_projection already exists; stop for review';
+  END IF;
+END
+$$;
+
+CREATE FUNCTION public.clinic_cloudrun_effective_projection(source_json text, clinic_id bigint)
 RETURNS jsonb
 LANGUAGE plpgsql
 IMMUTABLE
@@ -73,14 +92,16 @@ SECURITY INVOKER
 SET search_path = pg_catalog
 AS $function$
 DECLARE
-  marker text := '__CLINIC_NUL_' || clinic_id::text || '_' || md5(COALESCE(source_json, '')) || '__';
+  -- Derived only from clinic_id (already visible to the Reader via the view's own id
+  -- column), never from source_json: a marker built from md5(source_json) would hand the
+  -- Reader a deterministic fingerprint of the raw, otherwise-inaccessible effective_json.
+  marker text := '__CLINIC_NUL_' || clinic_id::text || '_' || md5(clinic_id::text) || '__';
   sanitized text;
   parsed jsonb;
   companies jsonb := '[]'::jsonb;
   facility jsonb := '""'::jsonb;
   epark_url jsonb;
   epark_contract jsonb;
-  treatment_status jsonb;
 BEGIN
   IF source_json IS NULL THEN
     RETURN jsonb_build_object('_valid', false, '_marker', marker, 'values', '{}'::jsonb);
@@ -112,7 +133,6 @@ BEGIN
   END IF;
   IF jsonb_typeof(parsed->'epark_url') = 'string' THEN epark_url := parsed->'epark_url'; END IF;
   IF jsonb_typeof(parsed->'epark_contract') = 'string' THEN epark_contract := parsed->'epark_contract'; END IF;
-  IF jsonb_typeof(parsed->'treatment_status') = 'string' THEN treatment_status := parsed->'treatment_status'; END IF;
 
   RETURN jsonb_build_object(
     '_valid', true,
@@ -121,8 +141,7 @@ BEGIN
       'facility_type', facility,
       'hp_production_companies', companies,
       'epark_url', epark_url,
-      'epark_contract', epark_contract,
-      'treatment_status', treatment_status
+      'epark_contract', epark_contract
     )
   );
 EXCEPTION WHEN others THEN
@@ -133,6 +152,9 @@ END
 $function$;
 
 -- The function only returns the documented allowlist, so execution does not expose raw JSON.
+-- PostgreSQL grants EXECUTE to PUBLIC by default on function creation; revoke that before
+-- granting only to the two roles that actually need it.
+REVOKE EXECUTE ON FUNCTION public.clinic_cloudrun_effective_projection(text, bigint) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.clinic_cloudrun_effective_projection(text, bigint)
   TO clinic_cloudrun_reader, clinic_cloudrun_projection_owner;
 
@@ -146,8 +168,7 @@ WITH projected AS (
          c.medical_type, c.active, c.designation_date, c.recent_until,
          c.registration_reason, c.owner_equal, c.signal_count,
          c.hot_status, c.treatments_json, c.signals_json, c.merge_hold,
-         c.maps_presence_status, c.maps_profile_url, c.maps_match_method,
-         c.maps_checked_at, c.exclude_reason,
+         c.maps_presence_status, c.maps_profile_url, c.exclude_reason,
          -- Reader-facing exposure must be a boolean, never the raw facility_type string
          -- (see docs/cloud_run_read_only_supabase_role_proposal.md's JSON-derived output
          -- contract: "expose only is_hospital_or_center boolean ... do not expose the raw
@@ -163,7 +184,7 @@ SELECT
   clinic_name, phone, address, prefecture, medical_type, active, designation_date,
   recent_until, registration_reason, owner_equal, signal_count,
   hot_status, treatments_json, signals_json, merge_hold, maps_presence_status,
-  maps_profile_url, maps_match_method, maps_checked_at, exclude_reason,
+  maps_profile_url, exclude_reason,
   (_effective->'values') AS effective_projection,
   (_effective->>'_marker') AS projection_marker,
   ((_effective->>'_valid')::boolean) AS projection_valid,
