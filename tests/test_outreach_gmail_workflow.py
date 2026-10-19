@@ -22,10 +22,11 @@ class Request:
 
 
 class GmailService:
-    def __init__(self, *, sent=(), scheduled=(), fail_after_create=False, fail_history=False):
+    def __init__(self, *, sent=(), scheduled=(), trashed=(), fail_after_create=False, fail_history=False):
         self.stored_drafts = {}
         self.sent = list(sent)
         self.scheduled = list(scheduled)
+        self.trashed = list(trashed)
         self.fail_after_create = fail_after_create
         self.fail_history = fail_history
         self.create_calls = 0
@@ -39,6 +40,8 @@ class GmailService:
             raise TimeoutError("transport failure")
         if q == "in:scheduled":
             rows = self.scheduled
+        elif q == "in:trash":
+            rows = self.trashed
         elif q:
             rows = self.sent
         else:
@@ -48,7 +51,7 @@ class GmailService:
         if id in self.stored_drafts:
             return Request({"id": id, "message": {"id": "msg-" + id, "threadId": "thread-" + id,
                                                      "payload": {"headers": self.stored_drafts[id]}}})
-        for row in (*self.sent, *self.scheduled):
+        for row in (*self.sent, *self.scheduled, *self.trashed):
             if row.get("id") == id:
                 return Request(row)
         raise KeyError(id)
@@ -76,6 +79,13 @@ class FakeRepository:
         self._lock = Lock()
     def health_check(self): return True
     def campaign_rows(self, campaign_id): return list(self.rows)
+    def clinic_statuses(self, clinic_ids):
+        wanted = {int(cid) for cid in clinic_ids}
+        result = {cid: [] for cid in wanted}
+        for row in self.rows:
+            if row["clinic_id"] in wanted:
+                result[row["clinic_id"]].append(row)
+        return result
     def reserve_draft(self, **fields):
         with self._lock:
             existing = next((r for r in self.rows if r["clinic_id"] == fields["clinic_id"]
@@ -283,3 +293,54 @@ def test_identity_match_prefers_ids_then_email():
     state = GmailState(drafts=(ExistingDraft("d", "", ("clinic@example.jp",), "subject"),),
                        sent_today=(), scheduled=())
     assert classify_target_state(result.target, state=state) == "DRAFT_EXISTS"
+
+
+def test_trashed_message_is_distinguished_from_clear_and_blocks_new_draft():
+    from src.outreach.gmail_drafts import ExistingMessage
+    result = make_result()
+    state = GmailState(drafts=(), sent_today=(), scheduled=(),
+                       trashed=(ExistingMessage(message_id="t1", thread_id="thread-1",
+                                                recipients=("clinic@example.jp",), subject="subject"),))
+    assert classify_target_state(result.target, state=state) == "TRASHED_EXISTS"
+    service = GmailService(trashed=[{"id": "t1", "threadId": "thread-1", "payload": {"headers": [
+        {"name": "To", "value": "clinic@example.jp"},
+    ]}}])
+    outcome, service, repo = create(result, service=service)
+    assert outcome.status == "TRASHED_EXISTS"
+    assert service.create_calls == 0
+    assert not repo.rows
+
+
+def test_existing_sent_history_under_a_different_campaign_blocks_new_campaign_draft():
+    repo = FakeRepository()
+    repo.rows.append({
+        "clinic_id": 101, "campaign_id": "campaign-0", "outreach_id": "out-0",
+        "operation_id": "op-0", "idempotency_key": "key-0", "status": "SENT",
+        "gmail_draft_id": "",
+    })
+    outcome, service, _ = create(repository=repo)
+    assert outcome.status == "REVIEW"
+    assert "campaign-0" in outcome.reason
+    assert service.create_calls == 0
+    # Only the pre-existing campaign-0 row remains; no reservation was made for campaign-1.
+    assert len(repo.rows) == 1
+
+
+def test_same_clinic_review_status_under_different_campaign_also_blocks():
+    repo = FakeRepository()
+    repo.rows.append({
+        "clinic_id": 101, "campaign_id": "campaign-older", "outreach_id": "out-0",
+        "operation_id": "op-0", "idempotency_key": "key-0", "status": "REVIEW",
+        "gmail_draft_id": "",
+    })
+    outcome, service, _ = create(repository=repo)
+    assert outcome.status == "REVIEW"
+    assert service.create_calls == 0
+
+
+def test_history_under_the_same_campaign_is_not_affected_by_cross_campaign_check():
+    # Regression guard: the new cross-campaign check must not interfere with the
+    # existing same-campaign ledger reconciliation path.
+    outcome, service, repo = create()
+    assert outcome.status == "DRAFT_CREATED"
+    assert service.create_calls == 1
