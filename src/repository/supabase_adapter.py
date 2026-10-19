@@ -182,7 +182,7 @@ class SupabaseClinicRepository:
                         cur.execute(
                             "SELECT id FROM public.clinic_cloudrun_readonly WHERE "
                             "exclude_reason IN ('hospital','center') "
-                            "OR effective_facility_type='病院' "
+                            "OR is_hospital_or_center "
                             "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
                         )
                     else:

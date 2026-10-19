@@ -148,8 +148,12 @@ WITH projected AS (
          c.hot_status, c.treatments_json, c.signals_json, c.merge_hold,
          c.maps_presence_status, c.maps_profile_url, c.maps_match_method,
          c.maps_checked_at, c.exclude_reason,
-         substring(c.effective_json FROM '"facility_type"[[:space:]]*:[[:space:]]*"([^"]*)"')
-           AS effective_facility_type,
+         -- Reader-facing exposure must be a boolean, never the raw facility_type string
+         -- (see docs/cloud_run_read_only_supabase_role_proposal.md's JSON-derived output
+         -- contract: "expose only is_hospital_or_center boolean ... do not expose the raw
+         -- facility field"). The hospital/center exclusion only ever needs this boolean.
+         (substring(c.effective_json FROM '"facility_type"[[:space:]]*:[[:space:]]*"([^"]*)"') = '病院')
+           AS is_hospital_or_center,
          public.clinic_cloudrun_effective_projection(c.effective_json, c.id) AS _effective
   FROM public.clinics c
 )
@@ -163,7 +167,7 @@ SELECT
   (_effective->'values') AS effective_projection,
   (_effective->>'_marker') AS projection_marker,
   ((_effective->>'_valid')::boolean) AS projection_valid,
-  effective_facility_type
+  is_hospital_or_center
 FROM projected;
 
 ALTER VIEW public.clinic_cloudrun_readonly OWNER TO clinic_cloudrun_projection_owner;
