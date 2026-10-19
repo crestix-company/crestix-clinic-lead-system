@@ -1,57 +1,77 @@
 # Comdesk CRM snapshot diff import
 
-## Input contract and current validation boundary
+## CSV input contract
 
 The importer accepts the sales/progress export and the clinic/UUID export as a
-pair. It joins only by non-empty Comdesk UUID, requires one row per UUID in each
-file, then checks clinic name, address, and phone against both the other export
-and the already-approved clinic/UUID mapping. Two identity fields must agree;
-any populated-field conflict or ambiguous mapping goes to HOLD. It never
-generates a UUID or changes `clinic_id` / `common_clinic_id`.
+pair. It reads UTF-8 with an optional BOM, skips leading blank rows, trims a
+trailing tab from headers, and requires 30 columns on each populated row. The
+documented positions are checked against the header before any values are
+used. The pair is joined only by non-empty Comdesk UUID; duplicate or missing
+UUID rows are held. Clinic name, address, and phone must match at least two
+independent populated identity fields, and any populated disagreement is held.
+The importer never generates a UUID or changes `clinic_id` or
+`common_clinic_id`.
 
-`データ_20261019182717.csv` and `エクスポート_20261019182722.csv` were described as
-30-column files with 1,411 matching UUIDs, but the actual files were not present
-in this checkout. Therefore exact source header names, encoding, blank-value
-conventions, and the 1,411-row reconciliation have not been validated here.
-`read_snapshot_csv` requires an explicit map from observed headers and rejects
-files that do not have exactly 30 columns; no guessed map is shipped. The
-existing Comdesk 30-column import/export path is unchanged.
+The implementation maps the provided contract:
 
-Before production integration, add a strictly anonymized fixture made from the
-two originals after confirming the exact header map and encoding. Do not add
-the originals, patient/clinic data, UUIDs, or staff names to Git or a PR.
+- Sales export: UUID 1, progress 3, last call date 5, caller 6, call count 10,
+  filter project 13, project memberships 14, history 19.
+- Clinic export: UUID 1, name 3, address 7, phone 10, history 19. Manager and
+  email columns are validated by position but discarded immediately.
 
-## Snapshot and history semantics
+Projects are split on line breaks and de-duplicated. Each import stores the
+latest progress/call state and complete project membership list. A blank
+history field is treated as missing and does not erase a previously known
+history snapshot. If both exports have non-empty history text, the values must
+match.
 
-Sales progress, last-call date/agent, call count, and newline-separated project
-memberships are stored as the latest clinic snapshot. `履歴` is treated as a
-free-text snapshot. The first non-empty value is recorded as an initial text
-snapshot; subsequent changed text creates a before/after history-change row.
-These rows are not call events. Identical history creates no history row.
-Identical CSV pairs are skipped using both file SHA-256 values. A later pair
-with unchanged content only advances snapshot observation metadata. Older or
-ambiguous same-timestamp snapshots are held.
+The supplied original files are not present in the checkout. Tests therefore
+use synthetic anonymized CSV bytes constructed from the documented positions;
+they validate parser and workflow behavior but do not independently confirm
+the original 1,411-row files or every non-key header spelling.
 
-The additive migration creates batch, current snapshot, history-change, and
-HOLD tables. RLS is enabled and broad roles are revoked; `service_role` gets
-only SELECT/INSERT or SELECT/INSERT/UPDATE as needed, with no DELETE/TRUNCATE.
-It does not modify the clinic identity tables. Migration has not been applied
-to any database in this task.
+## Snapshot history semantics
 
-## Stable call-event identifiers
+`履歴` is a per-clinic free-text snapshot, not a set of call events. The first
+non-empty snapshot creates an initial before/after record. Later text changes
+create one change record; identical text creates none. No text is expanded into
+fabricated calls. A repeated file pair is skipped by its SHA-256 digest pair.
+Changed files with unchanged content update observation metadata without
+adding a history record. Older snapshots, inconsistent files, and ambiguous
+identity matches are held.
 
-The two supplied export descriptions identify only a per-clinic `履歴` text
-field, not a per-call key or update timestamp. Public Comdesk Lead pages confirm
-that an API is available for call/activity history integration, but do not
-publish endpoint fields or guarantee a stable call ID in the pages reviewed.
-Request the tenant-specific API schema or a dedicated call-history export from
-Comdesk and confirm a stable event ID plus update timestamp before adding true
-call-event synchronization. Until then, this feature stores text snapshots only.
+## Application path and safety
+
+The existing Comdesk 30-column importer and exporter remain available. The
+paired snapshot flow is a separate expander in the existing Comdesk import UI
+and calls the new repository preview/import methods. It is disabled unless
+`CLINIC_ENVIRONMENT=development`,
+`CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED=1`, and an explicit
+`CLINIC_COMDESK_SNAPSHOT_DEVELOPMENT_DB_NAME` are set. It also requires the
+`clinic_runtime` login and matching database name, then switches to the
+`clinic_comdesk_snapshot_runtime` no-login role. Preview performs SELECT only.
+
+Apply migrations in timestamp order: common clinic identity, identity ACL
+hardening, then Comdesk CRM snapshots. The snapshot migration is additive and
+uses RLS with narrowly scoped grants; runtime cannot DELETE/TRUNCATE or update
+clinic IDs or UUIDs. The paired importer is optional and remains inactive in
+environments without the development opt-in. Production rollout still needs a
+separate review of the deployment environment, grants, and rollback plan.
+
+## Call-event identifiers
+
+The documented files expose only per-clinic `履歴` text, not a stable call ID
+or event update timestamp. This implementation cannot guarantee call-level
+deduplication or edits. Obtain a tenant-specific Comdesk API schema or a
+dedicated call-history export and confirm stable event ID and update timestamp
+before adding event synchronization.
 
 ## Validation
 
-`tests/test_comdesk_snapshot_diff.py` uses synthetic, anonymized rows to cover
-UUID pairing, identity mismatch, multi-project memberships, first/identical/
-changed imports, UUID-less HOLD, stale timestamps, and explicit 30-column
-header mapping. These tests validate planning behavior, not a live PostgreSQL
-transaction or the unavailable original CSVs.
+`tests/test_comdesk_snapshot_diff.py` covers BOM, leading blank lines, the
+trailing-tab project header, positional mappings, paired UUID matching,
+identity mismatch, multiple projects, and history snapshot behavior. A local
+disposable PostgreSQL run also exercised initial import, identical-file
+reimport, changed history and project membership, and linking a Comdesk UUID
+to an existing clinic that previously had no Comdesk UUID. The test database
+used synthetic clinic data only.

@@ -6,7 +6,9 @@ creates clinic/common IDs, alters the UUID identity table, or emits call events.
 from __future__ import annotations
 
 import json
-from typing import Iterable, Mapping
+import os
+from datetime import datetime
+from typing import Iterable
 
 from src.master.comdesk_snapshot import ComdeskSnapshotPlan
 
@@ -31,7 +33,9 @@ def persist_snapshot_batch(
     if len(sales_file_sha256) != 64 or len(clinic_file_sha256) != 64:
         raise ValueError("both CSV SHA-256 digests are required")
     key = snapshot_batch_key(sales_file_sha256, clinic_file_sha256)
-    plans = list(plans)
+    plans = sorted(plans, key=lambda plan: (
+        plan.common_clinic_id is None, plan.common_clinic_id or 0, plan.comdesk_uuid,
+    ))
     if any(plan.source_batch_key != key for plan in plans):
         raise ValueError("plans must be generated for the same source file digest pair")
     if any(plan.source_snapshot_at != source_snapshot_at for plan in plans):
@@ -39,6 +43,16 @@ def persist_snapshot_batch(
     counts = {"inserted": 0, "updated": 0, "unchanged": 0, "held": 0, "history_changes": 0}
     cursor = connection.cursor()
     try:
+        cursor.execute("select session_user, current_database()")
+        session_user, current_database = cursor.fetchone()
+        expected_database = (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DEVELOPMENT_DB_NAME") or "").strip()
+        enabled = (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED") or "").strip().casefold()
+        if ((os.environ.get("CLINIC_ENVIRONMENT") or "").strip().casefold() != "development"
+                or enabled not in {"1", "true", "yes", "on"} or not expected_database):
+            raise RuntimeError("snapshot writes require explicit development opt-in")
+        if session_user != "clinic_runtime" or current_database != expected_database:
+            raise RuntimeError("snapshot writes require the clinic_runtime login")
+        cursor.execute("SET LOCAL ROLE clinic_comdesk_snapshot_runtime")
         cursor.execute(
             "select sales_file_sha256, clinic_file_sha256 from public.sales_entity_comdesk_import_batches where source_batch_key = %s",
             (key,),
@@ -79,12 +93,28 @@ def persist_snapshot_batch(
                 counts["unchanged"] += 1
                 continue
 
+            cursor.execute(
+                "select pg_advisory_xact_lock(hashtextextended('comdesk_snapshot:' || %s::text, 0))",
+                (plan.common_clinic_id,),
+            )
+            cursor.execute(
+                "select source_snapshot_at from public.sales_entity_comdesk_crm_snapshots "
+                "where common_clinic_id = %s for update",
+                (plan.common_clinic_id,),
+            )
+            concurrently_stored = cursor.fetchone()
+            if concurrently_stored:
+                stored_at = concurrently_stored[0]
+                incoming_at = datetime.fromisoformat(plan.source_snapshot_at.replace("Z", "+00:00"))
+                if stored_at >= incoming_at:
+                    raise RuntimeError("a concurrent snapshot import stored an equal or newer version; re-preview")
+
             # The UUID value originates in Comdesk. Link it only when no
             # identity exists yet; any pre-existing different pair aborts
             # the transaction rather than overwriting either identifier.
             cursor.execute(
                 "select common_clinic_id, comdesk_uuid from public.sales_entity_comdesk_identity "
-                "where common_clinic_id = %s or comdesk_uuid = %s for update",
+                "where common_clinic_id = %s or comdesk_uuid = %s",
                 (plan.common_clinic_id, plan.comdesk_uuid),
             )
             identity_rows = cursor.fetchall()
@@ -106,7 +136,7 @@ def persist_snapshot_batch(
                     "insert into public.sales_entity_identity_audit "
                     "(event_key, common_clinic_id, action, before_state, after_state, reason, actor) "
                     "values (%s, %s, 'COMDESK_UUID_LINKED', '{}'::jsonb, %s::jsonb, %s, %s) "
-                    "on conflict (event_key) do nothing",
+                    "on conflict do nothing",
                     ("comdesk-uuid-link:" + key + ":" + str(plan.common_clinic_id),
                      plan.common_clinic_id,
                      json.dumps({"comdesk_uuid": plan.comdesk_uuid}),
@@ -116,12 +146,13 @@ def persist_snapshot_batch(
 
             cursor.execute(
                 "insert into public.sales_entity_comdesk_crm_snapshots "
-                "(common_clinic_id, clinic_id, comdesk_uuid, progress, last_call_at, last_call_by, call_count, "
+                "(common_clinic_id, clinic_id, comdesk_uuid, progress, last_call_at, last_call_by, call_count, filter_project_name, "
                 "project_keys, history_text, history_sha256, source_snapshot_at, source_batch_key) "
-                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+                "values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "on conflict (common_clinic_id) do update set progress = excluded.progress, "
                 "last_call_at = excluded.last_call_at, last_call_by = excluded.last_call_by, "
-                "call_count = excluded.call_count, project_keys = excluded.project_keys, "
+                "call_count = excluded.call_count, filter_project_name = excluded.filter_project_name, "
+                "project_keys = excluded.project_keys, "
                 "history_text = excluded.history_text, history_sha256 = excluded.history_sha256, "
                 "source_snapshot_at = excluded.source_snapshot_at, source_batch_key = excluded.source_batch_key, "
                 "updated_at = now() where sales_entity_comdesk_crm_snapshots.clinic_id = excluded.clinic_id "
@@ -129,6 +160,7 @@ def persist_snapshot_batch(
                 (plan.common_clinic_id, plan.clinic_id, plan.comdesk_uuid,
                  plan.sales_state.get("progress"), plan.sales_state.get("last_call_at"),
                  plan.sales_state.get("last_call_by"), plan.sales_state.get("call_count"),
+                 plan.sales_state.get("filter_project_name"),
                  list(plan.project_keys), plan.history_text, plan.history_hash,
                  plan.source_snapshot_at, key),
             )
@@ -139,7 +171,7 @@ def persist_snapshot_batch(
                 previous_hash = hashlib.sha256(b"").hexdigest() if previous == "" else None
                 if previous is None:
                     cursor.execute(
-                        "select history_text, history_sha256 from public.sales_entity_comdesk_history_changes "
+                        "select current_history, current_history_sha256 from public.sales_entity_comdesk_history_changes "
                         "where common_clinic_id = %s order by source_snapshot_at desc, id desc limit 1",
                         (plan.common_clinic_id,),
                     )
