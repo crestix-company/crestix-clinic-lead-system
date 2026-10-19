@@ -20,6 +20,14 @@ from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_targe
 from src.repository.connection_diagnostics import retryable_read_connection_error
 
 
+# These person/schedule fields remain outside the Cloud Run READ ONLY projection until their
+# data-use approval is recorded. Blank only the READ ONLY export; ordinary Mac exports retain the
+# existing Comdesk behavior and source values.
+READ_ONLY_PENDING_EXPORT_HEADERS = frozenset({
+    "院長名", "休診日", "診療日", "午前始", "午前終", "午後始", "午後終",
+})
+
+
 def _verified_email_map(rows):
     """Build deterministic, de-duplicated Step 5 email values by clinic_id."""
     buckets = {}
@@ -468,6 +476,9 @@ class SupabaseRuntimeStore:
         """
         records = self.query_read_only_ui(filters, limit=100000, as_of=as_of)
         rows = self._attach_export_metadata(records, self._export_records(records))
+        for row in rows:
+            for header in READ_ONLY_PENDING_EXPORT_HEADERS:
+                row[COMDESK_EXPORT_HEADERS.index(header)] = ""
         import pandas as pd
         frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
         return {

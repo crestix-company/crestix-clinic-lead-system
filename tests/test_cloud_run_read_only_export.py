@@ -31,6 +31,8 @@ class _Cursor:
             original[COMDESK_HEADERS.index("UUID")] = "uuid-101"
             original[COMDESK_HEADERS.index("名前")] = "元データ医院"
             original[COMDESK_HEADERS.index("都道府県")] = "東京都"
+            original[COMDESK_HEADERS.index("院長名")] = "承認待ち医師"
+            original[COMDESK_HEADERS.index("午前始")] = "09:00"
             self.rows = [
                 (101, 7, json.dumps(original, ensure_ascii=False), "uuid-101")
             ]
@@ -73,14 +75,14 @@ def _store():
     return store
 
 
-def test_read_only_export_only_selects_allowlisted_metadata_tables_and_matches_normal_export():
+def test_read_only_export_preserves_comdesk_data_but_blanks_pending_person_and_schedule_fields():
     readonly = _store()
     normal = _store()
 
     readonly_output = readonly.export_read_only(Filters())
     normal_output = normal.export(Filters())
 
-    assert readonly_output == normal_output
+    assert readonly_output != normal_output
     assert len(readonly._conn.statements) == 3
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in readonly._conn.statements)
     references = "\n".join(readonly._conn.statements)
@@ -105,13 +107,24 @@ def test_read_only_export_only_selects_allowlisted_metadata_tables_and_matches_n
     assert csv_table.data.iloc[0][COMDESK_EXPORT_HEADERS.index("HPランク")] == "A"
     assert csv_table.data.iloc[1][COMDESK_EXPORT_HEADERS.index("HPランク")] == "B"
     assert len({101, 102}) == len(csv_table.data)  # source query has one row per Clinic ID
+    original_csv = load_table(normal_output["final_comdesk_import.csv"], "final_comdesk_import.csv")
+    assert original_csv.headers == csv_table.headers
+    assert original_csv.data.iloc[0][COMDESK_EXPORT_HEADERS.index("院長名")] == "承認待ち医師"
+    assert original_csv.data.iloc[0][COMDESK_EXPORT_HEADERS.index("午前始")] == "09:00"
+    assert csv_table.data.iloc[0][COMDESK_EXPORT_HEADERS.index("院長名")] == ""
+    assert csv_table.data.iloc[0][COMDESK_EXPORT_HEADERS.index("午前始")] == ""
+    for header in ("休診日", "診療日", "午前終", "午後始", "午後終"):
+        assert csv_table.data.iloc[0][COMDESK_EXPORT_HEADERS.index(header)] == ""
+    assert csv_table.data.iloc[0][COMDESK_EXPORT_HEADERS.index("名前")] == original_csv.data.iloc[0][COMDESK_EXPORT_HEADERS.index("名前")]
 
-    workbook = pd.read_excel(io.BytesIO(readonly_output["final_comdesk_import.xlsx"]), sheet_name="営業対象")
+    workbook = pd.read_excel(io.BytesIO(readonly_output["final_comdesk_import.xlsx"]), sheet_name="営業対象").fillna("")
     assert list(workbook.columns) == COMDESK_EXPORT_HEADERS
     assert len(workbook) == 2
     assert workbook.iloc[0]["名前"] == "元データ医院"
     assert workbook.iloc[0]["メールアドレス"] == "Clinic@example.jp"
     assert workbook.iloc[0]["UUID"] == "uuid-101"
+    assert workbook.iloc[0]["院長名"] == ""
+    assert workbook.iloc[0]["午前始"] == ""
 
 
 def test_read_only_export_does_not_write_sql():
