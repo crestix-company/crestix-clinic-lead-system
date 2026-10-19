@@ -435,6 +435,108 @@ to the Cloud Run service identity through the separately approved deployment pro
 secret version metadata and access policy without reading the secret value. Secret Manager
 registration and Cloud Run changes are prohibited in this task.
 
+### Cloud Run revision 00003-btp readiness (operator-reported 2026-10-19)
+
+The operator reports that the application container started, `CLINIC_READ_ONLY_UI=true`, both
+backend variables are set (their values were not inspected), `SUPABASE_RUNTIME_DB_URL` is
+unset, and no Supabase connection Secret is attached. A container start is not evidence of a
+successful database connection. The checked-in production routing baseline sets both
+`CLINIC_DATA_BACKEND=supabase` and `CLINIC_WRITE_BACKEND=supabase`; the revision values must be
+verified without printing any credential. For this deployment, both should resolve to
+`supabase`, and the runtime URL should be supplied as a Secret Manager reference. With the URL
+missing, the database-backed application cannot pass its required-runtime-config check; do not
+fall back to SQLite or a demo dataset.
+
+The Supabase project lookup confirms ref `hwdvyhunozporfuefteb`, name `clinic-lead-shadow`,
+region `ap-northeast-1`, and healthy status. This identifies the candidate database, not the
+Cloud Run target. No URL/secret value or Cloud Run service configuration was inspected. Obtain
+the exact shared Session Pooler host and connection details from that project's Supabase
+Dashboard Connect dialog; for shared Session mode, use port `5432` and the custom-role username
+format `<role>.<project-ref>`. Do not derive the pooler hostname from the region.
+
+### Targeted live catalog verification (SELECT-only, 2026-10-19)
+
+The following checks were executed against project `hwdvyhunozporfuefteb`; no DDL or DML was
+run:
+
+- `clinic_cloudrun_reader` exists, LOGIN, INHERIT, NOSUPERUSER, NOBYPASSRLS,
+  NOCREATEDB/NOCREATEROLE; `rolconfig` is empty (no database role default for
+  `default_transaction_read_only`), and there is no `VALID UNTIL` expiry.
+- Its only membership edge is the reverse edge: `postgres` is a member of
+  `clinic_cloudrun_reader` with ADMIN OPTION. This does not grant postgres privileges to the
+  reader; it lets the member side act as/manage that membership. The reader is not a member of
+  another role. INHERIT means future memberships granted to the reader would be inherited.
+- Among application tables/views, effective SELECT is currently only on `public.clinics` and
+  the two `extensions.pg_stat_statements*` views. The extension views remain inaccessible
+  because the reader lacks `extensions` USAGE. `public` USAGE is true; USAGE on `hp_research`,
+  `treatment`, `provenance`, `research`, `outreach`, and `email_research` is false.
+- All seven target tables exist, have RLS enabled and FORCE RLS disabled. No policy targets
+  `clinic_cloudrun_reader`; existing CRM and service policies remain scoped to their existing
+  roles. The reader currently has no SELECT on the six targets other than `public.clinics`.
+- No INSERT/UPDATE/DELETE/TRUNCATE/REFERENCES/TRIGGER privileges or ownership were found for
+  the reader in application schemas. CONNECT and TEMP are effective from PUBLIC; TEMP permits
+  temporary objects, not persistent writes to the clinic tables. No ACL was changed.
+- `public.clinic_email_enrichment` has 0 rows, so the proposed verified-email RLS behavior has
+  no live rows to exercise.
+
+The catalog tool connects with its own authorized inspection context, not as
+`clinic_cloudrun_reader`. Since the reader lacks access to six required objects and no reader
+credential/Session Pooler URL is available, neither RLS-visible nationwide counts nor live
+read-only transaction mode has been verified. The project-level catalog confirms only that the
+candidate project is reachable to the inspector.
+
+An inspector-context baseline query returned 164,199 rows in `public.clinics` (also 164,199
+unmerged and not held). This is a comparison baseline only, not evidence the reader can see
+those rows. No SELECT was executed as the reader because it lacks the necessary object/schema
+privileges and no reader connection is configured.
+
+### Connection and READ ONLY verification checklist for a separately authorized operator
+
+1. In the Cloud Run revision settings, verify the literal nonsecret values
+   `CLINIC_READ_ONLY_UI=true`, `CLINIC_DATA_BACKEND=supabase`, and
+   `CLINIC_WRITE_BACKEND=supabase`. Check only whether `SUPABASE_RUNTIME_DB_URL` references the
+   approved secret/version; never print or export its value.
+2. In the Supabase Dashboard Connect dialog for ref `hwdvyhunozporfuefteb`, select shared
+   Session Pooler. Confirm the exact host, port 5432, database, TLS settings, and role-formatted
+   username there. Do not guess the host or reuse `clinic_runtime` credentials.
+3. After separate DB approval and applying the proposed grants/policies, run the application
+   connection through a secure session without echoing the DSN. Return only booleans/counts:
+
+   ```sql
+   SELECT current_user, session_user,
+          current_setting('transaction_read_only') AS transaction_read_only,
+          current_setting('default_transaction_read_only') AS default_transaction_read_only;
+   SELECT count(*) AS nationwide_rows,
+          count(*) FILTER (WHERE merged_into IS NULL AND merge_hold IS FALSE) AS current_unmerged_rows
+   FROM public.clinics;
+   SELECT 'hp' AS source, count(*) FROM hp_research.clinic_hp_research
+   UNION ALL SELECT 'treatment', count(*) FROM treatment.clinic_treatment_research
+   UNION ALL SELECT 'treatment_status', count(*) FROM treatment.clinic_research_status
+   UNION ALL SELECT 'comdesk_originals', count(*) FROM provenance.comdesk_original_rows
+   UNION ALL SELECT 'templates', count(*) FROM provenance.templates
+   UNION ALL SELECT 'verified_email', count(*) FROM public.clinic_email_enrichment
+     WHERE status='VERIFIED_EMAIL' AND verified_on_official IS TRUE
+       AND NULLIF(BTRIM(email),'') IS NOT NULL;
+   ```
+
+   Run as `clinic_cloudrun_reader`; compare clinic counts to an independently approved
+   nationwide baseline. Do not emit clinic names, addresses, phone numbers, or email values in
+   logs/chat. Confirm the app's query/export failure path returns a safe error and never falls
+   back to SQLite, demo data, or a broader credential.
+4. Verify write denial using privilege catalog functions and the transaction read-only setting.
+   Do not attempt DML on production. Test actual denied DML only in an isolated disposable DB.
+5. In that isolated DB, create email fixtures for valid VERIFIED_EMAIL + official=true + a
+   nonblank address, and invalid status, false/null official flag, and null/blank/whitespace
+   addresses. Connect as the reader and verify only the valid fixture is visible and exportable.
+   Never insert fixtures into the live empty table.
+
+For Secret Manager, an authorized operator should enter the DSN through the approved secure
+secret interface, pin a numbered secret version in the Cloud Run secret reference, and grant
+only the Cloud Run service identity `roles/secretmanager.secretAccessor` on that secret. Do not
+put the URL in `--set-env-vars`, shell arguments, shell history, logs, source control, or chat.
+Cloud Run secret configuration creates a new revision; applying it requires separate approval
+and is outside this audit.
+
 ## A担当 handoff / approvals
 
 1. C/A: retain the audit/Email KPI/HP Job/Step 6 bypass and confirm the seven-table dependency.
