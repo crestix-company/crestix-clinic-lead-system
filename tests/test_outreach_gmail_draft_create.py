@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import stat
-from datetime import date
+from datetime import date, datetime
 from email import policy
 from email.parser import BytesParser
 from pathlib import Path
@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from scripts import outreach_gmail_create_drafts as draft_cli
+from src.outreach import email_template_v2
 from src.outreach.email_template_v2 import ARTICLE_PRESENT, SUBJECT, TEMPLATE_VERSION, PreviewInput, render_preview
 from src.outreach.gmail_drafts import (
     BATCH_CONFIRMATION,
@@ -28,6 +29,21 @@ AS_OF = date(2026, 10, 16)
 ARTICLE = "https://clinic.mynavi.jp/article/chofushi_orthodontics/"
 DETAIL = "https://clinic.mynavi.jp/clinic/ihff0m1f1d12/"
 SCHEDULE = ("2026-10-19 10:00", "2026-10-20 14:00")
+
+
+class _FixedDateTime(datetime):
+    """Freezes only `email_template_v2.datetime.now()` so SCHEDULE above stays "future"
+    relative to AS_OF regardless of the real wall clock; no production behavior changes."""
+
+    @classmethod
+    def now(cls, tz=None):
+        fixed = cls(2026, 10, 16, 9, 0)
+        return fixed.astimezone(tz) if tz else fixed
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    monkeypatch.setattr(email_template_v2, "datetime", _FixedDateTime)
 
 
 class _Response:

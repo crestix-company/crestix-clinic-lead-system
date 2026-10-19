@@ -2,6 +2,7 @@ from datetime import date, datetime
 
 import pytest
 
+from src.outreach import email_template_v2
 from src.outreach.email_template_v2 import (
     ARTICLE_ABSENT,
     ARTICLE_PRESENT,
@@ -22,6 +23,24 @@ ARTICLE = "https://clinic.mynavi.jp/article/chofushi_orthodontics/"
 DETAIL = "https://clinic.mynavi.jp/clinic/ihff0m1f1d12/"
 OTHER_ARTICLE = "https://clinic.mynavi.jp/article/hirakatashi_dental/"
 MASTER = frozenset({ARTICLE, OTHER_ARTICLE})
+
+
+class _FixedDateTime(datetime):
+    """Freezes only `email_template_v2.datetime.now()`; `as_of`/business-day semantics
+    in `_validate_schedule` are completely untouched -- this file's fixtures were written
+    against a 2026-10-16 "today", and the real wall clock has since passed the schedule
+    dates they use as "future", which started failing these tests for a reason unrelated
+    to any of their actual assertions."""
+
+    @classmethod
+    def now(cls, tz=None):
+        fixed = cls(2026, 10, 16, 9, 0)
+        return fixed.astimezone(tz) if tz else fixed
+
+
+@pytest.fixture(autouse=True)
+def _frozen_clock(monkeypatch):
+    monkeypatch.setattr(email_template_v2, "datetime", _FixedDateTime)
 
 
 def base(**kwargs):
