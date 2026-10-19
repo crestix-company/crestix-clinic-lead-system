@@ -52,7 +52,7 @@ from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvaria
 from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
 from src.master.data_paths import production_db_path
 
-NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
+NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","GAS・CRM連携","詳細設定"]
 READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
 _STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -1504,6 +1504,8 @@ def main():
     read_only = read_only_ui_mode()
     with st.sidebar:
         nav_options = NAV[:2] if read_only else NAV
+        if read_only:
+            nav_options = nav_options + ["GAS・CRM連携"]
         nav = st.radio("メニュー", nav_options, key="navigation")
         with st.expander("開発・確認用", expanded=False):
             demo = st.toggle("サンプルモード", key="sample_mode")
@@ -1557,6 +1559,9 @@ def main():
     elif nav == "メール送付文章":
         from src.outreach_ui import outreach_email_page
         outreach_email_page(store, demo)
+    elif nav == "GAS・CRM連携":
+        from src.gas_crm_ui import gas_crm_readonly_page
+        gas_crm_readonly_page()
     else:
         advanced_ui(store, demo)
 
