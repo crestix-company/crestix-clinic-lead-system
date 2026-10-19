@@ -1238,6 +1238,79 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
         with st.spinner("Comdeskデータを照合・登録しています…"):
             result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
         report_import(result)
+    render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)
+
+
+def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
+    """Separate, opt-in path for the two 30-column CRM snapshot exports.
+
+    The legacy one-file Comdesk import above remains untouched. This UI never
+    shows source-row values and stays disabled unless explicitly enabled in a
+    development process.
+    """
+    with st.expander("Comdesk営業状態・履歴の差分取込（2ファイル）", expanded=False):
+        environment = (os.environ.get("CLINIC_ENVIRONMENT") or "").strip().casefold()
+        enabled = (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED") or "").strip().casefold() in {
+            "1", "true", "yes", "on",
+        }
+        development_db = (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DEVELOPMENT_DB_NAME") or "").strip()
+        if environment != "development" or not enabled or not development_db:
+            st.caption("CLINIC_ENVIRONMENT=development、CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED=1、および開発DB名の明示が必要です。")
+            return
+        if demo:
+            st.info("デモ・読み取り専用では差分取込を利用できません。")
+            return
+        repository = write_repositories_for(store).clinics
+        if not hasattr(repository, "preview_comdesk_snapshot_pair"):
+            st.warning("この書込バックエンドは対のComdeskスナップショット取込に未対応です。Supabase開発DBでMigration適用後に利用してください。")
+            return
+        st.caption("データCSVと医院情報CSVをUUIDで結合します。医院情報は画面に表示せず、医院ID/共通医院ID・UUIDの不一致や曖昧一致はHOLDします。")
+        sales_upload = st.file_uploader("データ_YYYYMMDDHHMMSS.csv（営業状態・プロジェクト・履歴）",
+                                        type=["csv"], key=key_prefix+"_snapshot_sales")
+        clinic_upload = st.file_uploader("エクスポート_YYYYMMDDHHMMSS.csv（医院情報・UUID・履歴）",
+                                         type=["csv"], key=key_prefix+"_snapshot_clinic")
+        if not sales_upload or not clinic_upload:
+            st.caption("2ファイルを選択するとREAD ONLYプレビューが利用できます。")
+            return
+        sales_bytes, clinic_bytes = sales_upload.getvalue(), clinic_upload.getvalue()
+        fingerprint = hashlib.sha256(sales_bytes + b"\\0" + clinic_bytes).hexdigest()
+        preview_key = key_prefix + "_snapshot_preview"
+        if st.button("取込内容をREAD ONLY確認", key=key_prefix+"_snapshot_preview_button"):
+            try:
+                with st.spinner("CSV構造と医院IDを照合しています…"):
+                    summary = repository.preview_comdesk_snapshot_pair(
+                        sales_bytes, clinic_bytes, sales_upload.name, clinic_upload.name,
+                    )
+                st.session_state[preview_key] = {"fingerprint": fingerprint, "summary": summary}
+            except Exception as exc:
+                st.session_state.pop(preview_key, None)
+                st.error(f"プレビューを停止しました: {exc}")
+        preview = st.session_state.get(preview_key)
+        if not preview or preview.get("fingerprint") != fingerprint:
+            return
+        summary = preview["summary"]
+        metrics = st.columns(4)
+        metrics[0].metric("新規スナップショット", f"{summary['insert']:,}件")
+        metrics[1].metric("更新", f"{summary['update']:,}件")
+        metrics[2].metric("変更なし", f"{summary['unchanged']:,}件")
+        metrics[3].metric("HOLD", f"{summary['hold']:,}件")
+        if summary.get("hold_reasons"):
+            st.dataframe(pd.DataFrame([{"理由": reason, "件数": count}
+                                       for reason, count in summary["hold_reasons"].items()]),
+                         hide_index=True, use_container_width=True)
+        st.warning("UUID・医院IDは既存値を変更しません。HOLD行は取込対象から除外し、履歴差分は通話イベントとして作成しません。")
+        if st.button("プレビュー内容を再照合して差分取込", type="primary",
+                     key=key_prefix+"_snapshot_apply",
+                     disabled=summary["insert"] + summary["update"] + summary["unchanged"] == 0):
+            try:
+                with st.spinner("最新の医院ID・スナップショットと再照合して取り込んでいます…"):
+                    result = repository.import_comdesk_snapshot_pair(
+                        sales_bytes, clinic_bytes, sales_upload.name, clinic_upload.name,
+                    )
+                st.session_state.pop(preview_key, None)
+                st.success(f"取込完了: 新規 {result['insert']}件、更新 {result['update']}件、変更なし {result['unchanged']}件、HOLD {result['hold']}件")
+            except Exception as exc:
+                st.error(f"取込をロールバックしました: {exc}")
 
 
 def render_comdesk_sync_export(store, demo):

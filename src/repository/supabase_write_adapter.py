@@ -1384,6 +1384,22 @@ class SupabaseClinicWriteRepository:
                 result[int(row_number)] = int(source_id)
         return result
 
+    def preview_comdesk_snapshot_pair(self, sales_bytes, clinic_bytes,
+                                      sales_filename, clinic_filename):
+        """READ ONLY preview of the opt-in paired 30-column snapshot import."""
+        from src.master.comdesk_snapshot_import import preview_comdesk_snapshot_pair
+        return preview_comdesk_snapshot_pair(
+            self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
+        )
+
+    def import_comdesk_snapshot_pair(self, sales_bytes, clinic_bytes,
+                                     sales_filename, clinic_filename):
+        """Apply an explicitly enabled development snapshot import in one transaction."""
+        from src.master.comdesk_snapshot_import import import_comdesk_snapshot_pair
+        return import_comdesk_snapshot_pair(
+            self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
+        )
+
     def import_comdesk(self, table, mapping=None):
         """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
 
