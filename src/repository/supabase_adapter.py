@@ -173,8 +173,10 @@ class SupabaseClinicRepository:
                     cur.execute("SET statement_timeout = DEFAULT")
         return self._excluded_ids_cache
 
-    def _where(self, filters, as_of):
-        return sf.where(filters, as_of, excluded_ids=self._excluded_clinic_ids())
+    def _where(self, filters, as_of, read_only_ui=False):
+        return sf.where(
+            filters, as_of, excluded_ids=self._excluded_clinic_ids(), read_only_ui=read_only_ui
+        )
 
     @staticmethod
     def _from_sql(filters):
@@ -283,8 +285,8 @@ class SupabaseClinicRepository:
             records.append(self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories))
         return records
 
-    def _candidate_ids(self, filters, as_of):
-        sql, args = self._where(filters, as_of)
+    def _candidate_ids(self, filters, as_of, read_only_ui=False):
+        sql, args = self._where(filters, as_of, read_only_ui=read_only_ui)
         if sf.needs_post_filter(filters):
             need_hp = bool(filters.site_types)
             cols = ["id"]
@@ -338,7 +340,7 @@ class SupabaseClinicRepository:
                 # 9k excluded-id array to Postgres makes the otherwise fast query noisier than
                 # returning those ~1k ids and applying the exact same cached set locally. This
                 # remains one DB round trip and preserves ordering byte-for-byte.
-                sql, args = sf.where(filters, as_of, excluded_ids=[])
+                sql, args = sf.where(filters, as_of, excluded_ids=[], read_only_ui=read_only_ui)
                 cur.execute(
                     f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id",
                     args,
@@ -348,22 +350,22 @@ class SupabaseClinicRepository:
             cur.execute(f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id", args)
             return [r[0] for r in cur.fetchall()]
 
-    def count(self, filters=None, as_of=None):
+    def count(self, filters=None, as_of=None, read_only_ui=False):
         filters = filters or Filters(active_only=False, hp_only=False)
         sf.raise_if_unsupported(filters)
         if sf.needs_post_filter(filters) or filters.effective_ranks:
-            return len(self._candidate_ids(filters, as_of))
-        sql, args = self._where(filters, as_of)
+            return len(self._candidate_ids(filters, as_of, read_only_ui=read_only_ui))
+        sql, args = self._where(filters, as_of, read_only_ui=read_only_ui)
         with self._conn.cursor() as cur:
             cur.execute(f"SELECT count(*) FROM {self._from_sql(filters)} WHERE {sql}", args)
             return cur.fetchone()[0]
 
-    def query(self, filters=None, limit=100, offset=0, as_of=None):
+    def query(self, filters=None, limit=100, offset=0, as_of=None, read_only_ui=False):
         filters = filters or Filters(active_only=False, hp_only=False)
         sf.raise_if_unsupported(filters)
         limit = min(100000, max(0, int(limit)))
         offset = max(0, int(offset))
-        ids = self._candidate_ids(filters, as_of)
+        ids = self._candidate_ids(filters, as_of, read_only_ui=read_only_ui)
         page_ids = ids[offset:offset + limit]
         return self._batch_get(page_ids)  # P0-2: batched, preserves page_ids order
 

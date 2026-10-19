@@ -119,10 +119,18 @@ class SupabaseRuntimeStore:
     def query(self, filters=None, limit=100, offset=0, as_of=None):
         return self.repositories.clinics.query(filters, limit, offset, as_of)
     @_retry_closed_read_connection
+    def query_read_only_ui(self, filters=None, limit=100, offset=0, as_of=None):
+        return self.repositories.clinics.query(
+            filters, limit, offset, as_of, read_only_ui=True
+        )
+    @_retry_closed_read_connection
     def records_by_ids(self, clinic_ids, *, page_size=500):
         return self.repositories.clinics.records_by_ids(clinic_ids, page_size=page_size)
     @_retry_closed_read_connection
     def count(self, filters=None, as_of=None): return self.repositories.clinics.count(filters, as_of)
+    @_retry_closed_read_connection
+    def count_read_only_ui(self, filters=None, as_of=None):
+        return self.repositories.clinics.count(filters, as_of, read_only_ui=True)
     @_retry_closed_read_connection
     def funnel(self, filters, as_of=None): return self.repositories.clinics.funnel(filters, as_of)
     @_retry_closed_read_connection
@@ -441,6 +449,24 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def export(self, filters, template_id=None, as_of=None):
         records = self.query(filters, limit=100000, as_of=as_of)
+        rows = self._attach_export_metadata(records, self._export_records(records))
+        import pandas as pd
+        frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
+        return {
+            "final_comdesk_import.xlsx": xlsx_bytes({"営業対象": frame}),
+            "final_comdesk_import.csv": csv_bytes(COMDESK_EXPORT_HEADERS, rows),
+        }
+
+    @_retry_closed_read_connection
+    def export_read_only(self, filters, template_id=None, as_of=None):
+        """Render the standard sales export using only the READ ONLY allowlist.
+
+        Keep source Comdesk values/mappings and verified-email metadata identical to the
+        ordinary exporter. The caller deliberately avoids ``revision()`` because that cache
+        token reads provenance.change_history, which is outside the Cloud Run reader scope.
+        This method performs no writes and does not inspect job, audit, or delivery state.
+        """
+        records = self.query_read_only_ui(filters, limit=100000, as_of=as_of)
         rows = self._attach_export_metadata(records, self._export_records(records))
         import pandas as pd
         frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
