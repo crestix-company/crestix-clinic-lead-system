@@ -15,6 +15,10 @@ def _text(row: Mapping, key: str) -> str:
     return str(row.get(key) or "").strip()
 
 
+def _uuid(row: Mapping) -> str:
+    return _text(row, "uuid") or _text(row, "canonical_comdesk_uuid")
+
+
 def _normalized(value: str) -> str:
     value = unicodedata.normalize("NFKC", value).casefold()
     return "".join(ch for ch in value if not ch.isspace() and ch not in "-‐‑‒–—―〒、，,")
@@ -26,9 +30,23 @@ def _identity_conflicts(source: Mapping, candidate: Mapping) -> tuple[str, ...]:
         left, right = _normalized(_text(source, key)), _normalized(_text(candidate, key))
         if left and right and left != right:
             conflicts.append(label)
-    left_code, right_code = _text(source, "medical_code"), _text(candidate, "medical_code")
+    left_code = _text(source, "medical_code") or _text(source, "medical_key")
+    right_code = _text(candidate, "medical_code") or _text(candidate, "medical_key")
     if left_code and right_code and left_code != right_code:
-        conflicts.append("medical institution code")
+        types = {_text(source, "medical_type"), _text(candidate, "medical_type")}
+        same_location = all(
+            _normalized(_text(source, key))
+            and _normalized(_text(source, key)) == _normalized(_text(candidate, key))
+            for key in ("name", "address", "phone")
+        )
+        # A different official code is expected across a verified medical/dental
+        # pair. Other code conflicts remain a hold even when names are similar.
+        if types != {"医科", "歯科"} or not same_location:
+            conflicts.append("medical institution code")
+    candidate_uuid = _text(candidate, "uuid")
+    canonical_uuid = _text(candidate, "canonical_comdesk_uuid")
+    if candidate_uuid and canonical_uuid and candidate_uuid != canonical_uuid:
+        conflicts.append("clinic UUID disagrees with canonical entity UUID")
     return tuple(conflicts)
 
 
@@ -54,7 +72,7 @@ def resolve_clinic_identity(source: Mapping, candidates: Sequence[Mapping]) -> I
             return IdentityDecision("HOLD", None, None, rule, "複数clinic/entity候補が競合", "")
         target = rows[0]
         conflicts = _identity_conflicts(source, target)
-        candidate_uuid = _text(target, "uuid")
+        candidate_uuid = _uuid(target)
         if conflicts or (source_uuid and candidate_uuid and source_uuid != candidate_uuid):
             reason = "医院情報がUUIDと矛盾: " + ", ".join(conflicts) if conflicts else "既存UUIDを上書きする照合"
             return IdentityDecision("HOLD", int(target["id"]), next(iter(entities), None), rule, reason, candidate_uuid)
@@ -63,13 +81,13 @@ def resolve_clinic_identity(source: Mapping, candidates: Sequence[Mapping]) -> I
                                 "既存医院を再利用", candidate_uuid or source_uuid)
 
     if source_uuid:
-        exact = [row for row in candidates if _text(row, "uuid") == source_uuid]
+        exact = [row for row in candidates if _uuid(row) == source_uuid]
         if exact:
             return choose(exact, "COMDESK_UUID")
         # A candidate known to share the common entity cannot claim a second UUID.
         same_entity = [row for row in candidates if source.get("common_clinic_id") is not None
                        and row.get("common_clinic_id") == source.get("common_clinic_id")
-                       and _text(row, "uuid") and _text(row, "uuid") != source_uuid]
+                       and _uuid(row) and _uuid(row) != source_uuid]
         if same_entity:
             return IdentityDecision("HOLD", None, int(source["common_clinic_id"]), "COMDESK_UUID",
                                     "同一共通医院IDに異なるUUID", "")
@@ -128,22 +146,48 @@ def validate_entity_uuid_assignments(rows: Sequence[Mapping]) -> None:
         raise ValueError("HOLD: one Comdesk UUID maps to multiple common clinic IDs")
 
 
-def project_export_rows(rows: Sequence[Mapping], project_key: str) -> list[dict]:
-    """Return one row per clinic entity in a project, retaining existing UUIDs."""
-    selected: dict[tuple[str, int], Mapping] = {}
+def project_export_rows(
+    rows: Sequence[Mapping],
+    project_key: str,
+    canonical_uuid_by_entity: Mapping[int, str] | None = None,
+) -> list[dict]:
+    """Return one row per clinic/entity in one project with its canonical UUID.
+
+    The canonical map is read from sales_entity_comdesk_identity. Missing UUIDs stay
+    blank; existing clinic UUIDs are accepted only when they agree with that map.
+    """
+    canonical_uuid_by_entity = canonical_uuid_by_entity or {}
+    selected: dict[tuple[str, tuple[str, int]], Mapping] = {}
+    resolved_uuids: dict[tuple[str, tuple[str, int]], str] = {}
     for row in rows:
         common_id = row.get("common_clinic_id")
         # Unlinked legacy rows stay separate until identity review approves linkage.
         identity = ("entity", int(common_id)) if common_id is not None else ("clinic", int(row["id"]))
-        key = (project_key, identity[1])
+        key = (project_key, identity)
+        existing_uuid = _text(row, "uuid")
+        canonical_uuid = _text(row, "canonical_comdesk_uuid")
+        if common_id is not None:
+            canonical_uuid = canonical_uuid_by_entity.get(int(common_id), canonical_uuid)
+        if existing_uuid and canonical_uuid and existing_uuid != canonical_uuid:
+            raise ValueError("HOLD: existing clinic UUID conflicts with canonical entity UUID")
+        resolved_uuid = canonical_uuid or existing_uuid
+        previous_uuid = resolved_uuids.get(key, "")
+        if previous_uuid and resolved_uuid and previous_uuid != resolved_uuid:
+            raise ValueError("HOLD: project entity has conflicting Comdesk UUIDs")
+        if resolved_uuid:
+            resolved_uuids[key] = resolved_uuid
         if key in selected:
             previous = selected[key]
-            if _text(previous, "uuid") and _text(row, "uuid") and _text(previous, "uuid") != _text(row, "uuid"):
-                raise ValueError("HOLD: project entity has conflicting Comdesk UUIDs")
-            if not _text(previous, "uuid") and _text(row, "uuid"):
+            if not _uuid(previous) and resolved_uuid:
                 selected[key] = row
         else:
             selected[key] = row
-    result = [dict(row) for row in selected.values()]
+    result = []
+    for key, row in selected.items():
+        item = dict(row)
+        # CSV consumers keep using the established uuid field. It reflects the
+        # canonical identity mapping without mutating public.clinics.uuid.
+        item["uuid"] = resolved_uuids.get(key, "")
+        result.append(item)
     validate_entity_uuid_assignments(result)
     return result

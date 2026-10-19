@@ -3,6 +3,7 @@
 
 create table if not exists public.sales_entities (
   common_clinic_id bigint generated always as identity primary key,
+  seed_clinic_id bigint unique references public.clinics(id) on delete restrict,
   canonical_name text not null default '',
   canonical_address text not null default '',
   canonical_phone text not null default '',
@@ -81,6 +82,7 @@ create table if not exists public.sales_entity_resolution_queue (
 
 create table if not exists public.sales_entity_identity_audit (
   id bigint generated always as identity primary key,
+  event_key text not null unique,
   common_clinic_id bigint not null references public.sales_entities(common_clinic_id) on delete restrict,
   action text not null,
   before_state jsonb not null default '{}'::jsonb,

@@ -148,6 +148,34 @@ class SupabaseRuntimeStore:
     def reviews(self, limit=100): return self.repositories.provenance.reviews(limit)
     @_retry_closed_read_connection
     def comdesk_linkage_state(self): return self.repositories.provenance.comdesk_linkage_state()
+
+    @_retry_closed_read_connection
+    def comdesk_identity_for_clinics(self, clinic_ids):
+        """Read common IDs and canonical Comdesk UUIDs for CSV export; no clinic write."""
+        ids = sorted({int(cid) for cid in clinic_ids if int(cid) > 0})
+        if not ids:
+            return {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT to_regclass('public.sales_entity_clinics'), "
+                "to_regclass('public.sales_entity_comdesk_identity')"
+            )
+            if not all(cur.fetchone()):
+                return {}
+            cur.execute(
+                "SELECT m.clinic_id,m.common_clinic_id,i.comdesk_uuid "
+                "FROM public.sales_entity_clinics m "
+                "LEFT JOIN public.sales_entity_comdesk_identity i USING(common_clinic_id) "
+                "WHERE m.clinic_id=ANY(%s::bigint[])",
+                (ids,),
+            )
+            return {
+                int(clinic_id): {
+                    "common_clinic_id": int(common_id),
+                    "canonical_comdesk_uuid": str(comdesk_uuid or "").strip(),
+                }
+                for clinic_id, common_id, comdesk_uuid in cur.fetchall()
+            }
     @_retry_closed_read_connection
     def setting(self, key, default=None): return self.repositories.settings.get(key, default)
 

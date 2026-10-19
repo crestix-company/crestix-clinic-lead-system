@@ -1107,6 +1107,161 @@ class SupabaseClinicWriteRepository:
         }
 
     @staticmethod
+    def _common_identity_schema_available(cur):
+        cur.execute(
+            "SELECT to_regclass('public.sales_entity_clinics'), "
+            "to_regclass('public.sales_entities'), "
+            "to_regclass('public.sales_entity_comdesk_identity')"
+        )
+        return all(cur.fetchone())
+
+    @classmethod
+    def _attach_common_identity(cls, cur, candidates, uuids=()):
+        """Load canonical identity metadata without copying it into clinics.uuid."""
+        if not cls._common_identity_schema_available(cur):
+            return
+        if uuids:
+            cur.execute(
+                "SELECT c.id,c.base_json,c.uuid,c.medical_key,c.tel_match_key,c.name_norm,"
+                "c.name_prefix,c.address_norm,c.prefecture,c.medical_type,c.merge_hold,c.source_as_of_date "
+                "FROM public.sales_entity_comdesk_identity i "
+                "JOIN public.sales_entity_clinics m USING (common_clinic_id) "
+                "JOIN public.clinics c ON c.id=m.clinic_id "
+                "WHERE i.comdesk_uuid=ANY(%s::text[]) AND c.merged_into IS NULL",
+                (list(uuids),),
+            )
+            names = (
+                "id", "base_json", "uuid", "medical_key", "tel_match_key", "name_norm",
+                "name_prefix", "address_norm", "prefecture", "medical_type", "merge_hold",
+                "source_as_of_date",
+            )
+            for values in cur.fetchall():
+                row = dict(zip(names, values))
+                row["id"] = int(row["id"])
+                row["base_json"] = row["base_json"] if isinstance(row["base_json"], dict) else json.loads(row["base_json"])
+                row["uuid"] = row.get("uuid") or ""
+                row["medical_key"] = row.get("medical_key") or ""
+                row["source_as_of_date"] = str(row.get("source_as_of_date") or "")
+                candidates[row["id"]] = row
+
+        if not candidates:
+            return
+        ids = sorted(candidates)
+        cur.execute(
+            "SELECT m.clinic_id,m.common_clinic_id,i.comdesk_uuid "
+            "FROM public.sales_entity_clinics m "
+            "LEFT JOIN public.sales_entity_comdesk_identity i USING (common_clinic_id) "
+            "WHERE m.clinic_id=ANY(%s::bigint[]) FOR UPDATE OF m",
+            (ids,),
+        )
+        for clinic_id, common_id, canonical_uuid in cur.fetchall():
+            row = candidates[int(clinic_id)]
+            row["common_clinic_id"] = int(common_id)
+            row["canonical_comdesk_uuid"] = str(canonical_uuid or "")
+
+    @staticmethod
+    def _match_common_identity(record, candidates):
+        """Resolve imports through the canonical UUID table before creating a clinic."""
+        from src.master.clinic_identity import resolve_clinic_identity
+        from src.master.matching import MasterMatch
+
+        linked = [row for row in candidates if row.get("common_clinic_id") is not None]
+        if not linked:
+            return None, False
+        source = {
+            "uuid": record.get("uuid", ""),
+            "medical_code": medical_key(record),
+            "name": record.get("clinic_name", ""),
+            "address": record.get("address", ""),
+            "phone": record.get("phone", ""),
+            "medical_type": record.get("medical_type", ""),
+        }
+        targets = []
+        for row in linked:
+            base = row.get("base_json") or {}
+            if not isinstance(base, dict):
+                base = json.loads(base)
+            targets.append({
+                **row,
+                "name": base.get("clinic_name", ""),
+                "address": base.get("address", ""),
+                "phone": base.get("phone", ""),
+                "medical_code": row.get("medical_key", ""),
+                "medical_type": row.get("medical_type") or base.get("medical_type", ""),
+            })
+        decision = resolve_clinic_identity(source, targets)
+        if decision.status == "NEW":
+            return None, False
+        if decision.status == "MATCH" and decision.clinic_id is not None:
+            canonical_uuid_match = bool(
+                record.get("uuid") and decision.preserved_comdesk_uuid == str(record["uuid"]).strip()
+                and any(row.get("canonical_comdesk_uuid") == decision.preserved_comdesk_uuid
+                        for row in linked if int(row["id"]) == decision.clinic_id)
+            )
+            return MasterMatch("MATCHED", [decision.clinic_id], decision.reason, 100), canonical_uuid_match
+        ids = sorted({int(row["id"]) for row in linked})
+        return MasterMatch("AMBIGUOUS", ids, decision.reason, 100), False
+
+    @classmethod
+    def _ensure_comdesk_common_identities(cls, cur, clinic_ids):
+        """Batch-link imported clinic rows; never copy a canonical UUID to clinics.uuid."""
+        if not cls._common_identity_schema_available(cur):
+            return
+        clinic_ids = sorted({int(cid) for cid in clinic_ids if cid is not None and int(cid) > 0})
+        if not clinic_ids:
+            return
+        cur.execute(
+            "INSERT INTO public.sales_entities"
+            "(seed_clinic_id,canonical_name,canonical_address,canonical_phone) "
+            "SELECT c.id,COALESCE(c.base_json->>'clinic_name',''),COALESCE(c.base_json->>'address',''),"
+            "COALESCE(c.base_json->>'phone','') FROM public.clinics c "
+            "WHERE c.id=ANY(%s::bigint[]) AND NOT EXISTS("
+            "SELECT 1 FROM public.sales_entity_clinics m WHERE m.clinic_id=c.id) "
+            "ON CONFLICT(seed_clinic_id) DO NOTHING",
+            (clinic_ids,),
+        )
+        cur.execute(
+            "INSERT INTO public.sales_entity_clinics(clinic_id,common_clinic_id,match_rule,match_evidence) "
+            "SELECT e.seed_clinic_id,e.common_clinic_id,'COMDESK_IMPORT',"
+            "jsonb_build_object('source','comdesk_import','seed_clinic_id',e.seed_clinic_id) "
+            "FROM public.sales_entities e WHERE e.seed_clinic_id=ANY(%s::bigint[]) "
+            "ON CONFLICT(clinic_id) DO NOTHING",
+            (clinic_ids,),
+        )
+        cur.execute(
+            "INSERT INTO public.sales_entity_identity_audit"
+            "(event_key,common_clinic_id,action,after_state,reason,actor) "
+            "SELECT 'entity-link:'||seed_clinic_id::text,common_clinic_id,'ENTITY_LINKED',"
+            "jsonb_build_object('clinic_id',seed_clinic_id),"
+            "'First Comdesk import linkage','comdesk_import' FROM public.sales_entities "
+            "WHERE seed_clinic_id=ANY(%s::bigint[]) "
+            "ON CONFLICT(event_key) DO NOTHING",
+            (clinic_ids,),
+        )
+        cur.execute(
+            "INSERT INTO public.sales_entity_comdesk_identity"
+            "(common_clinic_id,comdesk_uuid,source,evidence,verified_at) "
+            "SELECT m.common_clinic_id,c.uuid,'comdesk_import',"
+            "jsonb_build_object('clinic_id',c.id,'source','existing_clinic_uuid'),now() "
+            "FROM public.clinics c JOIN public.sales_entity_clinics m ON m.clinic_id=c.id "
+            "WHERE c.id=ANY(%s::bigint[]) AND btrim(c.uuid)<>'' "
+            "ON CONFLICT(common_clinic_id) DO NOTHING",
+            (clinic_ids,),
+        )
+        cur.execute(
+            "SELECT c.id,c.uuid,i.comdesk_uuid FROM public.clinics c "
+            "JOIN public.sales_entity_clinics m ON m.clinic_id=c.id "
+            "JOIN public.sales_entity_comdesk_identity i USING(common_clinic_id) "
+            "WHERE c.id=ANY(%s::bigint[]) AND btrim(c.uuid)<>'' AND c.uuid<>i.comdesk_uuid LIMIT 1",
+            (clinic_ids,),
+        )
+        conflict = cur.fetchone()
+        if conflict:
+            raise ValueError(
+                f"HOLD: clinic {conflict[0]} UUID differs from canonical UUID; no reassignment performed"
+            )
+
+    @staticmethod
     def _prefetch_comdesk_candidates(cur, records):
         """Load every DB row that the canonical Comdesk matcher could ask for.
 
@@ -1199,6 +1354,7 @@ class SupabaseClinicWriteRepository:
             )
             collect(cur.fetchall())
 
+        SupabaseClinicWriteRepository._attach_common_identity(cur, candidates, uuids)
         return list(candidates.values())
 
     @staticmethod
@@ -1321,7 +1477,8 @@ class SupabaseClinicWriteRepository:
                 started = time.perf_counter()
                 next_temp_id = -1
                 for index, raw, record in prepared:
-                    match = match_record(matcher, record)
+                    common_match, canonical_uuid_match = self._match_common_identity(record, candidate_rows)
+                    match = common_match or match_record(matcher, record)
                     timestamp = now()
                     resolved_cid = None
 
@@ -1336,7 +1493,8 @@ class SupabaseClinicWriteRepository:
                             if value and not base.get(key)
                         })
                         state["base_json"] = base
-                        state["uuid"] = state.get("uuid", "") or record.get("uuid", "")
+                        if not canonical_uuid_match:
+                            state["uuid"] = state.get("uuid", "") or record.get("uuid", "")
                         state["last_seen_at"] = timestamp
                         current_as_of = str(state.get("source_as_of_date") or "")
                         incoming_as_of = str(record.get("as_of", "") or "")
@@ -1380,6 +1538,7 @@ class SupabaseClinicWriteRepository:
                         "record": record,
                         "match": match,
                         "clinic_id": resolved_cid,
+                        "canonical_uuid_match": canonical_uuid_match,
                         "created_at": timestamp,
                     })
                     counts[match.status] += 1
@@ -1468,6 +1627,10 @@ class SupabaseClinicWriteRepository:
                     if clinic_id is None:
                         return None
                     return temp_to_real.get(int(clinic_id), int(clinic_id))
+
+                self._ensure_comdesk_common_identities(
+                    cur, [actual_id(item["clinic_id"]) for item in decisions if item["clinic_id"] is not None]
+                )
 
                 started = time.perf_counter()
                 history_rows = [
