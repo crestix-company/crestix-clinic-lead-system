@@ -30,7 +30,7 @@ ALLOWED_READS = (
     "hp_research.clinic_hp_research",
     "treatment.clinic_treatment_research",
     "treatment.clinic_research_status",
-    "provenance.comdesk_original_rows",
+    "provenance.clinic_cloudrun_comdesk_rows",
     "provenance.templates",
     "public.clinic_email_enrichment",
 )
@@ -79,6 +79,22 @@ def main():
                     "Projection owner must be NOLOGIN/NOBYPASSRLS/NOSUPERUSER")
             _assert(not owns_clinics, "Projection owner must not own public.clinics")
             _assert(not reader_is_member, "Reader must not be able to SET ROLE to projection owner")
+            cur.execute("SELECT has_column_privilege(current_user,'provenance.comdesk_original_rows','row_json','SELECT'), "
+                        "has_table_privilege(current_user,'provenance.comdesk_original_rows','INSERT'), "
+                        "has_table_privilege(current_user,'provenance.comdesk_original_rows','UPDATE'), "
+                        "has_table_privilege(current_user,'provenance.comdesk_original_rows','DELETE'), "
+                        "has_table_privilege(current_user,'provenance.comdesk_original_rows','TRUNCATE'), "
+                        "has_table_privilege(current_user,'public.clinics','INSERT'), "
+                        "has_table_privilege(current_user,'public.clinics','UPDATE'), "
+                        "has_table_privilege(current_user,'public.clinics','DELETE'), "
+                        "has_table_privilege(current_user,'public.clinics','TRUNCATE')")
+            _assert(cur.fetchone() == (False,)*9, "Reader retains raw Comdesk or DML privileges")
+            for relation in ALLOWED_READS:
+                for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
+                    cur.execute("SELECT has_table_privilege(current_user,%s,%s)",
+                                (relation, privilege))
+                    _assert(cur.fetchone()[0] is False,
+                            f"Reader retains {privilege} on {relation}")
             cur.execute("""
                 SELECT EXISTS (
                   SELECT 1 FROM information_schema.columns
@@ -88,12 +104,18 @@ def main():
             """)
             _assert(not cur.fetchone()[0], "Inferred age projection is present in the READ ONLY view")
 
+        CaptureCursor.statements = []
         hp = SupabaseHpResearchRepository(conn)
         clinics = SupabaseClinicRepository(conn, hp)
         store = SupabaseRuntimeStore(SimpleNamespace(clinics=clinics, hp_research=hp))
 
         default_filters = Filters()
         rows = store.query_read_only_ui(default_filters, limit=100, offset=0)
+        _assert(store.count_read_only_ui(default_filters) == 9, "READ ONLY home count differs")
+        _assert("東京都" in store.prefectures(read_only_ui=True), "READ ONLY prefectures missing")
+        _assert(store.ad_count_max(read_only_ui=True) >= 0, "READ ONLY ad count failed")
+        _assert(store.web_research_metrics(read_only_ui=True)["url_acquired"] >= 2,
+                "READ ONLY HP summary failed")
         ids = [row["id"] for row in rows]
         _assert(ids == [1, 2, 3, 4, 5, 6, 7, 8, 1001], f"Nationwide eligible IDs differ: {ids}")
         _assert(len(ids) == len(set(ids)), "Clinic IDs duplicated in result list")
@@ -137,6 +159,14 @@ def main():
         _assert(csv_frame.iloc[0]["院長名"] == "", "Pending source doctor name was output")
         _assert(csv_frame.iloc[0]["休診日"] == "" and csv_frame.iloc[0]["診療日"] == "",
                 "Pending source schedule values were output")
+        _assert(csv_frame.iloc[0]["備考"] == "" and csv_frame.iloc[0]["履歴"] == "",
+                "Unapproved free-text Comdesk values were output")
+        try:
+            store._export_records([{"id": 1000, "uuid": "uuid-hospital"}], read_only=True)
+        except ValueError as exc:
+            _assert("Comdesk元行の投影列" in str(exc), "Malformed Comdesk projection failed incorrectly")
+        else:
+            raise AssertionError("Malformed Comdesk row was exported instead of failing closed")
         _assert(xlsx_frame.iloc[0]["名前"] == "Original Name", "XLSX lost original Comdesk precedence")
         _assert(xlsx_frame.iloc[0]["Tel1"] == "03-1234-5678", "XLSX lost original phone precedence")
         _assert(xlsx_frame.iloc[0]["院長名"] == "" and xlsx_frame.iloc[0]["午前始"] == "",
@@ -147,10 +177,15 @@ def main():
         sql = "\n".join(CaptureCursor.statements).casefold()
         statements = [statement.lstrip().split(None, 1)[0].rstrip(";").upper()
                       for statement in CaptureCursor.statements]
-        _assert(all(keyword in {"SELECT", "SET"} for keyword in statements),
+        _assert(all(keyword in {"SELECT", "SET", "WITH"} for keyword in statements),
                 f"READ ONLY path executed a non-read statement: {statements}")
+        _assert(not re.search(r"\b(insert\s+into|update\s+[a-z_]|delete\s+from|alter\s+table|create\s+table|drop\s+table|truncate\s+table)\b", sql),
+                "READ ONLY application SQL contains a write operation")
         _assert("effective_json" not in sql, "READ ONLY application SQL referenced effective_json")
-        _assert(not re.search(r"\bfrom\s+public\.clinics\b", sql), "READ ONLY application directly selected public.clinics")
+        _assert(not re.search(r"\b(from|join)\s+public\.clinics\b", sql),
+                "READ ONLY application directly selected public.clinics")
+        _assert(not re.search(r"\b(from|join)\s+provenance\.comdesk_original_rows\b", sql),
+                "READ ONLY application selected raw Comdesk rows")
         for forbidden in ("provenance.change_history", "provenance.match_reviews", "provenance.source_records",
                           "research.research_jobs", "research.research_results", "email_delivery", "email_kpi"):
             _assert(forbidden not in sql, f"Out-of-scope table was referenced: {forbidden}")

@@ -91,12 +91,13 @@ class SupabaseHpResearchRepository:
             return []
         return row[0]
 
-    def batch_metrics(self):
+    def batch_metrics(self, *, read_only_ui=False):
+        source = ("public.clinic_cloudrun_readonly" if read_only_ui else "public.clinics")
         with self._conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 WITH url_clinics AS (
-                  SELECT id FROM public.clinics WHERE hp_url<>'' OR maps_website_url<>''
+                  SELECT id FROM {source} WHERE hp_url<>'' OR maps_website_url<>''
                 ), joined AS (
                   SELECT u.id, r.fetch_status, r.treatment_categories
                   FROM url_clinics u LEFT JOIN hp_research.clinic_hp_research r ON r.clinic_id=u.id

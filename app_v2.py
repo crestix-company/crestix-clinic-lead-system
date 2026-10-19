@@ -125,11 +125,13 @@ def store_for(path=None, runtime_config_key=None):
     return store
 
 
-def show_web_research_metrics(store):
+def show_web_research_metrics(store, *, read_only=False):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
         if hasattr(store, "web_research_metrics"):
-            counts = store.web_research_metrics()
+            counts = (store.web_research_metrics(read_only_ui=True)
+                      if read_only and getattr(store, "is_supabase_runtime", False)
+                      else store.web_research_metrics())
         else:
             counts = web_research_metrics(store.path)
     except BatchMetricInvariantError as exc:
@@ -465,10 +467,10 @@ def _reconcile_cloud_hp_job(jid):
         )
 
 
-def ad_count_options(store):
+def ad_count_options(store, *, read_only=False):
     # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
     if getattr(store, "is_supabase_runtime", False):
-        top = store.ad_count_max()
+        top = store.ad_count_max(read_only_ui=True) if read_only else store.ad_count_max()
     else:
         with store.connect() as c:
             top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
@@ -955,13 +957,13 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.header("クリニック営業マスター")
         st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
         filters = Filters(active_only=False, hp_only=False)
-        total = store.count(filters)
-        with_uuid = store.count(replace(filters, uuid_mode="あり"))
+        total = store.count_read_only_ui(filters)
+        with_uuid = store.count_read_only_ui(replace(filters, uuid_mode="あり"))
         st.subheader("現在の医院データ")
         columns = st.columns(2)
         columns[0].metric("医院マスター（営業対象外施設を除く）", f"{total:,}件")
         columns[1].metric("既存UUIDあり", f"{with_uuid:,}件")
-        show_web_research_metrics(store)
+        show_web_research_metrics(store, read_only=True)
         st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
         return
 
@@ -1420,14 +1422,14 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
     st.subheader("Webサイト調査状況")
-    show_web_research_metrics(store)
+    show_web_research_metrics(store, read_only=read_only)
 
     scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
     # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
     # 取りこぼさないよう、既定値だけを全国Clinic Masterへ変更（表示順・選択肢はそのまま）。
     scope = st.selectbox("対象データ", scope_options, index=scope_options.index(SCOPE_ALL), format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
     if getattr(store, "is_supabase_runtime", False):
-        prefs = store.prefectures()
+        prefs = store.prefectures(read_only_ui=True) if read_only else store.prefectures()
     else:
         with store.connect() as c:
             prefs = [r[0] for r in c.execute(
@@ -1468,7 +1470,7 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         prefectures=pref, departments=deps, sales_pairs=sales_pairs, scope=scope,
     )
     ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
-    ad_min = st.selectbox("広告・集客施策数", ad_count_options(store), format_func=ad_count_label, key="simple_sales_ad_min")
+    ad_min = st.selectbox("広告・集客施策数", ad_count_options(store, read_only=read_only), format_func=ad_count_label, key="simple_sales_ad_min")
     companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
 
     cols = st.columns(4)

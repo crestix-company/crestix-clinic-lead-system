@@ -28,16 +28,16 @@ class _Cursor:
         normalized = " ".join(str(sql).split())
         self.connection.statements.append(normalized)
         self.connection.parameters.append(params)
-        if "provenance.comdesk_original_rows" in normalized:
+        if ("provenance.comdesk_original_rows" in normalized
+                or "provenance.clinic_cloudrun_comdesk_rows" in normalized):
             original = [""] * len(COMDESK_HEADERS)
             original[COMDESK_HEADERS.index("UUID")] = "uuid-101"
             original[COMDESK_HEADERS.index("名前")] = "元データ医院"
             original[COMDESK_HEADERS.index("都道府県")] = "東京都"
             original[COMDESK_HEADERS.index("院長名")] = "承認待ち医師"
             original[COMDESK_HEADERS.index("午前始")] = "09:00"
-            self.rows = [
-                (101, 7, json.dumps(original, ensure_ascii=False), "uuid-101")
-            ]
+            row = (101, 7, json.dumps(original, ensure_ascii=False), "uuid-101")
+            self.rows = [(*row, True) if "clinic_cloudrun_comdesk_rows" in normalized else row]
         elif "provenance.templates" in normalized:
             self.rows = [(7, json.dumps(COMDESK_HEADERS, ensure_ascii=False), json.dumps({}))]
         elif "public.clinic_email_enrichment" in normalized:
@@ -89,7 +89,8 @@ def test_read_only_export_preserves_comdesk_data_but_blanks_pending_person_and_s
     assert len(readonly._conn.statements) == 3
     assert all(statement.lstrip().upper().startswith("SELECT") for statement in readonly._conn.statements)
     references = "\n".join(readonly._conn.statements)
-    assert "provenance.comdesk_original_rows" in references
+    assert "provenance.clinic_cloudrun_comdesk_rows" in references
+    assert "provenance.comdesk_original_rows" not in references
     assert "provenance.templates" in references
     assert "public.clinic_email_enrichment" in references
     assert readonly._conn.parameters[2] == ([101, 102],)
@@ -167,8 +168,9 @@ def test_read_only_home_and_sales_ui_skip_internal_reads_and_revision():
     source = Path("app_v2.py").read_text(encoding="utf-8")
     workflow = source[source.index("def simple_workflow_ui"):source.index("def simple_sales_ui")]
     readonly_home = workflow[workflow.index("if read_only:"):workflow.index("write_disabled =")]
-    assert "store.count(" in readonly_home
-    assert "show_web_research_metrics(store)" in readonly_home
+    assert "store.count_read_only_ui(" in readonly_home
+    assert "show_web_research_metrics(store, read_only=True)" in readonly_home
+    assert "store.count(" not in readonly_home
     for forbidden in ("store.metrics(", "email_repositories_for_ui", "store.latest_completed_hp_job(",
                       "store.reviews(", "store.history(", "comdesk_sync_candidates("):
         assert forbidden not in readonly_home.casefold()
@@ -178,6 +180,9 @@ def test_read_only_home_and_sales_ui_skip_internal_reads_and_revision():
     assert "None if read_only else store.revision()" in sales
     assert "store.export_read_only(sales_filters)" in sales
     assert "listing(store, sales_filters, \"simple_sales_results\", read_only=read_only)" in sales
+    assert "store.prefectures(read_only_ui=True) if read_only" in sales
+    assert "ad_count_options(store, read_only=read_only)" in sales
+    assert "show_web_research_metrics(store, read_only=read_only)" in sales
     assert "readonly_export_over_limit = read_only and count > 100000" in sales
     assert "disabled=demo or count == 0 or readonly_export_over_limit" in sales
     assert "一部のみのファイルを誤って出力しないよう" in sales
