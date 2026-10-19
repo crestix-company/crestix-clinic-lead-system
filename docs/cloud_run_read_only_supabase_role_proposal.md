@@ -21,7 +21,7 @@ The target Cloud Run secret was not inspected, so this project cannot be confirm
 deployed Cloud Run target. Do not apply until `INHERIT`, its membership edge to `postgres`, and
 the existing broad clinic SELECT are explicitly accepted or separately remediated.
 
-> **Current execution status at PR head `fcf34c59fd38d37f6c3b9d2ef0d8c0aaae174eb2`:** the
+> **Execution-status warning recorded at PR head `fcf34c59fd38d37f6c3b9d2ef0d8c0aaae174eb2`:** the
 > earlier direct `public.clinics` GRANT snippets below are historical proposals and are
 > superseded. In particular, do not execute any snippet granting `effective_json`. The selected
 > path is the isolated projection view described in “Final effective_json projection decision”;
@@ -1454,3 +1454,269 @@ owner-rights narrow view, but its SQL is not execution-ready until extraction sa
 column projection, PostgreSQL version/options, performance, helper-role isolation, owner/manager
 data use, and the age-field exclusion are validated/approved. No database, role, policy,
 migration, secret or Cloud Run change was made.
+
+## PR #121 final SQL and role alignment (review of head `9f57d72bd97fa72139c10e7b9470d7af09a922e5`)
+
+This addendum supersedes the earlier statement that C had not delivered an implementation and
+the earlier “no JSON output column” contract. PR #121 supplies a dedicated view, a `SECURITY
+INVOKER` projection function, a Reader-only repository branch, and a local PostgreSQL fixture.
+The PR remains Draft. Its CI check reports pass; the isolated fixture was also run here against
+a fresh local PostgreSQL 17.11 cluster only. It completed the view setup and passed its RLS row
+scope, raw JSON denial, malformed/NULL/NUL handling, key allowlist and Reader write-privilege
+checks, but then **failed its final marker-collision assertion**. No production DB was used.
+
+### PR #121 contract
+
+`public.clinic_cloudrun_readonly` is an owner-rights `security_barrier` view with the following
+new projection columns:
+
+| Column | Type in PR #121 fixture | Purpose |
+|---|---|---|
+| `effective_projection` | `jsonb` | Allowlisted keys only: `facility_type`, `hp_production_companies`, `epark_url`, `epark_contract`, and `treatment_status`. It is a bounded JSON projection, not the source `effective_json`. |
+| `projection_marker` | `text` | Temporary token used to restore escaped NULs in projected string values. It currently incorporates an MD5 of the complete source JSON. |
+| `projection_valid` | `boolean` | False for NULL, malformed, non-object, and unsupported JSON. |
+| `effective_facility_type` | `text` | Regex-extracted facility type used by the unchanged hospital exclusion. |
+
+The view also passes through typed clinic columns. In the PR fixture their types are: IDs
+`bigint`; names, contact/address, status, dates, and URLs `text`; flags `boolean`; rank/count
+fields `text`/`integer`; age probability `double precision`; department/treatment/signal payloads
+`jsonb`. These are inherited from the actual `public.clinics` table in the migration, not casts
+in the view. Production preflight must compare every view attribute/type to the production
+catalog before applying; the fixture is not proof of live schema types.
+
+The application query capture in the verifier uses the view in place of `public.clinics` and
+keeps the other six relations from the seven-source allowlist. PR #121's proposed migration
+does not grant those other six relations; their grants and RLS policies remain a separate,
+unchanged part of PR #118. PR #121 also changes READ ONLY Comdesk output to blank doctor-name
+and schedule columns while ordinary mode remains untouched. The view does **not** expose
+`owner_name` or `manager_name`, but the Reader still receives `row_json` on
+`provenance.comdesk_original_rows`; therefore blanking those values in the UI is not equivalent
+to denying the Reader direct access to the original values.
+
+### Owner/RLS and effect on CRM
+
+The proposed migration creates or validates `clinic_cloudrun_projection_owner` as `NOLOGIN`,
+`NOINHERIT`, `NOBYPASSRLS`, non-superuser, with no role memberships and not owner of
+`public.clinics`. Its only direct table privilege is column SELECT on the view's source columns;
+one additive `FOR SELECT` policy grants it the nationwide row scope. The owner-rights view then
+uses this role's privileges, while existing restrictive RLS policies still apply. In the
+isolated fixture a restrictive policy hid clinic `id=999`; the Reader saw 10 rows and could not
+select the source table or `effective_json`. The fixture shows no need to alter any CRM role or
+CRM policy.
+
+The Reader-side intended delta is: grant SELECT on the projection view; revoke its direct
+table-wide clinic SELECT and all per-column clinic SELECT; grant no direct clinic columns. The
+six other source-table grants, email columns, and verified-only email RLS condition stay as in
+PR #118. This intentionally removes the Reader's existing all-41-column access and must be
+approved as having no other consumer. A preflight must stop if PUBLIC/inherited privileges still
+give direct clinic access; the migration's own post-revoke `has_table_privilege` and
+`has_any_column_privilege` guard is useful for that case.
+
+### Blocking SQL and data issues
+
+The PR #121 migration is **not execution-ready** pending these changes and approvals:
+
+1. The projection helper role is newly created if absent, but the SQL does not record whether it
+   was newly created. Its rollback must never drop a pre-existing role. If it already exists,
+   preflight must also check existing grants, schema CREATE, object ownership, and all membership
+   edges, then stop rather than silently normalize those privileges.
+2. `CREATE OR REPLACE FUNCTION public.clinic_cloudrun_effective_projection(...)` can replace an
+   existing same-signature function. Preflight must check for collision; use create-only semantics
+   or stop if any function already exists. Its default PUBLIC execute exposure should be revoked
+   explicitly, with EXECUTE retained only for the roles required by the tested view/app path.
+3. The migration temporarily grants schema CREATE to the helper and revokes it. Afterward it must
+   assert `has_schema_privilege(helper, 'public', 'CREATE') = false`, including PUBLIC-derived
+   privilege, before approval.
+4. The marker uses `md5(source_json)`, which exposes a deterministic content fingerprint to the
+   Reader. Replace it with a token derived only from the already-visible clinic ID (and fail
+   closed on collision), or otherwise keep any content-derived token out of the Reader view.
+   The fixture's final collision check is currently invalid: it computes the marker from one
+   source string, inserts that marker into the source, then calls a function that hashes the
+   changed source and therefore produces a different marker. Fix the fixture and rerun it.
+5. `age_probability` is included in both helper grants and the Reader view, although the
+   preceding approval design recommends omitting age inference by default. Remove it from the
+   Reader view and READ ONLY adapter, or obtain explicit data-owner approval for the value,
+   display, and filter before any DB grant.
+6. `effective_facility_type` is regex-extracted from raw text and returned as a string, while the
+   selected minimization contract was a boolean. Test its result against the established
+   nationwide exclusion set on a production-sized isolated copy; preferably return only the
+   boolean needed by the filter. Do not assume the regex is equivalent for whitespace, escaped
+   values, duplicate/nested keys, or malformed JSON without that comparison.
+7. `provenance.comdesk_original_rows.row_json` is a whole original row, not a column-level
+   projection. It may contain doctor names, schedules, notes/history, or other template fields.
+   Approve all exported fields explicitly or replace the direct Reader grant with an export view
+   exposing only approved output columns. The same review must cover all values preserved from
+   `headers_json`/`mapping_json`. The current UI blanks alone do not protect these DB values.
+8. The view passes through `maps_match_method`, `maps_checked_at`, `age_probability`, and other
+   fields beyond the core clinic filters. Confirm each is required/approved or remove it from
+   the view and helper column grant.
+
+The isolated test confirms useful properties but is not a production-sized test and does not
+prove production RLS composition, role grants, schema permissions, query latency, or data parity.
+It was run on local PostgreSQL 17.11, and ended nonzero due to the broken collision assertion;
+therefore the full isolated test gate remains **failed** until corrected and rerun.
+
+### Credential, target, apply order and status
+
+The audited candidate project ref is `hwdvyhunozporfuefteb`; the Dashboard Session Pooler
+details recorded earlier identify that same project. Cloud Run's `SUPABASE_RUNTIME_DB_URL` is
+reported absent and the local runtime URL/file checks are also absent. No Reader password or
+usable DSN was available, so no authentication attempt was made and credential usability remains
+unknown. A credential owner must confirm it through the approved secret channel; if none exists,
+new credential issuance needs separate DBA approval. Do not use the admin account.
+
+After explicit approvals, the safe order is:
+
+1. Confirm the deployed Cloud Run target is this project and approve existing
+   `clinic_cloudrun_reader` as the runtime identity.
+2. Correct the PR #121 blockers above, rerun the loopback-only fixture and app SQL-capture tests,
+   compare production view column types and RLS policy composition in read-only preflight, and
+   approve the sensitive fields and Comdesk `row_json` contract.
+3. In one DBA-controlled transaction: create the new helper only if absent; grant its exact
+   source-column SELECT and schema usage; add the unique helper SELECT policy; create the safe
+   function/view and transfer view ownership; grant the Reader view SELECT; revoke only the
+   Reader's direct clinic table/column SELECT; apply the six remaining PR #118 SELECT/RLS deltas
+   and email predicate. Abort on any name/role/ACL/type mismatch. Do not alter CRM roles/policies.
+4. As the Reader over the Dashboard-confirmed Session Pooler, verify identity, default and
+   transaction read-only settings, national count, all seven source relations plus the view
+   substitution, filters/export counts, verified-email visibility, raw clinic JSON denial,
+   direct clinics denial, and persistent write ACLs. Test denied DML only in the isolated DB.
+5. Only after DB and app acceptance, A separately registers the approved Reader DSN as the
+   `SUPABASE_RUNTIME_DB_URL` Secret Manager version and handles IAM/Cloud Run under its own
+   approval. Never set the postgres admin DSN.
+
+Rollback: disable the runtime credential through a separately approved operational action; then
+revoke Reader view SELECT, drop only the new view/function/policy and revoke helper source grants.
+Drop the helper role only if the change record proves this change created it and no dependencies
+remain. Do not restore the former 41-column Reader SELECT by default; do not remove any CRM
+grant/policy. Secret/Cloud Run rollback is separate from DB rollback.
+
+**Current decision: NO-GO for production DB application.** PR #121 improves the view/RLS model,
+and the isolated fixture confirms the core owner-RLS behavior, but the collision test fails and
+age exposure, deterministic marker leakage, raw Comdesk `row_json` access, missing credentials,
+and target-project approval remain unresolved. PR #118 stays Draft; no production database,
+Cloud Run, Secret Manager, password, IAM, or migration action was performed.
+
+## Phase 1 application gate: PR #121 implementation review (2026-10-19)
+
+PR #121 head reviewed: `9f57d72bd97fa72139c10e7b9470d7af09a922e5`; it is Open/Draft and its
+GitHub Actions check passed. This is an exact reconciliation of its migration and adapter with
+the PR #118 proposal; it supersedes earlier provisional key lists in this document.
+
+### Exact view shape and privilege delta
+
+The migration file is `supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql`.
+It creates/validates `clinic_cloudrun_projection_owner`, grants that role SELECT on 35 source
+columns of `public.clinics` including `effective_json`, adds a helper-only SELECT policy, creates
+`public.clinic_cloudrun_effective_projection(text,bigint)` as `SECURITY INVOKER`, and creates
+`public.clinic_cloudrun_readonly` with `security_barrier=true`, owned by the helper. The function
+returns only five keys in `effective_projection jsonb`: `facility_type`,
+`hp_production_companies`, `epark_url`, `epark_contract`, and `treatment_status`. It also returns
+`projection_marker text`, `projection_valid boolean`, and `effective_facility_type text`; the
+remaining clinic columns are pass-throughs with their underlying types. The Reader is granted
+view SELECT, then its table-wide and every per-column direct clinic SELECT are revoked. No direct
+Reader SELECT on `effective_json` remains in the isolated fixture.
+
+PR #121's source objects remain the seven approved base tables, with the view substituting for
+`public.clinics`: `hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`,
+`treatment.clinic_research_status`, `provenance.comdesk_original_rows`, `provenance.templates`,
+and `public.clinic_email_enrichment` are unchanged. PR #121's migration itself does not grant
+those six objects; the corresponding PR #118 per-column grants and SELECT policies remain
+required. No out-of-scope audit, history, Email KPI, HP Job, or Step 6 object is added by the
+reviewed PR #121 query path.
+
+### Isolated security test result
+
+The PR #121 fixture and migration were run only on a disposable loopback PostgreSQL 17.11
+cluster. Before the final assertion, the fixture passed its checks for the helper's
+NOLOGIN/NOBYPASSRLS/non-owner/non-member posture, the restrictive base-table RLS policy, Reader
+visibility, direct `public.clinics` and `effective_json` denial, allowlisted JSON projection,
+and NULL/malformed/NUL/wrong-type data handling. Additional local Reader checks confirmed
+10 rows visible with the fixture's restrictive `id=999` row hidden, all seven target relations
+SELECTable at column level, INSERT/UPDATE/DELETE/TRUNCATE false, and
+`transaction_read_only=on`. The synthetic email fixture exposed only its qualifying verified
+row. The test cluster has been stopped.
+
+**The full fixture is not green:** `tests/fixtures/cloudrun_readonly_projection_pg.sql` ends
+with “Marker collision did not fail closed.” That assertion computes an MD5 marker from one
+source value, inserts the marker into a changed source value, then calls a function whose marker
+is based on the changed value. The expected collision cannot occur by this construction. Fix the
+test and rerun the fixture; do not count the current run as a full pass. The marker currently
+includes `md5(source_json)` and is returned to Reader, creating an unnecessary deterministic
+content fingerprint. Replace it with a clinic-ID-only token plus collision fail-closed behavior,
+or keep the token internal to the function result path.
+
+### Remaining design conflicts / SQL corrections
+
+1. **Age inference:** PR #121 includes `age_probability` in both helper source grants and the
+   Reader view; its adapter restores `age_probability_under_59` for READ ONLY display/filter.
+   PR #118's default is to exclude this inferred personal attribute. Remove the field and its
+   filter from the projection or obtain explicit data-owner approval before DB application.
+2. **Comdesk row JSON:** PR #118 still grants `provenance.comdesk_original_rows.row_json` to the
+   Reader. PR #121 blanks doctor-name and schedule fields in the UI export, but this does not
+   prevent the Reader from directly selecting those values or other full-row values. Approve
+   the complete original Comdesk row contents for this IAP audience, or replace the grant/path
+   with an approved narrow export projection. The function's UI filtering is not a DB boundary.
+3. **Projection minimum:** `treatment_status` is returned in the allowlisted JSON but is not
+   currently consumed by the READ ONLY adapter; remove it unless a captured SELECT/use proves
+   necessity. `age_probability`, `maps_match_method`, and `maps_checked_at` also need explicit
+   purpose approval or removal. `effective_facility_type` is a regex-extracted string rather
+   than the previously specified boolean; test parity with the established national exclusion
+   set on a production-sized isolated copy before accepting it.
+4. **Function and schema ACL:** the migration uses `CREATE OR REPLACE FUNCTION` without a
+   same-signature collision guard and does not revoke default `PUBLIC` EXECUTE. Use create-only
+   semantics/abort on collision, explicitly revoke PUBLIC execution, grant execution only to
+   the roles required by the tested view path, and verify the helper has no effective schema
+   CREATE after the temporary grant is revoked.
+5. **Existing helper role:** if `clinic_cloudrun_projection_owner` already exists, do not treat
+   it as newly created. Preflight its prior ACLs, schema CREATE, object ownership, and memberships;
+   rollback may drop it only when the change record proves this change created it.
+6. **Reader revoke:** the Reader-only REVOKE is deliberate and leaves other CRM roles/policies
+   untouched. Approve that no separate consumer depends on the role's former all-41-column clinic
+   SELECT. Abort if preflight finds a PUBLIC or inherited path that still gives Reader direct
+   clinic access.
+
+### Connection and approvals
+
+The candidate project `hwdvyhunozporfuefteb` matches the prior Clinic Master catalog audit and
+the previously Dashboard-confirmed Session Pooler project identity. The deployed Cloud Run
+target is still not proven: its `SUPABASE_RUNTIME_DB_URL` is reported unset. No runtime DSN,
+local Reader credential file, or Reader password was available in the current environment; no
+authentication attempt was made. Credential usability is therefore **unknown**, not failed.
+The credential owner must confirm a dedicated Reader credential through the approved secure
+channel; if absent, new credential issuance/password setting requires separate explicit DBA
+approval. Do not use the administrator account.
+
+Required approvals before a DBA starts the transaction:
+
+- Service owner: approve this Supabase project as the actual Cloud Run target and select the
+  existing `clinic_cloudrun_reader` identity.
+- Data owner: approve or remove age inference; approve the complete Comdesk `row_json` content
+  (or request its narrow replacement); approve the remaining named projection fields.
+- DBA/security owner: approve the new helper role/function/view, helper-only RLS policy,
+  Reader-only direct clinic revoke, and the separate six-table/email GRANT/RLS delta after a
+  fresh preflight and policy/function name-collision check.
+- Credential owner: confirm the Reader Session Pooler credential is usable without disclosing
+  it, or separately authorize issuance. No password change is authorized here.
+
+After those approvals and a corrected passing fixture, the DBA sequence is: (1) read-only
+preflight role/membership/PUBLIC and inherited ACLs, source column types, existing RLS/policies,
+and object-name collisions; (2) in one controlled transaction apply only the reviewed helper
+role/source-column grants, helper SELECT policy, function/view, Reader view grant and Reader
+clinic revokes, plus the six other PR #118 column grants and policies and verified-email policy;
+(3) run post-apply effective ACL/RLS checks; (4) connect as Reader via the Dashboard Session
+Pooler and verify national counts, filters, all seven source objects/view substitution, email
+condition, direct clinic/raw JSON denial and read-only transaction; (5) test persistent DML
+denial in isolation, not against production. On failure revoke the new Reader view access and
+new helper grants/policy/function/view only; do not restore the old 41-column clinic grant by
+default and do not alter CRM roles/policies.
+
+After DB acceptance, A may separately configure Secret Manager with the dedicated Reader
+Session Pooler DSN as `SUPABASE_RUNTIME_DB_URL`; the secret payload must be entered through the
+approved secret UI/input channel, never command arguments, shell history, Git, logs, or chat.
+IAM and Cloud Run changes remain separate approvals and were not performed here.
+
+**DB application remains NO-GO.** The local fixture supports the owner/RLS model but its final
+assertion fails; credential usability and the Cloud Run target remain unverified; age and full
+Comdesk row exposure are not approved; and the SQL ACL/collision corrections and production
+preflight are outstanding. PR #118 remains Draft.
