@@ -73,6 +73,7 @@ def _store():
     store._conn = _Connection()
     clinic_repo = type("ClinicRepo", (), {})()
     clinic_repo.query = lambda _filters, limit=100000, offset=0, as_of=None, read_only_ui=False: list(records)
+    clinic_repo.count = lambda _filters=None, as_of=None, read_only_ui=False: len(records)
     store.repositories = type("Repos", (), {"clinics": clinic_repo})()
     return store
 
@@ -134,6 +135,32 @@ def test_read_only_export_does_not_write_sql():
     store.export_read_only(Filters())
     assert all("INSERT " not in sql.upper() and "UPDATE " not in sql.upper() and "DELETE " not in sql.upper()
                for sql in store._conn.statements)
+
+
+def test_read_only_export_fails_closed_above_100000_rows():
+    store = _store()
+    store.repositories.clinics.count = lambda _filters=None, as_of=None, read_only_ui=False: 100001
+    store.repositories.clinics.query = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("oversize export should stop before fetching rows")
+    )
+    try:
+        store.export_read_only(Filters())
+    except ValueError as exc:
+        assert "100,000件まで" in str(exc)
+    else:
+        raise AssertionError("Oversize READ ONLY export was not stopped")
+
+
+def test_read_only_export_fails_if_result_count_changes_during_export():
+    store = _store()
+    counts = iter((2, 3))
+    store.repositories.clinics.count = lambda _filters=None, as_of=None, read_only_ui=False: next(counts)
+    try:
+        store.export_read_only(Filters())
+    except ValueError as exc:
+        assert "対象件数が変わった" in str(exc)
+    else:
+        raise AssertionError("Count drift was silently exported as a partial file")
 
 
 def test_read_only_home_and_sales_ui_skip_internal_reads_and_revision():

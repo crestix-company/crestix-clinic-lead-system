@@ -474,7 +474,17 @@ class SupabaseRuntimeStore:
         token reads provenance.change_history, which is outside the Cloud Run reader scope.
         This method performs no writes and does not inspect job, audit, or delivery state.
         """
+        count_before = self.count_read_only_ui(filters, as_of=as_of)
+        if count_before > 100000:
+            raise ValueError(
+                f"READ ONLY出力は100,000件までです（現在 {count_before:,}件）。条件を絞ってください。"
+            )
         records = self.query_read_only_ui(filters, limit=100000, as_of=as_of)
+        count_after = self.count_read_only_ui(filters, as_of=as_of)
+        if count_after != len(records):
+            raise ValueError(
+                "出力中に対象件数が変わったため、欠落の可能性を避けてCSV/Excel出力を中止しました。"
+            )
         rows = self._attach_export_metadata(records, self._export_records(records))
         for row in rows:
             for header in READ_ONLY_PENDING_EXPORT_HEADERS:

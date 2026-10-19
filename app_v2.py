@@ -1561,12 +1561,17 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         disabled=demo or count == 0 or readonly_export_over_limit,
         use_container_width=True,
     ):
-        st.session_state["simple_sales_filtered_export_files"] = {
-            "signature": sales_export_signature,
-            "files": (store.export_read_only(sales_filters)
-                      if read_only and hasattr(store, "export_read_only")
-                      else store.export(sales_filters)),
-        }
+        try:
+            files = (store.export_read_only(sales_filters)
+                     if read_only and hasattr(store, "export_read_only")
+                     else store.export(sales_filters))
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["simple_sales_filtered_export_files"] = {
+                "signature": sales_export_signature,
+                "files": files,
+            }
     sales_output = st.session_state.get("simple_sales_filtered_export_files")
     if sales_output and sales_output["signature"] == sales_export_signature:
         for name, content in sales_output["files"].items():
