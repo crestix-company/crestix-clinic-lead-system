@@ -57,6 +57,7 @@
 - DB上のJobレコード/Clinic ID/状態を必ず照合。workerの終了時は結果と未完了件数をDBから取得し、ローカルファイルにのみ保持しない。
 - Cloud Run Jobs自体の「parallelism 1」は**1実行内**の制限。別のExecutionが同時に起動しうるため、DBのlease/unique/ジョブ状態で**実行間**の二重起動も抑止。
 - WebサービスはCloud Run Jobの起動（jobs.run with env override）だけ許可。Job設定更新・削除権限は不要。専用サービスアカウントにジョブ単位で最小権限付与。
+- **重要：** Web用SELECT専用ロールはHP Job作成・pause/resumeを書き込めない。Phase 2以降は、Webに限定されたHP Job制御用DB資格情報を別途用意し、research Jobの作成・制御以外の書込を禁止する。既存の write_repositories_for(store) が汎用WRITE URLを要求する部分は依存注入して権限を分離する。権限変更は本番へ直接適用せず、検証と別承認が必要。別案はJob側にJob作成を集約し、Webはjobs.runだけを呼ぶ構成。どちらかを検証して確定する。
 - HTTPタイムアウトによる起動結果不明時は、DBにDISPATCH_UNKNOWNとして記録し、Executionを照合するまでは再発行しない。
 - 完了済みは再調査せず、必要なら別途明示的なforce承認を要求。
 - 初期版では「未調査がなくなるまで連続調査」モードは使わず、指定件数の単発25件 → 50件まで。
@@ -65,7 +66,7 @@
 - app_v2.pyの既存UIは維持し、CLINIC_HP_EXECUTOR=cloud_runのときのみローカルrunner.start() / auto_runner.start() を使わずjob_dispatchへ委譲。
 - 設定対象: prefecture, 医科/歯科, 25/50件, 調査済みやり直し=false。
 - 「開始」前に、認証済み社内ユーザー、Jobが未実行、履歴が照合済み、件数上限内、月予算ゲートを確認。
-- 「開始」：既存 create_single_job() が生成したJob IDを渡す。Cloud Run APIでExecution生成したらexecution nameを保存する。
+- 「開始」：HPジョブ制御専用ロール（あるいはWorker内部）から既存 create_single_job() を使ってJob IDを確定する。Cloud Run APIでExecution生成したらexecution nameを永続化する。WebのSELECT専用ロールを流用してINSERTしない。
 - 「停止」：DB上でpause_requestedを保存し、現行run_jobが安全な医院境界で停止。即時停止は原則しない。
 - 「再開」：DB残件数・Lease・Execution状況を照合して、**新しいExecutionを明示的に起動**。無断の自動再開なし。
 - 「進捗」：Supabaseの状態とCloud Run Execution状態を表示（RUNNING/PAUSED/COMPLETED/ERROR/UNKNOWN）。
