@@ -1108,6 +1108,9 @@ class SupabaseClinicWriteRepository:
 
     @staticmethod
     def _common_identity_schema_available(cur):
+        from src.master.clinic_identity import common_identity_enabled
+        if not common_identity_enabled():
+            return False
         cur.execute(
             "SELECT to_regclass('public.sales_entity_clinics'), "
             "to_regclass('public.sales_entities'), "
