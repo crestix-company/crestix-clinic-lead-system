@@ -1018,3 +1018,71 @@ refactor, confirmation/provisioning of the reader credential, approval of the ex
 delta, and a successful post-approval reader connection/verification. This addendum supersedes
 earlier statements that the pooler host was unknown; it does not claim that authentication,
 Cloud Run wiring, or DB permissions are ready.
+
+## Main integration recheck and final release gate (2026-10-19)
+
+The user-supplied current main SHA `c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` was fetched and
+confirmed. It contains PR #119 (`0221ef3`) and PR #120 (`e67a41b`) merged. The READ ONLY
+`count_read_only_ui`, `query_read_only_ui`, `export_read_only` paths, audit/email/job bypasses,
+Gmail draft guards, and existing export tests are present on this main. The audited dependency
+boundary remains seven tables; no additional DB object is required by the #119/#120 integration.
+No application tests were rerun for this recheck. Prior integration results remain the evidence
+for those code paths; they are not a live-reader DB test.
+
+The role/RLS audit in this document is the latest available live catalog evidence and has not
+been repeated in this turn. It found `clinic_cloudrun_reader` LOGIN/INHERIT/NOBYPASSRLS, the
+reverse `postgres` membership edge with ADMIN OPTION, PUBLIC CONNECT/TEMP, all seven target
+tables RLS-enabled, no reader policy on them, existing table-wide SELECT only on
+`public.clinics`, and no persistent write privileges on the targets. Before application, the
+DBA must rerun the listed catalog-only preflight against the approved target and stop if any of
+those assumptions or policy-name checks changed. The existing CRM policies/grants remain out
+of scope.
+
+The column-scoped clinic proposal is the intended delta. It grants no access to standalone
+columns outside the UI/SQL allowlist, but it still grants `effective_json`. That JSON contains
+the full effective source dictionary, including identifying/contact and operational details
+(clinic/owner/manager names, address/phone, classification, registration/business-hours,
+HP/Maps, treatment/signal data and source-specific fields, depending on source). IAP restricts
+application entry but is not a database row/column boundary. Until a data owner explicitly
+approves the entire JSON payload for IAP-authorized users, the safe launch decision is NO-GO.
+The shortest secure choices are either that explicit approval with the current narrowed SQL, or
+a coordinated UI/projection change that removes the wide JSON read before applying grants.
+
+### Final operator checklist
+
+1. Approve project ref `hwdvyhunozporfuefteb` as Cloud Run's target (it matches prior Clinic
+   Master catalog/operations records; checked-in runtime config itself does not name the ref).
+2. Approve the existing role `clinic_cloudrun_reader`. Do not use or create
+   `clinic_web_readonly` unless the owner explicitly changes the design. Confirm the role's
+   password is provisioned through an approved process; this audit did not check a password hash
+   or authenticate as the reader.
+3. Approve/reject the full `effective_json` content for IAP users. Rejecting it means no DB
+   application until the UI reads from a minimized projection.
+4. DBA reruns the documented pre-apply catalog checks and policy-name guard, reviews the exact
+   GRANT/REVOKE/RLS transaction, and applies it only under a separate change authorization.
+5. A human enters the DSN in Secret Manager through its secure interface. Secret payload uses
+   the Dashboard host/port/database, Reader username, Dashboard TLS instructions, and the
+   separately provisioned Reader password. Cloud Run variable is `SUPABASE_RUNTIME_DB_URL`
+   referencing a numbered Secret version. The administrator user shown by Dashboard is never
+   used by Cloud Run. Secret and IAM actions are separate approvals.
+6. Verify first with the dedicated role through the shared Session Pooler, then run the SQL and
+   app acceptance checks above. Compare nationwide counts only against an approved baseline;
+   never print personal clinic/email values. Validate write denial by effective privileges and
+   transaction-read-only settings in production; attempt DML only in an isolated DB.
+
+### Rollback choice
+
+The rollback SQL above restores the pre-change ACL exactly, including the pre-existing
+table-wide 41-column clinic SELECT. It is an availability rollback and therefore reopens the
+same `effective_json`/column exposure that existed before this grant change. The DBA and data
+owner must choose that explicitly. If the incident is a data-exposure concern, do not restore
+the table-wide grant: stop Cloud Run traffic/secret use through separately approved operator
+actions, drop only the seven new reader policies, revoke all new reader column/schema grants,
+and leave the reader with no `public.clinics` SELECT. Re-enable the pre-change broad ACL only
+after the security owner approves that restoration. In either case, do not touch CRM grants or
+policies.
+
+**Final decision:** SQL and operator procedures are prepared; production application is
+**NO-GO** until the target project, role/password readiness, and `effective_json` data-use scope
+are explicitly approved, the pre-apply catalog state is reconfirmed, and a post-apply Reader
+Session Pooler test passes. PR #118 remains Draft and unmerged.
