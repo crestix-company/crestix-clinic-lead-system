@@ -36,9 +36,9 @@ the existing broad clinic SELECT are explicitly accepted or separately remediate
 
 `Dockerfile.cloudrun` describes `app_v2.py` behind IAP with `CLINIC_READ_ONLY_UI=true`.
 That mode limits navigation to `かんたん操作` and `営業対象・出力`, skips startup writes,
-and disables write/job controls. The READ ONLY routes now use a clinic projection overview
-and a READ ONLY standard CSV/Excel exporter. The final C implementation reviewed is PR #119,
-head `e03f65238c882a3aea22fef43a3aca909e328646` (not the superseded PR #117 implementation).
+and disables write/job controls. The intended READ ONLY routes use a clinic projection overview
+and a READ ONLY standard CSV/Excel exporter. PR #119 head reviewed is
+`fef6b9f430b19e34dde2b41c97329ab333302ee1` (not the superseded PR #117 implementation).
 It retains standard Comdesk output data and columns and adds three export dependencies to the
 four browse tables.
 
@@ -102,6 +102,31 @@ The owner has approved output of official-HP-confirmed contact emails to CSV/Exc
 IAP-authorized internal users. This approves the data-use specification only; it does not
 authorize database privilege application or deployment. Sending, delivery history and Email KPI
 remain out of scope.
+
+### PR #120 integration delta (2026-10-19)
+
+PR #120 head `9eacb826107bbeebcb455764eadd5ee473649c61` was compared with PR #119 head
+`fef6b9f430b19e34dde2b41c97329ab333302ee1`. The integrated code does **not** preserve the
+seven-table READ ONLY boundary described above. It removes the READ ONLY-specific query/export
+methods and routes the screens through shared methods again:
+
+- `simple_workflow_ui()` calls `store.metrics()`, whose SQL reads `provenance.match_reviews` and
+  `provenance.source_records`; it also calls `show_email_research_metrics()`.
+- The shared listing calls `email_repositories_for_ui().email_research.status_for_ids()`, which
+  reads `email_research.clinic_email_status` on the separate Email DB connection when configured.
+- The listing exposes a detail action; `details()` can read `provenance.change_history`.
+- `simple_sales_ui()` calls `store.revision()`, reading `provenance.change_history`, and uses
+  the shared exporter instead of the revision-free READ ONLY exporter.
+- The `sales_pairs` filter translation again contains `research.research_results`; if that
+  filter reaches either initial screen, it is outside the seven-table allowlist.
+- PR #120 deletes the READ ONLY export regression test file that asserted the excluded-table
+  boundary.
+
+These findings are not a reason to expand the database grants. The seven-table proposal remains
+the approved least-privilege target. **PR #119/#120 integration is not aligned with that target**;
+C should restore READ ONLY-specific bypasses or suppress those UI reads before any database
+grant is applied. Do not grant audit/history, Email KPI/status, or `research.*` objects to make
+the current code pass.
 
 ## Out of scope
 
