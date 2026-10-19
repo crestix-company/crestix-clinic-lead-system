@@ -832,3 +832,189 @@ or removes the `effective_json` residual exposure, the SQL and existing role pos
 approved, and a real Session Pooler reader connection is tested. The proposed column-scoped
 delta does not change CRM roles or policies; the projection alternative is a future coordinated
 UI/DB change, not part of this SQL.
+
+## A handoff and manual application preparation (2026-10-19)
+
+### Candidate database and role selection
+
+The user supplied Dashboard Connect details for project ref `hwdvyhunozporfuefteb`, project
+`clinic-lead-shadow`: Session Pooler host `aws-0-ap-northeast-1.pooler.supabase.com`, port
+`5432`, database `postgres`. This matches the project ref/name/region used by the prior live
+catalog audit and existing Clinic Master operations/migration records. `config/production_runtime.env`
+only selects the Supabase backend and does not encode a project ref. Therefore this is the same
+database candidate as the existing Clinic Master, but the Cloud Run revision's actual target
+and its production approval still require the service owner to confirm against the deployment
+record; no Cloud Run inspection was performed here.
+
+Use existing `clinic_cloudrun_reader` as the first-choice role for this proposal: catalog
+review found it exists and is LOGIN/INHERIT/NOBYPASSRLS. The separate `clinic_web_readonly`
+name in `docs/cloud_run_job_control_db_role_design.md` is a design assumption for the web role,
+not the role observed in this DB audit. Do not create or silently substitute it. The role's
+password state is unverified; LOGIN being true does not prove a password is provisioned. The
+previous operator report said the Cloud Run revision had no `SUPABASE_RUNTIME_DB_URL` and no
+attached Supabase Secret. Secret Manager state and local reader credentials have not been
+rechecked in this pass; do not infer they have since been provisioned.
+
+The Dashboard's displayed administrator username `postgres.hwdvyhunozporfuefteb` is for
+human-administered maintenance only and must never be placed in Cloud Run. For the reader,
+the expected shared Session Pooler user form is
+`clinic_cloudrun_reader.hwdvyhunozporfuefteb`. The exact host above was supplied from
+Dashboard; do not derive or modify it. Use TLS as specified by the Dashboard connection dialog
+(the operator must confirm the displayed TLS requirement).
+
+### `effective_json` exposure assessment
+
+`effective_json` stores the full effective clinic/source dictionary used to project a clinic,
+not only the fields rendered in the READ ONLY table. The application constructs it from
+normalized source data and can include clinic name, telephone, address, postal/prefecture and
+facility classifications, departments, provider/manager and owner fields, registration and
+business-hours details, HP/Maps properties, treatment categories, marketing-signal details, and
+source-specific keys. Exact keys can vary by source and record. The dedicated verified-email
+address is read from the separate enrichment table, not inferred to be part of this JSON.
+
+IAP limits which internal users reach the app, but it does not constrain SQL executed with the
+service credential and does not prevent a compromised app or an overly broad export from reading
+any granted JSON value. Thus column-level SELECT is materially narrower than all 41 columns,
+but granting `effective_json` retains meaningful data exposure. For the current UI/CSV contract,
+it is included in the proposed grant and needs explicit data-owner acceptance. If that is not
+accepted, hold DB application and first implement a reader projection plus matching adapter and
+export changes; do not grant all columns as a workaround.
+
+### Manual connection and credential check
+
+No reader password was displayed, tested, or changed. A human operator with the approved
+credential source should check only whether the credential/secret exists and is available to
+the intended service identity; never print its value. If no reader credential exists, its
+provisioning is a separately approved DB-admin action, outside this proposal. Do not use the
+Dashboard administrator credential for the application.
+
+From a controlled terminal, a human DBA may connect with an interactive password prompt. The
+connection string contains no password, and `-W` prompts without placing one in shell history:
+
+```sh
+psql "host=aws-0-ap-northeast-1.pooler.supabase.com port=5432 dbname=postgres user=postgres.hwdvyhunozporfuefteb sslmode=require" -W
+```
+
+Use that administrator session only for the SELECT-only pre-apply catalog checks in this
+document. After a separately approved apply, test the dedicated reader through its own
+interactive prompt (never as `postgres`):
+
+```sh
+psql "host=aws-0-ap-northeast-1.pooler.supabase.com port=5432 dbname=postgres user=clinic_cloudrun_reader.hwdvyhunozporfuefteb sslmode=require" -W
+```
+
+Do not use `PGPASSWORD`, put a DSN containing a password on a command line, enable shell
+tracing, or copy credential values into logs/chat. If Dashboard specifies different TLS
+parameters, follow that exact connection dialog rather than the illustrative `sslmode=require`.
+
+### Post-apply reader verification SQL (prepared only)
+
+Run only after separate approval and application. These checks emit identity, booleans, policy
+metadata and counts, not clinic/email values:
+
+```sql
+SELECT current_user, session_user, current_database(),
+       current_setting('transaction_read_only') AS transaction_read_only,
+       current_setting('default_transaction_read_only') AS default_transaction_read_only;
+
+SELECT n.nspname, c.relname,
+       array_agg(a.attname ORDER BY a.attnum)
+         FILTER (WHERE a.attnum > 0 AND NOT a.attisdropped
+                 AND has_column_privilege(current_user, c.oid, a.attnum, 'SELECT'))
+         AS select_columns,
+       has_table_privilege(current_user, c.oid, 'INSERT') AS can_insert,
+       has_table_privilege(current_user, c.oid, 'UPDATE') AS can_update,
+       has_table_privilege(current_user, c.oid, 'DELETE') AS can_delete,
+       has_table_privilege(current_user, c.oid, 'TRUNCATE') AS can_truncate
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+LEFT JOIN pg_attribute a ON a.attrelid = c.oid
+WHERE (n.nspname, c.relname) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+GROUP BY n.nspname, c.relname, c.oid ORDER BY 1, 2;
+
+SELECT schemaname, tablename, policyname, roles, cmd, qual
+FROM pg_policies
+WHERE 'clinic_cloudrun_reader' = ANY(roles)
+  AND (schemaname, tablename) IN
+    (('public','clinics'), ('hp_research','clinic_hp_research'),
+     ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+     ('provenance','comdesk_original_rows'), ('provenance','templates'),
+     ('public','clinic_email_enrichment'))
+ORDER BY 1, 2, 3;
+
+SELECT has_schema_privilege(current_user, 'hp_research', 'USAGE') AS hp_usage,
+       has_schema_privilege(current_user, 'treatment', 'USAGE') AS treatment_usage,
+       has_schema_privilege(current_user, 'provenance', 'USAGE') AS provenance_usage,
+       has_schema_privilege(current_user, 'research', 'USAGE') AS research_usage,
+       has_schema_privilege(current_user, 'outreach', 'USAGE') AS outreach_usage;
+
+SELECT 1;
+-- Only after the privacy/change approval: counts may be compared to an approved national
+-- baseline. Never return clinic names, contact details or email addresses in diagnostics.
+SELECT count(*) AS clinic_rows FROM public.clinics WHERE merged_into IS NULL;
+SELECT count(*) AS eligible_verified_email_rows
+FROM public.clinic_email_enrichment
+WHERE status='VERIFIED_EMAIL' AND verified_on_official IS TRUE
+  AND NULLIF(BTRIM(email), '') IS NOT NULL;
+```
+
+Expected: reader identity matches the approved role; both read-only settings are `on`; exact
+column allowlists and seven policies match the proposal; all writes are false; the three needed
+schema USAGE values are true while `research`/`outreach` remain false; SELECT and app filters/
+export succeed. Check denied DML only in an isolated DB, not on the production candidate.
+
+### Rollback proposal (review only)
+
+If rollback is approved, first stop routing application traffic to this credential and drain
+its sessions. Then, as the authorized DBA, run the following in one transaction. It removes only
+the newly named reader policies/grants and restores the exact pre-change table-level clinic
+SELECT grant. It does not touch CRM roles/policies or role attributes:
+
+```sql
+BEGIN;
+DROP POLICY clinic_cloudrun_reader_select ON public.clinics;
+DROP POLICY clinic_cloudrun_reader_select ON hp_research.clinic_hp_research;
+DROP POLICY clinic_cloudrun_reader_select ON treatment.clinic_treatment_research;
+DROP POLICY clinic_cloudrun_reader_select ON treatment.clinic_research_status;
+DROP POLICY clinic_cloudrun_reader_select ON provenance.comdesk_original_rows;
+DROP POLICY clinic_cloudrun_reader_select ON provenance.templates;
+DROP POLICY clinic_cloudrun_reader_select ON public.clinic_email_enrichment;
+
+REVOKE SELECT (id, uuid, merged_into, merge_hold, effective_json, tel_match_key,
+  first_seen_at, last_seen_at, source_as_of_date, is_new, departments_json,
+  hp_status, hp_url, hp_rank, maps_website_url, exclude_reason, clinic_name,
+  active, designation_date, recent_until, age_probability, prefecture,
+  medical_type, hot_status, treatments_json, signal_count, signals_json,
+  owner_equal, maps_presence_status, phone_norm, address, registration_reason)
+  ON TABLE public.clinics FROM clinic_cloudrun_reader;
+REVOKE SELECT (clinic_id, machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories)
+  ON TABLE hp_research.clinic_hp_research FROM clinic_cloudrun_reader;
+REVOKE SELECT (clinic_id, research_status, treatment_category_name)
+  ON TABLE treatment.clinic_treatment_research FROM clinic_cloudrun_reader;
+REVOKE SELECT (clinic_id, research_status)
+  ON TABLE treatment.clinic_research_status FROM clinic_cloudrun_reader;
+REVOKE SELECT (id, clinic_id, template_id, row_json, uuid)
+  ON TABLE provenance.comdesk_original_rows FROM clinic_cloudrun_reader;
+REVOKE SELECT (id, headers_json, mapping_json)
+  ON TABLE provenance.templates FROM clinic_cloudrun_reader;
+REVOKE SELECT (clinic_id, email, status, verified_on_official)
+  ON TABLE public.clinic_email_enrichment FROM clinic_cloudrun_reader;
+REVOKE USAGE ON SCHEMA hp_research, treatment, provenance FROM clinic_cloudrun_reader;
+GRANT SELECT ON TABLE public.clinics TO clinic_cloudrun_reader;
+COMMIT;
+```
+
+This rollback SQL is valid only if the pre-change condition remains true (the reader had its
+table-level clinic SELECT and no separate clinic column grants/use created meanwhile). Check
+post-rollback effective privileges; never run blindly or during an active connection.
+
+**Latest handoff status: NO-GO for DB application.** The pooler endpoint is now user-confirmed,
+and it matches the previously audited Clinic Master project. Remaining gates are explicit
+Cloud Run target/project and role approval, `effective_json` risk acceptance or a projection
+refactor, confirmation/provisioning of the reader credential, approval of the exact seven-table
+delta, and a successful post-approval reader connection/verification. This addendum supersedes
+earlier statements that the pooler host was unknown; it does not claim that authentication,
+Cloud Run wiring, or DB permissions are ready.
