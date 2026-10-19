@@ -551,3 +551,120 @@ and is outside this audit.
 
 No GRANT, RLS change, migration, data update, role membership change, password change, Cloud Run
 operation, Gmail operation, or PR merge was performed for this review.
+
+## Final pre-application review addendum (2026-10-19)
+
+### Scope and code-path reconciliation
+
+The seven-object allowlist above was rechecked against PR #119 head
+`fef6b9f430b19e34dde2b41c97329ab333302ee1`. Browse/count/filter/export paths remain within
+those seven objects. The READ ONLY export reads Comdesk original values and template mappings,
+and reads only verified official-HP email rows. It bypasses `provenance.change_history`; the
+read-only filter path avoids `research.research_results`. No query path was found for audit,
+history, Email KPI, delivery, HP Job, or Step 6 tables. This is code-path evidence, not proof of
+live grants or RLS visibility.
+
+### `public.clinics` 41-column exposure
+
+Keeping the existing table-level SELECT avoids breaking PR #119's current adapter, which uses
+`effective_json` and multiple search/filter/sort fields. It also exposes all 41 columns,
+including source/provenance and operational fields not needed by the two initial screens. In
+particular, column-level grants alone are not a complete minimization while a wide
+`effective_json` value is exposed. A column-limited direct grant would require revoking the
+existing table-level ACL and proving every SQL expression still works; a safer long-term
+alternative is a dedicated security-invoker projection view with an explicit column list,
+backed by the same RLS, after verifying PostgreSQL/Supabase view privilege semantics. Neither
+alternative is implemented here. The 41-column access is therefore a material residual risk,
+not an implicitly accepted necessity. Obtain explicit data-owner approval for this exposure or
+hold DB application until a reviewed projection is available.
+
+### Existing role and additive SQL review
+
+Live catalog findings remain: the role is LOGIN/INHERIT/NOBYPASSRLS, has the reverse membership
+edge (`postgres` is a member of the reader, ADMIN OPTION), and currently has table-wide SELECT
+on `public.clinics`; it has no SELECT on the other six targets, no application-table write
+privileges, and no USAGE on `hp_research`, `treatment`, or `provenance`. PUBLIC supplies
+CONNECT/TEMP. RLS is enabled (not FORCE) on all seven targets. Existing CRM/service policies
+name other roles; proposed policies target only `clinic_cloudrun_reader`, so they are additive
+and do not broaden those roles. Because permissive policies OR together for a role, the new
+reader policies do not narrow access granted by any other reader-targeting policy; the live
+catalog found none. `templates` is limited to template IDs referenced by visible Comdesk rows.
+Do not apply until policy-name conflicts are rechecked and the broad clinic SELECT, inherited
+membership posture, TEMP, and exact seven-table allowlist are approved.
+
+The GRANT and CREATE POLICY statements above were reviewed as a delta only. They do not
+REVOKE existing CRM privileges, replace policies, or alter roles. No `REVOKE` is currently
+proposed because doing so would remove the existing clinic SELECT and break the current UI;
+replacing it with column grants is a separate, tested change requiring a full dependency list.
+Application remains prohibited until a DB change ticket explicitly approves the exact SQL.
+
+### Email RLS isolated fixture result and persistence boundary
+
+The predicate
+`status = 'VERIFIED_EMAIL' AND verified_on_official IS TRUE AND NULLIF(BTRIM(email), '') IS NOT NULL`
+was exercised in a disposable local PostgreSQL cluster with synthetic rows. Connecting under
+the fixture reader returned only the valid verified/official/nonblank row; invalid status,
+false/null official flag, and null/empty/whitespace email rows were invisible. The fixture
+grant exposed only the four proposed columns and had no INSERT/UPDATE/DELETE privileges. This
+validates predicate behavior, not production RLS or export integration. The test cluster and
+fixture are local-only under `/private/tmp`; nothing was inserted into Supabase.
+
+The live legacy `public.clinic_email_enrichment` relation had zero rows in a count-only check.
+Repository persistence paths show Email Auto Research writes to the separate
+`email_research.email_candidates` and `email_research.clinic_email_status` relations. Its
+`existing_email_enrichment_id` foreign key is only an optional reference to the legacy row; it
+does not establish synchronization or write-back. Thus the legacy export source being empty is
+consistent with Auto Research results being stored in the newer schema. No row counts or
+email/status values from the new schema were inspected in this review, so actual saved results
+and any approved migration/backfill remain unconfirmed. Do not grant the new Email Research
+tables for initial release.
+
+### Supabase connection and secret handoff
+
+Official Supabase connection guidance says to copy the Session Pooler endpoint from that
+project's Dashboard Connect dialog. For shared Session mode, use the shown host, port 5432, and
+the custom-role username form `<role>.<project-ref>`; do not synthesize a hostname from region.
+The Dashboard's exact endpoint and connection values were not available to this audit, and no
+reader credential was supplied. Project ref `hwdvyhunozporfuefteb` is an active candidate
+project, but it has **not** been approved/confirmed as the Cloud Run revision's actual
+production target. Operator-reported revision settings have no `SUPABASE_RUNTIME_DB_URL` or
+attached Supabase Secret, so application DB connectivity is not configured.
+
+For A's separately approved deployment work, the Secret Manager payload should be the complete
+PostgreSQL DSN using the exact Dashboard-provided Session Pooler host, port, database, TLS
+settings, role-formatted username, and dedicated reader password. Store it by entering/piping
+through the approved secret UI without command-line arguments, shell history, logs, Git, or
+chat. Configure Cloud Run `SUPABASE_RUNTIME_DB_URL` as a reference to a numbered Secret Manager
+version and grant `roles/secretmanager.secretAccessor` on that secret only to the Cloud Run
+service identity. Keep `CLINIC_READ_ONLY_UI=true`, `CLINIC_DATA_BACKEND=supabase`, and
+`CLINIC_WRITE_BACKEND=supabase`; verify only these nonsecret values. No secret, IAM, or Cloud
+Run configuration was changed.
+
+After separate DB approval and privilege application, the reader connection check should return
+`current_user = clinic_cloudrun_reader`, the expected `session_user`, and both transaction
+read-only settings true after the application's connection initialization. Run `SELECT 1`,
+allowlisted counts, representative clinic filters, and a CSV/Excel export; compare only counts
+to an independently approved national baseline. Verify denied writes using catalog privilege
+functions and actual denied write attempts only in an isolated database. The application must
+fail closed on missing permissions and must not fall back to SQLite, demo data, or a broader
+credential. A reader credential and exact pooler endpoint are still required before this can
+be tested end-to-end.
+
+### Boundary note and decision
+
+During this review, two aggregate row-count SELECTs were inadvertently issued against the
+production candidate (`clinic_email_enrichment` and `clinics`) despite the instruction to limit
+production queries to catalog inspection. They returned counts only and no row values; no
+write or schema change occurred. This was outside the requested query boundary and is recorded
+here explicitly. All subsequent live checks were catalog-only. Do not repeat aggregate/data
+queries until separately authorized.
+
+**Decision remains NO-GO for production DB application.** Blockers: the Cloud Run target
+project/ref and exact Session Pooler endpoint are unconfirmed; no reader credential or live
+reader session exists; six required SELECT grants and three schema USAGE grants plus reader RLS
+policies are absent; 41-column clinic access needs data-owner acceptance or a reviewed
+projection; the unusual reverse membership/INHERIT and PUBLIC TEMP require owner acceptance;
+and the email export source is empty while Email Auto Research persistence remains a separate,
+unverified data source. The email predicate passed only an isolated fixture test. The seven-table
+SQL remains a review proposal and may be applied only after explicit change approval and all
+blockers above are resolved.
