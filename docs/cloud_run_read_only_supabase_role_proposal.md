@@ -133,6 +133,11 @@ seven tables exist and have RLS enabled; `CONNECT` and `public` USAGE already ex
 role attributes/memberships, existing CRM policies, or RLS enablement. Six-table SQL is shown
 first. Email output use is approved, but its SQL block still requires separate database-change approval.
 
+**Superseded for execution:** the initial SQL below documents the earlier full-column clinic
+grant baseline. The later section “Reader column-scope decision” is the current recommendation
+and contains the complete column-scoped replacement delta, including the reader-only REVOKE and
+policy-conflict guard. Do not execute both SQL blocks.
+
 ```sql
 -- PROPOSAL ONLY. Existing target: no CREATE/ALTER ROLE, membership, password, policy
 -- replacement, or RLS enablement is included.
@@ -668,3 +673,162 @@ and the email export source is empty while Email Auto Research persistence remai
 unverified data source. The email predicate passed only an isolated fixture test. The seven-table
 SQL remains a review proposal and may be applied only after explicit change approval and all
 blockers above are resolved.
+
+## Reader column-scope decision (2026-10-19)
+
+The 41-column table-level grant is not needed for the two initial READ ONLY screens. PR #119
+head `fef6b9f430b19e34dde2b41c97329ab333302ee1` was checked at its actual READ ONLY query
+methods, filter compiler, row projection and standard export. The current direct-query
+allowlist is:
+
+```text
+id, uuid, merged_into, merge_hold, effective_json, tel_match_key,
+first_seen_at, last_seen_at, source_as_of_date, is_new, departments_json,
+hp_status, hp_url, hp_rank, maps_website_url, exclude_reason, clinic_name,
+active, designation_date, recent_until, age_probability, prefecture,
+medical_type, hot_status, treatments_json, signal_count, signals_json,
+owner_equal, maps_presence_status, phone_norm, address, registration_reason
+```
+
+The selected columns above cover the adapter's row fetch and record construction. The SQL
+filter/order paths additionally need `merge_hold`, `exclude_reason`, `effective_json`,
+`clinic_name`, `active`, `hp_status`, `hp_url`, `designation_date`, `recent_until`,
+`age_probability`, `hp_rank`, `prefecture`, `medical_type`, `hot_status`,
+`departments_json`, `treatments_json`, `signals_json`, `signal_count`, `owner_equal`,
+`registration_reason`, `maps_presence_status`, `maps_website_url`, `phone_norm`, `uuid`,
+`first_seen_at`, and `id`. The read-only sales screen also derives records from `effective_json`
+for display and fixed export rows; the read-only workflow's excluded-facility filter uses it.
+HP rank/category reads come from the separately granted research tables. Comdesk original rows
+and template mapping are read from the two provenance tables already in the seven-object list.
+The read-only listing bypasses Email Research status and detail reads. The normal-mode adapter
+and Clinic Master/CRM role grants are outside this change.
+
+**Recommendation:** replace the reader's existing all-column SELECT on `public.clinics` with
+the above reader-only column grant. It preserves current UI SQL while preventing access to
+other standalone columns. This is less exposure than all 41 columns and the revoke is addressed
+only to `clinic_cloudrun_reader`, leaving Clinic Master and CRM grants/policies untouched.
+However, `effective_json` is a wide JSON document; granting that column exposes fields embedded
+inside it even though the role cannot select other standalone columns. Treat its access as an
+explicit data-owner approval gate. A later dedicated projection that returns only the keys
+needed for display/export would reduce this residual risk further, but requires coordinated UI
+query/export adaptation and role-scoped tests; it is not safe to claim that a column grant on
+the current `effective_json` value is complete data minimization.
+
+### Final proposed SQL and order (not executed)
+
+Before the transaction, verify the target project/database and role manually, and run the
+catalog-only preflight queries above. The following assumes the audited state remains true:
+`public.clinics` table-level SELECT was directly granted to this role; no PUBLIC or inherited
+SELECT path exists; all seven targets already have RLS enabled; and none of the proposed policy
+names exists. If any assumption differs, stop and revise the change. Do not modify other roles,
+CRM grants, existing policies, role attributes/memberships or RLS enablement.
+
+Order is schema USAGE, narrow grants, reader policy on Comdesk originals, then dependent template
+policy. Clinics gets a reader-only column grant after revoking its existing reader table grant.
+RLS policies are then added for the reader. Execute in one reviewed transaction so any policy
+name collision or statement error rolls the whole delta back.
+
+```sql
+BEGIN;
+
+-- Explicit conflict guard: fail closed; never replace an existing policy.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE policyname = 'clinic_cloudrun_reader_select'
+      AND ( (schemaname, tablename) IN (
+        ('public','clinics'), ('hp_research','clinic_hp_research'),
+        ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+        ('provenance','comdesk_original_rows'), ('provenance','templates'),
+        ('public','clinic_email_enrichment')
+      ))
+  ) THEN
+    RAISE EXCEPTION 'clinic_cloudrun_reader_select policy name conflict; stop for review';
+  END IF;
+END $$;
+
+GRANT USAGE ON SCHEMA hp_research, treatment, provenance TO clinic_cloudrun_reader;
+
+-- Remove only this role's existing table-level grant; leave all other grantees untouched.
+REVOKE SELECT ON TABLE public.clinics FROM clinic_cloudrun_reader;
+GRANT SELECT (
+  id, uuid, merged_into, merge_hold, effective_json, tel_match_key,
+  first_seen_at, last_seen_at, source_as_of_date, is_new, departments_json,
+  hp_status, hp_url, hp_rank, maps_website_url, exclude_reason, clinic_name,
+  active, designation_date, recent_until, age_probability, prefecture,
+  medical_type, hot_status, treatments_json, signal_count, signals_json,
+  owner_equal, maps_presence_status, phone_norm, address, registration_reason
+) ON TABLE public.clinics TO clinic_cloudrun_reader;
+
+GRANT SELECT (clinic_id, machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories)
+  ON TABLE hp_research.clinic_hp_research TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, research_status, treatment_category_name)
+  ON TABLE treatment.clinic_treatment_research TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, research_status)
+  ON TABLE treatment.clinic_research_status TO clinic_cloudrun_reader;
+GRANT SELECT (id, clinic_id, template_id, row_json, uuid)
+  ON TABLE provenance.comdesk_original_rows TO clinic_cloudrun_reader;
+GRANT SELECT (id, headers_json, mapping_json)
+  ON TABLE provenance.templates TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, email, status, verified_on_official)
+  ON TABLE public.clinic_email_enrichment TO clinic_cloudrun_reader;
+
+CREATE POLICY clinic_cloudrun_reader_select ON public.clinics
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+CREATE POLICY clinic_cloudrun_reader_select ON hp_research.clinic_hp_research
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_treatment_research
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_research_status
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+CREATE POLICY clinic_cloudrun_reader_select ON provenance.comdesk_original_rows
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+CREATE POLICY clinic_cloudrun_reader_select ON provenance.templates
+  FOR SELECT TO clinic_cloudrun_reader
+  USING (EXISTS (
+    SELECT 1 FROM provenance.comdesk_original_rows original
+    WHERE original.template_id = templates.id
+  ));
+CREATE POLICY clinic_cloudrun_reader_select ON public.clinic_email_enrichment
+  FOR SELECT TO clinic_cloudrun_reader
+  USING (status = 'VERIFIED_EMAIL'
+         AND verified_on_official IS TRUE
+         AND NULLIF(BTRIM(email), '') IS NOT NULL);
+
+COMMIT;
+```
+
+The `REVOKE` is the only revocation in the proposed delta and applies solely to the reader's
+`public.clinics` table-level SELECT. Post-apply, verify the effective column array equals the
+allowlist, all seven RLS policies target only this role, all write privileges remain false, and
+all six other target SELECT grants match the column allowlists. Also verify `public.clinics`
+standalone columns outside the allowlist are denied; review the `effective_json` data risk
+separately. Then test as the dedicated role through the exact Session Pooler: expected
+`current_user`, read-only transaction settings, `SELECT 1`, national count and approved
+filters/export. Do not include personal field values in diagnostic output. Denied DML is tested
+only in an isolated database.
+
+### Manual approval and change gate
+
+- Confirm the Cloud Run target project ref/database. `config/production_runtime.env` establishes
+  Supabase as the backend but does not name a project. Existing operations documents identify
+  `hwdvyhunozporfuefteb` as a candidate; this does not prove the deployed service targets it.
+- Resolve the role-name mismatch between this audit's existing `clinic_cloudrun_reader` and the
+  separate Cloud Run design's `clinic_web_readonly`. Never silently substitute or create either.
+- Approve the `effective_json` exposure or defer application until the projection/UI adjustment
+  is ready. Approve the exact SQL and verify no policy-name conflict at application time.
+- In Supabase Dashboard > Connect, select the approved project's Session Pooler mode and copy
+  the exact host, port, database, TLS and username instructions. For shared Session Pooler the
+  documented port is 5432 and custom-role username form is `<role>.<project-ref>`; do not infer
+  the host from a region. Provision the dedicated password only through the approved secret
+  procedure, never in SQL or shell history.
+- A separately approved operator configures Cloud Run's `SUPABASE_RUNTIME_DB_URL` as a
+  numbered Secret Manager version reference, grants secret access only to the Cloud Run service
+  identity, and verifies the nonsecret backend flags. No such operation is authorized here.
+
+**Application decision: NO-GO** until target/ref and role are confirmed, the data owner accepts
+or removes the `effective_json` residual exposure, the SQL and existing role posture are
+approved, and a real Session Pooler reader connection is tested. The proposed column-scoped
+delta does not change CRM roles or policies; the projection alternative is a future coordinated
+UI/DB change, not part of this SQL.
