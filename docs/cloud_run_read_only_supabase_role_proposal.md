@@ -1284,3 +1284,166 @@ is explicitly recorded); Reader writes fail; CRM fixture roles keep their prior 
 behavior; and the existing official-email RLS fixture still exposes only qualifying rows.
 Then update the GRANT/RLS block to the exact C commit and rerun the pre-apply catalog/policy
 collision checks. This gate is not met by the existing UI-only integration tests.
+
+## Final effective_json projection decision (2026-10-19)
+
+### Evidence and decision
+
+The C projection worktree `feat/readonly-effective-json-projection-20261019` currently points
+at `c5829aa` (same as `origin/main`); it contains no code diff and no delivered projection
+implementation/PR. The implementation contract below is therefore based on the current
+READ ONLY callsites and must be checked against C's eventual commit before changing the SQL.
+
+**Recommended implementation: a dedicated owner-rights projection view replacing the
+`public.clinics` relation in the Reader path.** Do not grant the Reader `effective_json` or any
+direct SELECT on `public.clinics`. Use a new non-login, non-owner, `NOBYPASSRLS` view-owner role
+with no memberships, limited SELECT on the source columns, and an additive SELECT RLS policy on
+`public.clinics` targeted only to that helper role. The view owner must not own `public.clinics`;
+otherwise table-owner RLS bypass would invalidate this design. Preserve existing policies and
+CRM grants. The Reader receives `USAGE` on the view's schema and `SELECT` on the view only.
+
+This view substitutes for the clinic-master relation in the application allowlist: the seven
+base tables remain unchanged, but the view is an additional database object and must be listed
+as an explicit relation substitution. The app must use the view for all clinic-master reads in
+READ ONLY mode, including count, list, filter candidates and export. Normal mode continues to
+use the existing repository and receives no code-path change.
+
+Do not set `security_invoker=true`: that would make the Reader need base-table column grants,
+including the raw JSON source used by the view. The owner-rights view must instead run as the
+dedicated helper, which remains subject to `public.clinics` RLS because it is neither table owner
+nor `BYPASSRLS`. Set `security_barrier=true` as defense against unsafe predicate pushdown; this
+is not a substitute for the RLS policy. Confirm PostgreSQL version and view options in the
+isolated test before finalizing DDL. Never make the view owner a member of, or grant it to, the
+Reader.
+
+The view is preferred over generated columns for the first rollout because it avoids a stored
+column backfill/table rewrite and does not change the shared Clinic Master write schema. At
+164,199-row scale, an exact rewrite duration/lock profile cannot be inferred from row count;
+generated stored columns may require substantial rewrite/lock/WAL work and alter all future
+write behavior. A view avoids that migration, but incurs per-read projection work and introduces
+RLS/view-owner complexity. Benchmark the view on an isolated production-sized copy. If view
+latency or robust extraction fails, stop and compare a separately approved projection-table or
+generated-column migration with measured lock/WAL/runtime data; do not fall back to raw JSON
+grant.
+
+### JSON-derived output contract
+
+The view has **no `effective_json`, `base_json`, evidence JSON, or catch-all JSON output column**.
+It exposes individually named scalar/array columns and the READ ONLY adapter constructs its
+record from that allowlist. The existing adapter must stop selecting/parsing `effective_json`,
+and the hospital/center exclusion must consume a projected boolean rather than inspect the
+source text. The production-company filter, if retained, receives only its exact string array.
+
+| JSON key / derived value | Classification | Initial READ ONLY use and limit |
+|---|---|---|
+| `facility_type` | Search/filter required | Expose only `is_hospital_or_center` boolean for the existing exclusion; do not expose the raw facility field. |
+| `hp_production_companies` | Filter required if this existing filter remains enabled | Expose only the string array needed for exact matching; no related source/evidence keys. |
+| `owner_name` | Display / Comdesk supplement; approval required | Official clinic/operator name; personal data. Keep only if the data owner approves display to the IAP audience. |
+| `manager_name` | Display / Comdesk output required; approval required | Official manager name, also the standard export's manager field when no original Comdesk row exists. Keep only under the same IAP/data-owner approval. |
+| `postal_code`, `address2` | Comdesk fallback required | Needed to keep fixed-width export fields for new clinics without a stored original Comdesk row. |
+| `maps_regular_holiday`, `regular_holiday`, `maps_business_days`, `business_days`, `maps_morning_start`, `morning_start`, `maps_morning_end`, `morning_end`, `maps_afternoon_start`, `afternoon_start`, `maps_afternoon_end`, `afternoon_end` | Comdesk fallback required | Expose only these values used by `fixed_row`; retain existing Maps-first/source fallback behavior. |
+| `epark_url`, `epark_contract` | Current list display; review for necessity | If kept in the READ ONLY row, expose only these two fields. They are not needed for clinic identity, core search, or CSV mapping. |
+| `marketing_signals` | Business-sensitive; restricted projection only | Rebuild display names from existing `signals_json`; no raw nested objects, evidence text, evidence URLs, service names, or status rationale. Counts/hot status continue from dedicated columns. |
+| `age_probability_under_59`, `age_estimation_source`, `age_estimation_reason` | Inferred personal attribute / approval required | Not needed for clinic search or Comdesk export. Default recommendation: remove this value and its filter from READ ONLY until a data owner separately approves the inference and display purpose. |
+| `graduation_evidence`, `treatment_evidence`, `hp_match_reason`, `hp_rank_reasons`, `hp_candidates`, `crawl_errors`, `epark_candidates`, `epark_issues` | Not required / exclude | Detail-panel evidence and review material are not used by either initial READ ONLY screen or standard export. |
+| Any unlisted, future, source-specific key | Not approved / exclude | Must not flow through a generic JSON object. Add only after data-owner review and an explicit projection-contract update. |
+
+Clinic identity/search columns, `departments_json`, HP rank/status/URL, treatment sidecars,
+marketing count/status and official verified email remain sourced from their existing dedicated
+columns or the other six approved tables. Existing Comdesk `row_json` / template mapping remain
+separate grants on `provenance.comdesk_original_rows` and `provenance.templates`. Email remains
+in `public.clinic_email_enrichment` under its separate verified-only RLS condition.
+
+### JSON extraction and failure behavior
+
+`effective_json` is TEXT and is intentionally not uniformly castable to `jsonb`: existing data
+can contain escaped NUL values. A view that casts the whole value or evaluates `->>` directly
+has not been shown safe. The projection implementation must use a validated, non-throwing
+extractor in the isolated test and prove that all required projected fields match Python's
+existing decode behavior for ordinary, NULL/empty, malformed, escaped-NUL, nested, and
+wrong-type fixtures. Missing, malformed or wrong-type optional keys must become SQL NULL or an
+empty array without aborting the whole national query. Required clinic identity columns remain
+from typed source columns. For every production row with an invalid/unprojectable required
+Comdesk fallback, the test must report the count and prove export fails closed or preserves the
+approved fallback; it must never silently emit shifted columns or claim complete row parity.
+
+The view owner needs SELECT only on its referenced source columns, including `effective_json`
+for the internal projection expression. The raw source grant is to this non-login helper only;
+the Reader must fail `SELECT effective_json FROM public.clinics`. Verify the helper cannot log in,
+has no membership edges, does not own the table, has no `BYPASSRLS`, and is not assumable by the
+Reader. Verify the existing permissive/restrictive policy composition still yields nationwide
+rows for the helper, while the six other table RLS policies stay scoped as previously proposed.
+
+### Reader SQL delta and approval state
+
+Replace the previous direct clinic-column grant block as follows (proposal only; do not run it):
+
+1. Create one dedicated `NOLOGIN NOINHERIT NOBYPASSRLS` projection-owner role; do not change
+   `clinic_cloudrun_reader`, `clinic_runtime`, `postgres`, or CRM roles/memberships.
+2. Grant the helper `USAGE` on `public` and column SELECT only on the source columns referenced
+   by the view, including `effective_json`; add one uniquely named `FOR SELECT TO
+   clinic_cloudrun_projection_owner USING (true)` policy on `public.clinics` only after checking
+   existing policy composition/name collision.
+3. Create `public.clinic_cloudrun_readonly` owned by that helper with the approved named
+   projection columns, `security_barrier=true`, and no write trigger/rule. The view definition
+   and extractor must be the exact isolated-tested version.
+4. Revoke the Reader's existing table-wide SELECT on `public.clinics`; do not grant any direct
+   clinic table columns to the Reader. Grant the Reader SELECT on the view. Preserve its
+   existing seven-table policies/grants for the six other tables and email table exactly as
+   approved; do not widen their columns or alter CRM policies.
+5. Rollback: first disable the app credential under its separately approved operational
+   procedure; then revoke Reader view SELECT and drop only the new view/helper policy/helper
+   source-column grants/helper role after ownership dependencies are resolved. Do not restore
+   the old all-41-column Reader grant by default. Never drop or rewrite existing CRM policies.
+
+**SQL status:** the current seven-table direct-grant SQL is superseded for `public.clinics` and
+must not be applied as written. Keep the six non-clinic table grants and the email condition
+unchanged. The view/helper DDL, safe extractor, exact projected columns, policies and roll-back
+ordering remain proposal-only until C supplies a code commit, an isolated PostgreSQL test passes,
+and the database/data owners approve the named fields and new helper role/view. The existing
+clinic-role audit is reused; this design note does not repeat or claim a new live catalog audit.
+
+### C implementation interface and acceptance tests
+
+READ ONLY mode should use a separate repository projection mapping with the following contract:
+
+- Relation: `public.clinic_cloudrun_readonly`; never query `public.clinics` directly in the
+  READ ONLY count/list/filter/export flow.
+- Direct view columns preserve the existing typed `clinics` output names required by filters,
+  ordering and identity; at minimum the helper/view interface must account for the actual
+  callsites' `id`, `uuid`, `merged_into`, `tel_match_key`, `first_seen_at`, `last_seen_at`,
+  `source_as_of_date`, `is_new`, `departments_json`, `clinic_name`, `phone`, `phone_norm`,
+  `address`, `prefecture`, `medical_type`, `active`, `designation_date`, `recent_until`,
+  `registration_reason`, `owner_equal`, `signal_count`, `hot_status`, `signals_json`,
+  `exclude_reason`, `merge_hold`, `hp_status`, `hp_url`, `hp_rank`, `maps_presence_status`,
+  `maps_website_url`, and `maps_profile_url`, plus only the individually approved projected
+  keys in the table above. Include `age_probability` only after separate approval. This is a
+  source-column checklist for projection design, not authority to expose every item to Reader.
+  Do not return a JSON blob and do not use `SELECT *`.
+- Replace `_COLUMNS`/`_build_record()`'s raw JSON load with explicit field mapping. Map
+  `is_hospital_or_center` to the hospital exclusion, the projected production-company array
+  to its Python post-filter, and derive signal names only from `signals_json`. The normal-mode
+  repository remains unchanged.
+- Do not expose age probability in the READ ONLY display/filter by default pending approval.
+  Owner/manager names and the Comdesk fallback fields are gated by documented data-owner
+  approval; if that approval is absent, stop this projection release instead of silently
+  deleting required standard export values.
+- Keep all current six other relations and the verified-email filter unchanged. SQL capture
+  must show no `effective_json`, `base_json`, audit/history, internal review, Email KPI, HP Job,
+  Step 6 or delivery relation access.
+
+Acceptance gate in an isolated database with a production-sized data copy and Reader-equivalent
+role: verify startup; national count and multi-page browsing; department, rank, treatment,
+production-company and text filters; sales-target count; Comdesk CSV/XLSX header/row/column
+alignment and original-row/template fidelity; only verified-email values; count/export
+reconciliation; projection outputs vs the current reference rows; malformed/NULL/NUL fixtures;
+direct raw JSON selection denied; unlisted JSON keys denied; writes rejected; normal-mode
+repository unchanged; and CRM roles' prior grants/policy results unchanged. Capture query
+plans/latency and table lock/WAL metrics for the view. This is a prerequisite; current C branch
+has no projection implementation to test.
+
+**Release readiness: NO-GO for DB application.** The architecture choice is set to the
+owner-rights narrow view, but its SQL is not execution-ready until extraction safety, exact
+column projection, PostgreSQL version/options, performance, helper-role isolation, owner/manager
+data use, and the age-field exclusion are validated/approved. No database, role, policy,
+migration, secret or Cloud Run change was made.
