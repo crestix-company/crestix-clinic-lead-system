@@ -1,0 +1,35 @@
+# Cloud Run Jobs (clinic-lead-hp-worker): one-shot HP research Execution.
+#
+# This image runs scripts/cloud_hp_worker.py to completion and exits -- it never
+# serves HTTP, never listens on $PORT, and is never deployed as a Cloud Run
+# Service. tasks=1 / parallelism=1 / max_retries=0 / task_timeout=1800s are
+# Cloud Run Job configuration (set at `gcloud run jobs deploy` time by a human),
+# not something this Dockerfile can or should encode. It never bundles
+# production SQLite data, local credential files, or real clinic CSVs (see
+# .dockerignore).
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/app
+
+WORKDIR /app
+
+RUN groupadd --system clinicapp \
+    && useradd --system --gid clinicapp --home-dir /app --no-create-home clinicapp
+
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src ./src
+COPY config ./config
+COPY scripts/cloud_hp_worker.py ./scripts/cloud_hp_worker.py
+
+RUN chown -R clinicapp:clinicapp /app
+
+USER clinicapp
+
+# No listening port is declared: this is a Job task, not a Service.
+# HP_WORKER_JOB_ID is supplied as a containerOverride by src.cloud_run.job_dispatch
+# when the Execution starts; there is no default job id baked into this image.
+CMD ["python", "scripts/cloud_hp_worker.py"]

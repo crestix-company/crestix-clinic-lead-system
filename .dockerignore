@@ -1,0 +1,40 @@
+# Default-deny: Dockerfile.cloudrun (Web) only needs app_v2.py/src/config, and
+# Dockerfile.cloudrun.worker (Cloud Run Jobs) only needs scripts/cloud_hp_worker.py
+# on top of that same src/config. Everything else (real clinic data, local
+# credentials, backups, scratch scripts, docs, tests) is excluded by default so
+# a future accidental file in the build context can never silently end up
+# inside either image. New code must be added under app_v2.py/src/ (or, for the
+# worker entry point specifically, scripts/cloud_hp_worker.py) to be shipped.
+*
+
+!app_v2.py
+!requirements.txt
+!src
+!src/**
+!config
+!config/**
+!scripts/cloud_hp_worker.py
+
+# Re-exclude anything secret-shaped even if it ends up under src/ or config/ later.
+.env
+.env.*
+.supabase-runtime.env.local
+config/email_research.env.local
+config/gmail_oauth_client.json
+config/gmail_oauth_token.json
+config/outreach_email_v2.json
+**/*.secret
+**/*secrets*
+**/.secrets/**
+**/*.sqlite3*
+**/*.db*
+**/*.bak
+**/*.csv
+**/*.pem
+**/*.key
+
+# Build/runtime noise that must never ride along even under the allowed trees.
+**/__pycache__/**
+**/*.pyc
+**/.pytest_cache/**
+**/.DS_Store

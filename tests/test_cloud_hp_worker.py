@@ -248,14 +248,35 @@ def test_build_job_run_request_rejects_non_job_id_shaped_values():
 
 def test_run_hp_worker_job_success_is_dispatched():
     def fake_execute(request):
-        return {"metadata": {"name": "projects/p/locations/r/operations/abc"}}
+        return {
+            "name": "projects/p/locations/r/operations/op-abc",
+            "metadata": {"name": "projects/p/locations/r/jobs/j/executions/exec-xyz"},
+        }
 
     result = job_dispatch.run_hp_worker_job(
         execute_fn=fake_execute, job_resource_name="projects/p/locations/r/jobs/j",
         clinic_job_id=VALID_JOB_ID,
     )
     assert result.status == job_dispatch.DISPATCHED
-    assert result.execution_name == "projects/p/locations/r/operations/abc"
+    # Operation and Execution are two different resources with two different
+    # names -- never conflate them into a single field.
+    assert result.operation_name == "projects/p/locations/r/operations/op-abc"
+    assert result.execution_name == "projects/p/locations/r/jobs/j/executions/exec-xyz"
+
+
+def test_run_hp_worker_job_dispatched_with_only_operation_name():
+    """metadata.name can be briefly absent right as the Operation starts --
+    the Operation name alone is still enough to reconcile against later."""
+    def fake_execute(request):
+        return {"name": "projects/p/locations/r/operations/op-abc"}
+
+    result = job_dispatch.run_hp_worker_job(
+        execute_fn=fake_execute, job_resource_name="projects/p/locations/r/jobs/j",
+        clinic_job_id=VALID_JOB_ID,
+    )
+    assert result.status == job_dispatch.DISPATCHED
+    assert result.operation_name == "projects/p/locations/r/operations/op-abc"
+    assert result.execution_name is None
 
 
 def test_run_hp_worker_job_timeout_is_unknown_not_rejected():
@@ -303,7 +324,7 @@ def test_run_hp_worker_job_client_error_is_rejected_not_unknown():
     assert result.status == job_dispatch.REJECTED
 
 
-def test_run_hp_worker_job_missing_execution_name_is_unknown():
+def test_run_hp_worker_job_missing_both_names_is_unknown():
     def fake_execute(request):
         return {}
 
@@ -320,7 +341,7 @@ def test_run_hp_worker_job_never_forwards_extra_overrides():
 
     def fake_execute(request):
         captured["request"] = request
-        return {"metadata": {"name": "op/1"}}
+        return {"name": "op/1", "metadata": {"name": "exec/1"}}
 
     job_dispatch.run_hp_worker_job(
         execute_fn=fake_execute, job_resource_name="projects/p/locations/r/jobs/j",
@@ -330,3 +351,56 @@ def test_run_hp_worker_job_never_forwards_extra_overrides():
     assert list(overrides.keys()) == ["containerOverrides", "taskCount"]
     assert len(overrides["containerOverrides"]) == 1
     assert len(overrides["containerOverrides"][0]["env"]) == 1
+
+
+# ---- job_dispatch: Operation reconciliation (never a new dispatch) --------
+
+def test_reconcile_operation_without_a_name_is_still_unknown():
+    assert job_dispatch.reconcile_operation(
+        get_operation_fn=lambda name: (_ for _ in ()).throw(AssertionError("must not be called")),
+        operation_name="",
+    ) == job_dispatch.RECONCILE_STILL_UNKNOWN
+
+
+def test_reconcile_operation_in_flight_is_running():
+    result = job_dispatch.reconcile_operation(
+        get_operation_fn=lambda name: {"name": name, "done": False},
+        operation_name="projects/p/locations/r/operations/op-abc",
+    )
+    assert result == job_dispatch.RECONCILE_RUNNING
+
+
+def test_reconcile_operation_done_without_error_is_running():
+    """done=True with no error means the Execution genuinely started and (at
+    least) ran to completion -- a fresh dispatch for the same job id is still
+    forbidden; the caller must look at the Job's own DB status instead."""
+    result = job_dispatch.reconcile_operation(
+        get_operation_fn=lambda name: {"name": name, "done": True, "response": {}},
+        operation_name="projects/p/locations/r/operations/op-abc",
+    )
+    assert result == job_dispatch.RECONCILE_RUNNING
+
+
+def test_reconcile_operation_with_error_is_failed_and_safe_to_retry():
+    result = job_dispatch.reconcile_operation(
+        get_operation_fn=lambda name: {"name": name, "done": True, "error": {"code": 13, "message": "boom"}},
+        operation_name="projects/p/locations/r/operations/op-abc",
+    )
+    assert result == job_dispatch.RECONCILE_FAILED
+
+
+def test_reconcile_operation_lookup_failure_stays_unknown_never_raises():
+    def exploding_get(name):
+        raise TimeoutError("deadline exceeded")
+
+    result = job_dispatch.reconcile_operation(
+        get_operation_fn=exploding_get, operation_name="projects/p/locations/r/operations/op-abc",
+    )
+    assert result == job_dispatch.RECONCILE_STILL_UNKNOWN
+
+
+def test_reconcile_operation_unusable_response_stays_unknown():
+    result = job_dispatch.reconcile_operation(
+        get_operation_fn=lambda name: None, operation_name="projects/p/locations/r/operations/op-abc",
+    )
+    assert result == job_dispatch.RECONCILE_STILL_UNKNOWN
