@@ -13,9 +13,6 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='clinic_cloudrun_reader') THEN
     CREATE ROLE clinic_cloudrun_reader LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
   END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='clinic_cloudrun_projection_owner') THEN
-    CREATE ROLE clinic_cloudrun_projection_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-  END IF;
 END
 $$;
 
@@ -58,8 +55,6 @@ CREATE TABLE public.clinics (
 );
 
 ALTER TABLE public.clinics ENABLE ROW LEVEL SECURITY;
-CREATE POLICY fixture_projection_rls_limit ON public.clinics
-  AS RESTRICTIVE FOR SELECT TO clinic_cloudrun_projection_owner USING (id <> 999);
 
 INSERT INTO public.clinics (id, clinic_name, phone, address, prefecture, medical_type,
                             departments_json, treatments_json, signals_json, effective_json)
@@ -84,8 +79,6 @@ VALUES
   '{"facility_type":"病院"}'),
  (1001, 'Out Of Range Number Clinic', '', '', '東京都', '医科', '[]', '[]', '[]',
   '{"facility_type":"診療所","large":1e1000000}');
-
-\ir ../../supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql
 
 CREATE SCHEMA hp_research;
 CREATE TABLE hp_research.clinic_hp_research (
@@ -129,15 +122,20 @@ INSERT INTO provenance.templates VALUES
   (7, '["UUID","種別","名前","カナ","郵便番号","都道府県","住所１","住所２","住所カナ","Tel1","Tel2","Tel3","Tel4","FAX","URL","備考","旧社名","リードソース","履歴","記事名","休診日","診療日","午前始","午前終","午後始","午後終","院長名","開業日"]', '{}');
 INSERT INTO provenance.comdesk_original_rows VALUES
   (1, 1, 7, '["uuid-1","","Original Name","","100-0001","東京都","千代田区1-1","","","03-1234-5678","","","","","https://original.example.jp","","","","","","休診","月火水木金","09:00","12:00","13:00","17:00","Original Doctor",""]', 'uuid-1');
+UPDATE provenance.comdesk_original_rows
+SET row_json=jsonb_set(jsonb_set(row_json,'{15}','"PRIVATE_NOTE"'::jsonb),
+                       '{18}','"PRIVATE_HISTORY"'::jsonb)
+WHERE id=1;
+INSERT INTO provenance.comdesk_original_rows VALUES
+  (2, 1000, 7, '["uuid-hospital"]', 'uuid-hospital');
 ALTER TABLE provenance.comdesk_original_rows ENABLE ROW LEVEL SECURITY;
 ALTER TABLE provenance.templates ENABLE ROW LEVEL SECURITY;
-CREATE POLICY fixture_reader_select ON provenance.comdesk_original_rows
-  FOR SELECT TO clinic_cloudrun_reader USING (true);
+\ir ../../supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql
+CREATE POLICY fixture_projection_rls_limit ON public.clinics
+  AS RESTRICTIVE FOR SELECT TO clinic_cloudrun_projection_owner USING (id <> 999);
 CREATE POLICY fixture_reader_select ON provenance.templates
   FOR SELECT TO clinic_cloudrun_reader USING (true);
 GRANT USAGE ON SCHEMA provenance TO clinic_cloudrun_reader;
-GRANT SELECT (id, clinic_id, template_id, row_json, uuid)
-  ON provenance.comdesk_original_rows TO clinic_cloudrun_reader;
 GRANT SELECT (id, headers_json, mapping_json) ON provenance.templates TO clinic_cloudrun_reader;
 
 CREATE TABLE public.clinic_email_enrichment (
@@ -167,6 +165,15 @@ BEGIN
   IF has_column_privilege(current_user, 'public.clinics', 'effective_json', 'SELECT') THEN
     RAISE EXCEPTION 'Reader retains effective_json SELECT';
   END IF;
+  IF has_column_privilege(current_user, 'provenance.comdesk_original_rows', 'row_json', 'SELECT')
+     OR EXISTS (
+       SELECT 1 FROM pg_proc p,
+         aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+       WHERE p.oid='public.clinic_cloudrun_effective_projection(text,bigint)'::regprocedure
+         AND acl.grantee=0 AND acl.privilege_type='EXECUTE'
+     ) THEN
+    RAISE EXCEPTION 'Reader can read raw Comdesk rows or PUBLIC can execute the projection function';
+  END IF;
   IF EXISTS (SELECT 1 FROM information_schema.columns
              WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
                AND column_name IN ('effective_json','base_json','treatment_evidence')) THEN
@@ -178,6 +185,14 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM public.clinic_cloudrun_readonly WHERE id=999) THEN
     RAISE EXCEPTION 'The view owner bypassed the restrictive RLS policy';
+  END IF;
+  IF (SELECT row_json->>2 FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1) <> 'Original Name'
+     OR (SELECT row_json->>26 FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1) <> ''
+     OR (SELECT row_json->>22 FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1) <> ''
+     OR (SELECT row_json->>15 FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1) <> ''
+     OR (SELECT row_json->>18 FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1) <> ''
+     OR (SELECT projection_valid FROM provenance.clinic_cloudrun_comdesk_rows WHERE clinic_id=1000) IS DISTINCT FROM false THEN
+    RAISE EXCEPTION 'Comdesk projection lost approved values or exposed pending values';
   END IF;
   SELECT effective_projection INTO projection FROM public.clinic_cloudrun_readonly WHERE id=1;
   IF projection->>'facility_type' <> '診療所'
@@ -208,6 +223,12 @@ BEGIN
   IF projection::text LIKE '%DO_NOT_RETURN%' OR projection::text LIKE '%owner_name%' THEN
     RAISE EXCEPTION 'Projection function exposed a non-allowlisted source key';
   END IF;
+  projection := public.clinic_cloudrun_effective_projection(
+    '{"epark_url":"__CLINIC_NUL_12345__"}', 12345
+  );
+  IF projection->>'_valid' <> 'false' THEN
+    RAISE EXCEPTION 'Marker collision did not fail closed';
+  END IF;
 END
 $$;
 
@@ -221,5 +242,17 @@ BEGIN
   END;
 END
 $$;
+
+DO $$ BEGIN
+  BEGIN EXECUTE 'INSERT INTO public.clinics(id) VALUES (2000)';
+    RAISE EXCEPTION 'Reader INSERT succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'UPDATE public.clinics SET clinic_name=clinic_name WHERE id=1';
+    RAISE EXCEPTION 'Reader UPDATE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'DELETE FROM public.clinics WHERE id=1';
+    RAISE EXCEPTION 'Reader DELETE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+END $$;
 
 RESET ROLE;
