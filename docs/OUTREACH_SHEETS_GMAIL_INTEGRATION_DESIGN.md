@@ -2,9 +2,9 @@
 
 This document records the source audit and a non-production implementation proposal. No database migration, Sheets write, Gmail send/schedule, GAS deployment, or Cloud Run deployment was performed.
 
-## I3 send-preparation gate
+## Draft-save and I3 send-preparation gates
 
-The source repo and audited Sheet headers contain no authoritative definition of “I3”. The UI therefore requires an approved definition ID/URL plus an explicit acknowledgement and blocks Gmail draft creation until that source is configured. Do not infer a meaning for I3. The confirmation record captures reviewer, UTC timestamp, clinic identity, recipient, exact generated subject/body, article reference, clinic detail URL, duplicate check and checklist.
+The source repo and audited Sheet headers contain no authoritative definition of “I3”. Do not infer a meaning for I3. Draft-save preparation is a separate gate: the operator confirms the exact clinic/recipient, template, article and clinic detail, and current Gmail/ledger duplicate state must be `CLEAR`; the backend independently repeats missing-data, history and duplicate checks. A draft-save record never represents send approval. After a Gmail draft exists, a separate IS-lead send-readiness gate requires an approved I3 definition ID/HTTPS reference, explicit acknowledgement, exact content/identity/article/duplicate checklist and reviewer/time. Without the formal I3 definition, this second gate remains unapproved. There is no Clinic Lead send or schedule operation.
 
 ## Source audit
 
@@ -55,8 +55,9 @@ The migration file is an unapplied proposal and assumes the existing delivery-le
 | Table | Purpose / integrity |
 |---|---|
 | `outreach.sales_cases` | One row per operation/case; unique `operation_key`, optional unique source-system/external-case ID, clinic FK, allows multiple cases per clinic |
-| `outreach.email_delivery_records` | Existing delivery ledger linked to sales case; unique per case; existing records backfilled one-to-one |
-| `outreach.email_pre_send_reviews` | Append-only reviewer, timestamp, I3 reference and checklist snapshots |
+| `outreach.email_delivery_records` | Existing delivery ledger linked to sales case; retains existing `(clinic_id,campaign_id)` and idempotency uniqueness; non-unique case-history index allows the ledger to represent multiple historical delivery rows per case where permitted |
+| `outreach.email_draft_save_reviews` | Append-only confirmation for the operator’s pre-draft review; does not assert I3 or send approval |
+| `outreach.email_pre_send_reviews` | Append-only IS-lead review after a draft exists, with timestamp, I3 reference and checklist snapshots |
 | `outreach.gmail_messages` | Gmail IDs/status and immutable recipient/content snapshots; unique operation, draft and message IDs |
 | `outreach.email_state_history` | Append-only status transitions; source event key unique when provided |
 | `outreach.article_selection_results` | Versioned ArticleAudit results with supersedes pointer |
@@ -66,7 +67,7 @@ The migration file is an unapplied proposal and assumes the existing delivery-le
 | `outreach.sync_jobs`, `sync_errors` | Idempotent sync operation, cursors, counts and retryable row failures |
 | `outreach.audit_events` | Actor/action/entity hashes, append-only |
 
-Every new table enables and forces RLS, revokes public/anon/authenticated/runtime access, and grants only the restricted outreach role. Append-only evidence tables revoke UPDATE/DELETE/TRUNCATE; mutable state tables grant column-scoped updates. The role itself is not created by this proposal. Supabase documents that RLS and SQL privileges work together; production deployment still requires reviewed policies, role grants and connection verification ([Supabase RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)). Migration is not applied.
+Every new table enables and forces RLS, revokes public/anon/authenticated/runtime access, and grants only the restricted outreach role. Append-only evidence tables revoke UPDATE/DELETE/TRUNCATE; mutable state tables grant column-scoped updates. The existing PR #112 `clinic_draft_guard` remains the atomic, Clinic-ID-wide draft reservation guard; this integration does not remove it. Gmail historical records may be retained per observed Draft/Message ID, while new drafting still follows the existing guard. The role itself is not created by this proposal. Supabase documents that RLS and SQL privileges work together; production deployment still requires reviewed policies, role grants and connection verification ([Supabase RLS documentation](https://supabase.com/docs/guides/database/postgres/row-level-security)). Migration is not applied.
 
 ## Local UI and boundary
 

@@ -21,6 +21,7 @@ REQUIRED_CHECKS = (
     "clinic_detail_page",
     "duplicate_clear",
 )
+DRAFT_SAVE_CHECKS = REQUIRED_CHECKS
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,45 @@ def configured_i3_reference(environ=None) -> I3Reference:
         (env.get(I3_DEFINITION_ID_ENV) or "").strip(),
         (env.get(I3_DEFINITION_URL_ENV) or "").strip(),
     )
+
+
+def build_draft_save_review(*, result, reviewer: str, checks: dict[str, bool],
+                            operation_key: str = "", campaign_id: str = "",
+                            reviewed_at: datetime | None = None) -> tuple[dict, tuple[str, ...]]:
+    """Validate the draft-only preparation gate; it does not approve sending."""
+    target = result.target
+    blockers = []
+    if result.status != "READY":
+        blockers.append("生成判定がREADYではありません")
+    if not target.clinic_name.strip() or not target.director_name.strip() or not target.director_name_confirmed:
+        blockers.append("医院名・確認済み院長名が揃っていません")
+    if not target.email.strip():
+        blockers.append("宛先がありません")
+    if not result.subject.strip() or not result.body.strip():
+        blockers.append("正式テンプレートの件名・本文がありません")
+    article_url = result.listed_url or result.example_url or (result.first.article.url if result.first else "")
+    if not article_url:
+        blockers.append("実掲載記事または類似記事URLがありません")
+    if not target.article.clinic_profile_url.strip():
+        blockers.append("医院詳細ページURLがありません")
+    if not reviewer.strip():
+        blockers.append("下書き保存確認担当者が未入力です")
+    for key in DRAFT_SAVE_CHECKS:
+        if checks.get(key) is not True:
+            blockers.append(f"下書き保存前確認が未完了: {key}")
+    stamp = reviewed_at or datetime.now(timezone.utc)
+    if stamp.tzinfo is None:
+        blockers.append("確認日時にtimezoneがありません")
+    payload = {
+        "stage": "DRAFT_SAVE",
+        "reviewed_by": reviewer.strip(),
+        "reviewed_at": stamp.astimezone(timezone.utc).isoformat(),
+        "operation_key": operation_key.strip() or f"clinic:{target.clinic_id}:campaign:{campaign_id.strip()}",
+        "checks": {key: checks.get(key) is True for key in DRAFT_SAVE_CHECKS},
+        "i3_definition_status": "UNCONFIRMED",
+        "protocol": "draft_save_review_v1",
+    }
+    return payload, tuple(blockers)
 
 
 def build_pre_send_review(*, result, reviewer: str, checks: dict[str, bool],
@@ -91,4 +131,5 @@ def build_pre_send_review(*, result, reviewer: str, checks: dict[str, bool],
     return payload, tuple(blockers)
 
 
-__all__ = ["I3Reference", "REQUIRED_CHECKS", "build_pre_send_review", "configured_i3_reference"]
+__all__ = ["I3Reference", "REQUIRED_CHECKS", "DRAFT_SAVE_CHECKS", "build_draft_save_review",
+           "build_pre_send_review", "configured_i3_reference"]

@@ -25,7 +25,8 @@ from src.outreach.generation import (
     FAILED, NEEDS_REVIEW, READY, STATUS_LABELS, GenerationSettings, generate_batch,
     summarize, to_csv_bytes,
 )
-from src.outreach.pre_send_review import build_pre_send_review, configured_i3_reference
+from src.outreach.pre_send_review import build_draft_save_review, configured_i3_reference
+from src.outreach.pre_send_ui import render_pre_send_review_gate
 from src.outreach.source_import import CSVPreviewError, preview_csv
 from src.outreach.legacy_import_preview import (
     LegacyImportInputError, parse_legacy_import_csv, preview_legacy_import,
@@ -559,16 +560,16 @@ def _tab_results():
     if not draft_enabled:
         st.info("Gmail下書き保存は無効です（OUTREACH_GMAIL_DRAFTS_ENABLED=false）。")
     if not i3_reference.configured:
-        st.error("I3の正式定義を既存資料から特定できていません。承認済み定義IDとHTTPS参照URLが設定されるまで下書き保存は停止します。")
+        st.info("I3正式定義は未確定です。下書き保存とは別の送信前確認・承認は未完了のままです。")
     else:
-        st.markdown(f"I3定義参照：[{i3_reference.definition_id}]({i3_reference.definition_url})")
+        st.caption(f"送信前確認で参照するI3定義：{i3_reference.definition_id}")
     ready_options = [i for i, result in enumerate(results) if result.status == READY]
     selected_drafts = st.multiselect(
         "下書き保存対象（READYのみ・最大25医院）", ready_options,
         format_func=lambda i: f"Clinic {results[i].target.clinic_id}｜{results[i].target.clinic_name}",
         key=K + "draft_selection",
     )
-    reviewer = st.text_input("送信前確認担当者（ISリーダー）", key=K + "reviewer") if selected_drafts else ""
+    reviewer = st.text_input("下書き保存確認担当者", key=K + "reviewer") if selected_drafts else ""
     review_payloads = {}
     review_blockers_by_index = {}
     for i in selected_drafts:
@@ -605,12 +606,8 @@ def _tab_results():
                 "clinic_detail_page": st.checkbox("医院詳細ページURLを確認しました", key=K + f"review_profile_{clinic_key}"),
                 "duplicate_clear": duplicate_clear,
             }
-            i3_acknowledged = st.checkbox("設定されたI3正式定義・参照先に基づいて確認しました",
-                                          disabled=not i3_reference.configured,
-                                          key=K + f"review_i3_{clinic_key}")
-            payload, blockers = build_pre_send_review(
+            payload, blockers = build_draft_save_review(
                 result=result, reviewer=reviewer, checks=checks,
-                i3_reference=i3_reference, i3_acknowledged=i3_acknowledged,
                 operation_key=operation_key,
                 campaign_id=st.session_state.get(K + "campaign_id", "").strip(),
             )
@@ -619,7 +616,11 @@ def _tab_results():
             if blockers:
                 st.warning("保存前確認が未完了：" + " / ".join(blockers))
             else:
-                st.success(f"確認担当者：{payload['reviewed_by']}｜確認日時（保存操作時に記録）：{payload['reviewed_at']}")
+                st.success(f"下書き保存確認者：{payload['reviewed_by']}｜確認日時：{payload['reviewed_at']}")
+            if not i3_reference.configured:
+                st.info("I3正式定義は未確定です。下書き保存とは分離した送信前確認は未承認のままです。Clinic Leadから送信・予約送信はできません。")
+            else:
+                st.caption(f"I3送信前確認の参照候補：{i3_reference.definition_id}（送信判断はGmailでISリーダーが実施）")
     all_reviewed = bool(selected_drafts) and all(not review_blockers_by_index.get(i) for i in selected_drafts)
     typed_confirmation = st.text_input("下書き保存の確認語", key=K + "draft_confirmation")
     st.caption("確認語：CREATE_GMAIL_DRAFTS。最大25件を順に保存し、曖昧な結果は自動再送しません。")
@@ -642,12 +643,16 @@ def _tab_results():
                     generation_batch_id=settings.generation_batch_id,
                     staff_name=settings.staff, gmail=gmail, repository=repository,
                     as_of=today_japan(), enabled=draft_enabled,
-                    pre_send_review=review_payloads[i],
+                    draft_save_review=review_payloads[i],
                 ))
             counts = {}
             for outcome in outcomes:
                 counts[outcome.status] = counts.get(outcome.status, 0) + 1
             st.session_state[K + "draft_outcomes"] = outcomes
+            st.session_state[K + "draft_result_by_outreach"] = {
+                outcome.outreach_id: results[i] for i, outcome in zip(selected_drafts, outcomes)
+                if outcome.outreach_id
+            }
             st.session_state[K + "draft_counts"] = {
                 "success": sum(outcome.status in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
                 "failure": sum(outcome.status not in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
@@ -666,6 +671,16 @@ def _tab_results():
             "Draft ID": outcome.gmail_draft_id, "Message ID": outcome.gmail_message_id,
             "Thread ID": outcome.gmail_thread_id, "理由": outcome.reason,
         } for outcome in st.session_state[K + "draft_outcomes"]]), hide_index=True, use_container_width=True)
+        result_by_outreach = st.session_state.get(K + "draft_result_by_outreach", {})
+        for outcome in st.session_state[K + "draft_outcomes"]:
+            result = result_by_outreach.get(outcome.outreach_id)
+            if result:
+                with st.expander(f"送信前確認：{result.target.clinic_name}", expanded=False):
+                    render_pre_send_review_gate(
+                        result=result, outcome=outcome,
+                        campaign_id=st.session_state.get(K + "campaign_id", "").strip(),
+                        key=K + "send_review_" + outcome.outreach_id,
+                    )
 
 
 def _tab_cases(demo):
@@ -772,7 +787,7 @@ def _tab_import_preview():
 def outreach_email_page(store, demo=False, *, formal_email_page=None):
     st.header("メール送付文章")
     st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。メール送信・予約送信は行いません。")
-    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 案件・状態", "⑥ 取込プレビュー"])
+    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 下書き一括保存", "⑥ 案件・状態", "⑦ 取込プレビュー"])
     with tabs[0]:
         _tab_targets(store, demo, formal_email_page=formal_email_page)
     with tabs[1]:
@@ -782,6 +797,9 @@ def outreach_email_page(store, demo=False, *, formal_email_page=None):
     with tabs[3]:
         _tab_results()
     with tabs[4]:
-        _tab_cases(demo)
+        from src.outreach.auto_draft_ui import auto_draft_save_page
+        auto_draft_save_page(demo=demo)
     with tabs[5]:
+        _tab_cases(demo)
+    with tabs[6]:
         _tab_import_preview()

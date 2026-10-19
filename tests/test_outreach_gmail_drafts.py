@@ -6,6 +6,7 @@ from src.outreach.gmail_drafts import (
     build_draft_key,
     check_duplicate,
     list_existing_drafts,
+    list_existing_messages,
 )
 
 
@@ -90,3 +91,47 @@ def test_duplicate_recipient_and_subject_is_conservative_fallback():
 def test_no_duplicate_when_neither_key_nor_recipient_subject_match():
     existing = [ExistingDraft("d3", "other-key", ("other@example.com",), "subject")]
     assert check_duplicate(_identity(), subject="subject", existing=existing).duplicate is False
+
+
+class _MessageApi:
+    """Two-page fixture: a match hides on page 2, verifying list_existing_messages
+    (shared by the sent/scheduled/trash queries) aggregates every page instead of
+    only inspecting the first -- a page-2-only match must never read as "no history"."""
+
+    def __init__(self):
+        self.list_calls = []
+
+    def list(self, **kwargs):
+        self.list_calls.append(kwargs)
+        if kwargs.get("pageToken") == "page-2":
+            return _Response({"messages": [{"id": "m2", "threadId": "t2"}]})
+        return _Response({"messages": [{"id": "m1", "threadId": "t1"}], "nextPageToken": "page-2"})
+
+    def get(self, **kwargs):
+        values = {
+            "m1": [{"name": "To", "value": "other@example.com"}],
+            "m2": [{"name": "To", "value": "clinic@example.com"}, {"name": "Subject", "value": "s2"}],
+        }
+        # users.messages.get returns the Message resource directly (unlike drafts.get,
+        # which wraps it one level deeper under "message") -- matches the real Gmail API.
+        return _Response({"id": kwargs["id"], "threadId": "t-" + kwargs["id"],
+                          "payload": {"headers": values[kwargs["id"]]}})
+
+
+class _MessageService:
+    def __init__(self):
+        self.api = _MessageApi()
+
+    def users(self): return self
+    def messages(self): return self.api
+
+
+def test_list_existing_messages_paginates_and_does_not_drop_page_two_matches():
+    service = _MessageService()
+    messages = list_existing_messages(service, query="in:trash")
+    assert [item.message_id for item in messages] == ["m1", "m2"]
+    assert messages[1].recipients == ("clinic@example.com",)
+    assert service.api.list_calls == [
+        {"userId": "me", "q": "in:trash", "maxResults": 500},
+        {"userId": "me", "q": "in:trash", "maxResults": 500, "pageToken": "page-2"},
+    ]

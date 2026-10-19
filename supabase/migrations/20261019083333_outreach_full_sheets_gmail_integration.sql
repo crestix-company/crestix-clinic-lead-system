@@ -14,7 +14,7 @@ end $$;
 create table outreach.sales_cases (
   sales_case_id uuid primary key default gen_random_uuid(),
   operation_key text not null unique,
-  source_system text not null check (source_system in ('GAS_SHEETS','CSV_IMPORT','CLINIC_LEAD')),
+  source_system text not null check (source_system in ('GAS_SHEETS','CSV_IMPORT','CLINIC_LEAD','GMAIL_BACKFILL')),
   external_case_id text not null default '',
   clinic_id bigint not null references public.clinics(id) on delete restrict,
   clinic_uuid text not null,
@@ -37,8 +37,7 @@ create index sales_cases_campaign_status_idx on outreach.sales_cases(campaign_id
 -- Multiple distinct cases for one clinic are allowed, including within one campaign.
 alter table outreach.email_delivery_records
   add column sales_case_id uuid references outreach.sales_cases(sales_case_id) on delete restrict;
-alter table outreach.email_delivery_records
-  drop constraint if exists email_delivery_records_clinic_id_campaign_id_key;
+grant insert (sales_case_id) on outreach.email_delivery_records to clinic_outreach_runtime;
 insert into outreach.sales_cases
   (operation_key,source_system,external_case_id,clinic_id,clinic_uuid,campaign_id,
    is_owner,case_status,source_payload_hash)
@@ -50,8 +49,21 @@ set sales_case_id=c.sales_case_id
 from outreach.sales_cases c
 where c.source_system='CLINIC_LEAD' and c.external_case_id=d.outreach_id::text
   and d.sales_case_id is null;
-create unique index email_delivery_records_sales_case_uq
-  on outreach.email_delivery_records(sales_case_id);
+create index email_delivery_records_sales_case_history_idx
+  on outreach.email_delivery_records(sales_case_id,created_at desc);
+
+create table outreach.email_draft_save_reviews (
+  draft_review_id uuid primary key default gen_random_uuid(),
+  outreach_id uuid not null references outreach.email_delivery_records(outreach_id) on delete restrict,
+  sales_case_id uuid not null references outreach.sales_cases(sales_case_id) on delete restrict,
+  reviewed_by text not null,
+  reviewed_at timestamptz not null,
+  checklist jsonb not null check (jsonb_typeof(checklist)='object'),
+  protocol text not null,
+  created_at timestamptz not null default now()
+);
+create index email_draft_save_reviews_case_time_idx
+  on outreach.email_draft_save_reviews(sales_case_id,reviewed_at desc);
 
 create table outreach.email_pre_send_reviews (
   review_id uuid primary key default gen_random_uuid(),
@@ -260,7 +272,7 @@ declare
   table_name text;
 begin
   foreach table_name in array array[
-    'sales_cases','email_pre_send_reviews','gmail_messages','email_state_history',
+    'sales_cases','email_draft_save_reviews','email_pre_send_reviews','gmail_messages','email_state_history',
     'article_selection_results','engagement_events','calendar_appointments',
     'source_import_batches','source_import_rows','sync_jobs','sync_errors','audit_events'
   ] loop
@@ -291,6 +303,7 @@ grant update (resolution_status,resolved_at) on outreach.sync_errors to clinic_o
 
 -- Append-only review, state, event, article, and audit logs; imported raw row values cannot be updated.
 revoke update,delete,truncate on outreach.email_pre_send_reviews from clinic_outreach_runtime;
+revoke update,delete,truncate on outreach.email_draft_save_reviews from clinic_outreach_runtime;
 revoke update,delete,truncate on outreach.email_state_history from clinic_outreach_runtime;
 revoke update,delete,truncate on outreach.engagement_events from clinic_outreach_runtime;
 revoke update,delete,truncate on outreach.article_selection_results from clinic_outreach_runtime;

@@ -3,9 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from src.outreach.pre_send_review import I3Reference, REQUIRED_CHECKS, build_pre_send_review, configured_i3_reference
+from src.outreach.pre_send_review import (
+    DRAFT_SAVE_CHECKS, I3Reference, REQUIRED_CHECKS, build_draft_save_review,
+    build_pre_send_review, configured_i3_reference,
+)
 from src.outreach.source_import import CSVPreviewError, preview_csv
 from src.outreach.sync_plan import FIELD_AUTHORITIES, event_idempotency_key, plan_field_sync, shape_tracking_event
+from src.repository.outreach_delivery_repository import connect_outreach_database
 
 
 class _Target:
@@ -52,6 +56,16 @@ def test_pre_send_review_requires_all_operator_checks_and_preserves_actor_time()
     assert review["reviewed_at"] == reviewed_at.isoformat()
     assert review["operation_key"] == "clinic:10:campaign:cmp"
     assert any("duplicate_clear" in blocker for blocker in blockers)
+
+
+def test_draft_save_gate_is_separate_and_does_not_approve_send():
+    review, blockers = build_draft_save_review(
+        result=_Result(), reviewer="Operator", checks={key: True for key in DRAFT_SAVE_CHECKS},
+        campaign_id="cmp",
+    )
+    assert not blockers
+    assert review["stage"] == "DRAFT_SAVE"
+    assert review["i3_definition_status"] == "UNCONFIRMED"
 
 
 def test_csv_preview_preserves_header_order_raw_cells_and_duplicate_rows_without_merging():
@@ -108,7 +122,7 @@ def test_schema_proposal_is_additive_idempotent_and_rls_restricted_without_send_
     migration = next(Path("supabase/migrations").glob("*outreach_full_sheets_gmail_integration.sql"))
     sql = migration.read_text()
     for table in (
-        "sales_cases", "email_pre_send_reviews", "gmail_messages", "email_state_history",
+        "sales_cases", "email_draft_save_reviews", "email_pre_send_reviews", "gmail_messages", "email_state_history",
         "article_selection_results", "engagement_events", "calendar_appointments",
         "source_import_batches", "source_import_rows", "sync_jobs", "sync_errors", "audit_events",
     ):
@@ -116,9 +130,45 @@ def test_schema_proposal_is_additive_idempotent_and_rls_restricted_without_send_
         assert f"alter table outreach.%I enable row level security" in sql
     assert "unique(source_system,source_event_key)" in sql
     assert "unique(import_batch_id,source_tab,source_row_number)" in sql
+    assert "email_delivery_records_sales_case_history_idx" in sql
+    assert "unique index email_delivery_records_sales_case" not in sql
     assert "on conflict (operation_key) do nothing" in sql
     assert "revoke delete,truncate on outreach.source_import_rows" in sql
     assert "clinic_outreach_runtime role must exist" in sql
     assert "create role" not in sql.lower()
     assert "gmail.send" not in sql.lower()
     assert "sendmail" not in sql.lower()
+
+
+def test_cloud_run_read_only_flag_protects_the_separate_outreach_connection():
+    class Cursor:
+        def __init__(self):
+            self.sql = ""
+            self.calls = []
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, sql, params=()):
+            self.sql = sql
+            self.calls.append(sql)
+        def fetchone(self):
+            if self.sql == "SELECT current_user":
+                return ("clinic_runtime",)
+            return ("clinic_outreach_runtime", "clinic_outreach_runtime", True, True, True,
+                    False, False, False, False, False, False)
+
+    class Connection:
+        def __init__(self): self.cur = Cursor(); self.committed = False; self.rolled_back = False; self.closed = False
+        def cursor(self): return self.cur
+        def commit(self): self.committed = True
+        def rollback(self): self.rolled_back = True
+        def close(self): self.closed = True
+
+    conn = Connection()
+    connected = connect_outreach_database(
+        environ={"SUPABASE_RUNTIME_DB_URL": "postgres://synthetic", "CLINIC_READ_ONLY_UI": "true"},
+        connect_fn=lambda url, **kwargs: conn,
+    )
+    assert connected is conn
+    assert conn.cur.calls[:2] == ["SET TRANSACTION READ ONLY", "SET default_transaction_read_only = on"]
+    assert "SET ROLE clinic_outreach_runtime" in conn.cur.calls
+    assert conn.committed and not conn.closed
