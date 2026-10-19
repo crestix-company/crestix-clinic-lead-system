@@ -13,6 +13,7 @@ from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
 from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
+from src.master.clinic_identity import project_export_rows
 from src.master.fixed_export import fixed_row
 from src.io.output_writer import csv_bytes
 from src.enrichment.kouseikyoku_source import load_master
@@ -1260,15 +1261,29 @@ def render_comdesk_sync_export(store, demo):
         st.download_button("同期対象CSVをダウンロード", output["content"], "comdesk_hp_confirmed_sync.csv", mime="text/csv", key="simple_comdesk_sync_download")
 
 
-def comdesk_sync_csv(store, candidates):
-    rows = [new_export_row(r, COMDESK_HEADERS, {"clinic_name":2,"phone":9,"prefecture":5,"address":6}) for r in candidates]
+def comdesk_sync_csv(store, candidates, *, project_key="default"):
+    """Export one row per sales entity, using the entity's canonical UUID when present."""
+    clinics = [dict(row) for row in candidates]
+    identity_loader = getattr(store, "comdesk_identity_for_clinics", None)
+    identity_rows = identity_loader([row["id"] for row in clinics]) if identity_loader else {}
+    canonical_by_entity = {}
+    for clinic in clinics:
+        identity = identity_rows.get(int(clinic["id"]), {})
+        if identity:
+            clinic.update(identity)
+        common_id = clinic.get("common_clinic_id")
+        if common_id is not None and clinic.get("canonical_comdesk_uuid"):
+            canonical_by_entity[int(common_id)] = str(clinic["canonical_comdesk_uuid"]).strip()
+    clinics = project_export_rows(clinics, project_key, canonical_by_entity)
+    row_mapping = {"uuid":0,"clinic_name":2,"phone":9,"prefecture":5,"address":6}
+    rows = [new_export_row(r, COMDESK_HEADERS, row_mapping) for r in clinics]
     if hasattr(store, "_attach_export_metadata"):
-        rows = store._attach_export_metadata(candidates, rows)
+        rows = store._attach_export_metadata(clinics, rows)
     else:
         rows = [
             [*row, str(clinic.get("effective_hp_rank") or "").strip().upper()
              if str(clinic.get("effective_hp_rank") or "").strip().upper() in {"A", "B", "C", "D"} else "", ""]
-            for clinic, row in zip(candidates, rows)
+            for clinic, row in zip(clinics, rows)
         ]
     return csv_bytes(COMDESK_EXPORT_HEADERS, rows)
 
