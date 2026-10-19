@@ -1720,3 +1720,76 @@ IAM and Cloud Run changes remain separate approvals and were not performed here.
 assertion fails; credential usability and the Cloud Run target remain unverified; age and full
 Comdesk row exposure are not approved; and the SQL ACL/collision corrections and production
 preflight are outstanding. PR #118 remains Draft.
+
+## PR #121 latest-head correction and rerun (2026-10-19)
+
+The earlier Phase 1 review above is superseded where it describes PR #121 head
+`9f57d72bd97fa72139c10e7b9470d7af09a922e5`. The latest head reviewed for this addendum is
+`70f7ac64baeb636b3a416776a808a6067f5f3d38`. Its CI check reports pytest passed. The READ ONLY
+view still exposes the same five allowlisted JSON keys, `projection_marker`,
+`projection_valid`, and `effective_facility_type`; **`age_probability` has been removed** from
+the migration/view and from the READ ONLY adapter/filter. This resolves the earlier age-field
+conflict; it does not authorize any other inferred or sensitive values. The latest fixture also
+removed the impossible marker-collision assertion.
+
+The latest migration and fixture were copied from that head into a fresh disposable loopback
+PostgreSQL 17.11 cluster and executed successfully. The full latest fixture completed. As
+`clinic_cloudrun_reader`, a read-only transaction returned 10 synthetic visible rows and hid
+the RLS-restricted `id=999` row; the qualifying email row alone was visible; direct table and
+raw `effective_json` SELECT privileges were false; and `transaction_read_only` was `on`. The
+fixture exercises malformed/NULL/NUL/type-mismatched projection inputs and excludes the
+unapproved JSON keys. This is isolated synthetic evidence, not a production catalog, data,
+latency, or connection test. The fixture confirms privilege absence for direct clinics SELECT
+and raw JSON, and the grants do not include DML; write denial in production remains untested.
+
+The migration's seven-source boundary is unchanged: the view substitutes for `public.clinics`
+and the six other approved relations remain those in the preceding table. The SQL still grants
+`provenance.comdesk_original_rows.row_json` in full. UI blanking of doctor-name/schedule fields
+does not restrict direct SQL access to that JSON. Data-owner approval of the full original row
+payload, or an approved narrower export relation, remains a hard gate.
+
+### Latest-head SQL and security blockers
+
+1. The function still uses `CREATE OR REPLACE` and does not explicitly revoke default
+   `PUBLIC` EXECUTE. Before production use, require a collision-safe create-only path (abort if
+   a same-signature object exists), revoke PUBLIC execution, and grant EXECUTE only to the
+   roles required by the proven view execution path. Preflight and verify the function owner,
+   ACL, and helper effective `CREATE` privilege after the temporary grant is revoked.
+2. The returned `projection_marker` includes `md5(source_json)`, unnecessarily exposing a
+   deterministic fingerprint of the full source JSON. Remove the content-derived component or
+   keep the marker internal; the latest fixture does not test marker-collision behavior.
+3. The helper SELECT policy uses permissive `USING (true)`. PostgreSQL combines permissive
+   policies with OR, so it can broaden helper visibility unless applicable restrictive policies
+   constrain rows. The local fixture proves its own restrictive policy works, not that the
+   target database has equivalent policies. Before applying, inspect all target policies and
+   prove nationwide visibility is intended for this helper while other roles retain unchanged
+   effective policy behavior. Prefer an explicit restrictive policy or a reviewed policy design
+   based on the real catalog; never assume `USING (true)` is non-expansive.
+4. The migration adds a fixed-name policy and does not safely handle a same-name collision.
+   Preflight all role/schema/table/function/view/policy names and abort on unexpected objects;
+   do not silently replace existing objects. The Reader's clinic direct-SELECT revoke is
+   intentional but must be checked against all consumers of that role.
+5. `treatment_status`, `maps_match_method`, `maps_checked_at`, and the full Comdesk `row_json`
+   still require a documented purpose/data-owner acceptance or removal from the contract.
+   Validate `effective_facility_type` parsing and nationwide inclusion/exclusion parity on a
+   representative isolated data copy before release.
+
+### Credential, target, and approval status
+
+The candidate Supabase project ref `hwdvyhunozporfuefteb` and its Session Pooler project
+identity match the prior Clinic Master audit/Dashboard confirmation. This is not proof that the
+deployed Cloud Run revision is configured for that project: `SUPABASE_RUNTIME_DB_URL` was
+reported unset. No Reader DSN or local Reader credential file was found in the current
+workspace; no password or authentication attempt was made. Reader credential usability is
+**unknown / not ready to verify**. Do not use the Dashboard `postgres` account. If the dedicated
+Reader credential is absent, issuance requires explicit DBA approval and must use an approved
+secret channel.
+
+Required approvals remain: (a) service owner confirms the candidate project is the Cloud Run
+target; (b) data owner approves the projected fields and full Comdesk row JSON or chooses a
+narrow replacement; (c) DBA/security owner approves the helper/view, corrected function ACL,
+policy design, Reader-only clinic revoke, and six remaining source-table/email grants after
+read-only preflight; (d) credential owner confirms a usable Reader credential or separately
+approves issuance. Until these gates, corrected SQL, target-catalog checks, and a Reader
+Session Pooler connection test pass, production DB application remains **NO-GO**. PR #118 stays
+Draft and no production, secret, IAM, or Cloud Run changes are authorized by this review.
