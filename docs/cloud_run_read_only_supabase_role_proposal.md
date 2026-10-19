@@ -6,20 +6,20 @@ Status: investigation and SQL proposal only; no database or Cloud Run changes we
 ## Decision
 
 `clinic_cloudrun_reader` is a reasonable dedicated login for the IAP protected read-only
-application, provided it is a new, non-inheriting, non-owner, `NOBYPASSRLS` login and is
-tested through the exact Session Pooler endpoint before release. The desired row scope is all
+application, provided its existing role state is accepted and it is tested through the exact
+Session Pooler endpoint before release. The desired row scope is all
 national clinic rows (`USING (true)`), because IAP is the application access boundary and the
 purpose is nationwide browsing/export. This is a broad data scope, so the IAP audience and
 application export columns must be reviewed before enabling it.
 
-**Safety result: conditional / not yet ready to apply.** The app's READ ONLY flag sets
-`default_transaction_read_only=on`, and the connection setup issues that setting after
-connecting, which covers poolers that ignore startup options. However, the actual Cloud Run
-secret target and current DB catalog were not available for inspection. The proposal below
-keeps the ordinary sales CSV/Excel data contract, including original Comdesk row values and
-the verified email output column. It excludes audit/history aggregates, delivery records,
-Email KPIs, and HP Job access. The dedicated reader login and its privileges still require
-isolated and target-side verification.
+**Safety result: conditional / not yet ready to apply.** Read-only catalog checks were run
+against Supabase project `hwdvyhunozporfuefteb` on 2026-10-19. The existing role is a login,
+`INHERIT`, and `NOBYPASSRLS`; no role is a member of it. `public.clinics` is the only
+allowlisted object with effective SELECT today, and that grant covers all columns. The other
+three required objects have RLS enabled but no effective SELECT or schema USAGE for this role.
+The target Cloud Run secret was not inspected, so this project cannot be confirmed as the
+deployed Cloud Run target. Do not apply until `INHERIT`, its membership edge to `postgres`, and
+the existing broad clinic SELECT are explicitly accepted or separately remediated.
 
 ## Revision and target verification
 
@@ -27,9 +27,8 @@ isolated and target-side verification.
   (`Merge pull request #116 ...`). The feature branch was created from that commit.
 - Tracked `config/production_runtime.env` selects Supabase for both data and write backends,
   and says credentials are in ignored `.supabase-runtime.env.local`.
-- That local credential file is absent. Cloud Run/Secret Manager inspection is prohibited by
-  the task. Therefore project ref `hwdvyhunozporfuefteb` cannot be confirmed as the deployed
-  Cloud Run target. It is the named target for this review only.
+- That local credential file is absent. The read-only Supabase catalog connection confirmed
+  this named project is queryable, but the Cloud Run secret target remains unverified.
 - Do not point the app at the existing `clinic_runtime` login: repository records show it has
   application write privileges. Provision/use the dedicated reader URL only after approval.
 
@@ -43,25 +42,17 @@ KPI lookups. Reads and CSV generation use `SupabaseRuntimeStore` and `SupabaseCl
 
 | Object | Why the READ ONLY path uses it | Proposed access |
 |---|---|---|
-| `public.clinics` | Nationwide clinic master, departments, prefecture, phone/address, UUID, effective JSON and current/HP fields; filters, counts, rows and export | `SELECT` |
-| `hp_research.clinic_hp_research` | Machine HP rank, URLs/final URL, fetch state and detected website treatment categories; list, HP summary and export | `SELECT` |
-| `treatment.clinic_treatment_research` | Confirmed treatment categories, category options, filters and per-clinic treatment status | `SELECT` |
-| `treatment.clinic_research_status` | Completes per-clinic treatment-status display (`DONE_NO_CATEGORY`, failures, not researched) | `SELECT` |
-| `provenance.comdesk_original_rows` | Ordinary export preserves the source Comdesk row when one exists | `SELECT` |
-| `provenance.templates` | Ordinary export uses the stored source-column mapping for original Comdesk rows | `SELECT` |
-| `public.clinic_email_enrichment` | Ordinary export appends the verified-email output column; this is current enrichment data, not delivery history or an Email KPI | `SELECT` |
+| `public.clinics` | Nationwide clinic master, filters, counts, list and fixed-width READ ONLY export | `SELECT` (already present, table-wide) |
+| `hp_research.clinic_hp_research` | HP rank, URLs, fetch state and website treatment categories; website summary | `SELECT` |
+| `treatment.clinic_treatment_research` | Confirmed treatment categories and category filters | `SELECT` |
+| `treatment.clinic_research_status` | Per-clinic treatment research state | `SELECT` |
 
-`public.clinics` is the source for clinic/department filters. HP rank is synthesized from
-`public.clinics.hp_rank` and `hp_research.clinic_hp_research.machine_hp_rank`. Treatment
-categories come from `treatment.clinic_treatment_research`; both the current confirmed
-categories and the clinic research status table are used by the list UI. The ordinary sales
-CSV/Excel path calls `SupabaseRuntimeStore.export()`: `_export_records()` reads
-`provenance.comdesk_original_rows` and `provenance.templates`, while
-`_attach_export_metadata()` reads `public.clinic_email_enrichment`. These three are needed to
-preserve ordinary export values and columns; they are not Step 6 synchronization or audit
-tables. `provenance.change_history` is only read by `store.revision()` for the export cache
-signature, not to construct the output. The READ ONLY UI should omit that lookup while keeping
-the ordinary export path. The separate Comdesk identity lookup in
+`public.clinics` supplies clinic/department filters and nationwide counts. HP rank/URL data and
+the visible website-research summary use `hp_research.clinic_hp_research`. Treatment categories
+and per-clinic treatment status use the two `treatment` tables. C's READ ONLY workflow skips
+`store.metrics()`, `listing()` suppresses email status lookups, export-cache signatures bypass
+`store.revision()`, and `export_read_only()` reads only clinic projection fields. The separate
+Comdesk identity lookup in
 `public.sales_entity_clinics` / `public.sales_entity_comdesk_identity` is feature-gated by
 `CLINIC_COMMON_IDENTITY_ENABLED`, currently `0` in tracked production routing; do not grant
 those objects for the initial release.
@@ -71,107 +62,73 @@ those objects for the initial release.
 | Group | Tables | Decision |
 |---|---|---|
 | C core list | `public.clinics`, `hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`, `treatment.clinic_research_status` | Required for nationwide list/filter, HP rank, treatment filter/status, and counts. |
-| Ordinary sales export compatibility | `provenance.comdesk_original_rows`, `provenance.templates`, `public.clinic_email_enrichment` | Add read access only for the standard CSV/Excel path. Restrict SELECT columns on these objects to those selected by the exporter. |
+| READ ONLY export | Same four core tables | Fixed-width export, with blank email output and no stored Comdesk row/template reads. |
 | Deferred | `provenance.change_history`, `provenance.match_reviews`, `provenance.source_records`, Step 6 Comdesk linkage/history, Email KPI and delivery state, HP Job/research-job tables | No initial grant. READ ONLY UI must bypass these paths. |
 
-This allowlist is derived from code, not a confirmation of live table existence, current RLS,
-existing grants, or the deployed project's migration state.
+The C branch checked was `74047333791bbbf8b8060a986a5c570b69028e31` (PR #117 head at review
+time). Live catalog checks confirmed all four objects exist and have RLS enabled. The three
+non-clinic objects have no current SELECT for this role. Do not grant
+`provenance.comdesk_original_rows`, `provenance.templates`, or `public.clinic_email_enrichment`
+for this C implementation.
 
-The C branch's READ ONLY route bypasses `SupabaseClinicRepository.metrics()`, which reads
-`provenance.match_reviews` and `provenance.source_records`, and avoids HP job state, Step 6
-Comdesk linkage/history, Email KPI repositories and delivery history. For the current C
-implementation to satisfy this publication policy, its READ ONLY exporter must preserve the
-ordinary CSV/Excel row values and verified-email column by using the three explicitly allowed
-export dependencies above, while skipping `store.revision()` in READ ONLY mode. C's present
-`export_read_only()` intentionally omits source rows/templates and leaves email blank; that
-does not meet the current requirement to preserve ordinary sales export output. Normal mode
-must remain on its existing path.
-
-Suggested C-side implementation is to keep `simple_sales_ui()`'s READ ONLY branch and
-`store.revision()` bypass, but have `SupabaseRuntimeStore.export_read_only()` build its rows
-with `_export_records(records)` and `_attach_export_metadata(records, rows)`, just like
-`export()`. That method does not need `provenance.change_history`; its only extra reads are the
-approved export dependencies. Then compare READ ONLY and normal export headers/rows for the
-same fixture and assert no query touches the deferred tables.
+The C branch bypasses `SupabaseClinicRepository.metrics()`, which reads
+`provenance.match_reviews` and `provenance.source_records`, and avoids HP Job, Step 6, Email KPI
+and delivery history. Its READ ONLY exporter uses fixed clinic fields and leaves the email
+column blank; it does not preserve original Comdesk row/template values. This matches the
+four-table allowlist but differs from normal CSV/Excel output. Product owner must approve that
+difference, or C must restore those fields before the allowlist is expanded. Normal mode stays
+on the existing exporter.
 
 ## Out of scope
 
-No grant or policy is proposed for `provenance.change_history`,
-`provenance.match_reviews`, `provenance.source_records`, Step 6 linkage/import history,
-`outreach.*` / email delivery records, Gmail data, Email KPI repositories, `research.*`,
-`app_config.*`, `sales_entity_*`, identity sequences, or any write privilege. The only
-`provenance` grants are for the original Comdesk row/template reads needed by the ordinary
-sales export. No privilege is granted on email delivery state; `public.clinic_email_enrichment`
-contains verified clinic contact enrichment and is limited to the export column.
+No grant or policy is proposed for `provenance.*` (including Comdesk original rows/templates,
+change history, reviews and source records), `public.clinic_email_enrichment`, Step 6 linkage/
+import history, `outreach.*` / email delivery records, Gmail data, Email KPI repositories,
+`research.*`, `app_config.*`, `sales_entity_*`, identity sequences, or any write privilege.
 
-## Unapplied SQL proposal
+## Unapplied SQL proposal for the existing environment
 
-This is a review artifact, not an executable migration. Confirm schema/table existence, current
-RLS state, inherited grants, default privileges and role state against the approved target
-before adapting it. Role password provisioning must happen separately through the approved
-secret manager process; no password is included here.
+This is a review artifact, not an executable migration. Read-only catalog checks confirmed
+tables exist, RLS is enabled, `CONNECT` and `public` USAGE already exist, and no reader-specific
+policies exist. Do not change existing roles, policies, or RLS enablement. This adds only schema
+USAGE, missing SELECT, and new role-specific SELECT policies. Review findings below before use.
 
 ```sql
--- PROPOSAL ONLY. Do not run as part of this review.
--- Create a new login without membership in any other role. Set its password separately
--- through the approved credential workflow; do not reuse clinic_runtime credentials.
-CREATE ROLE clinic_cloudrun_reader
-  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
-
-ALTER ROLE clinic_cloudrun_reader SET default_transaction_read_only = on;
-ALTER ROLE clinic_cloudrun_reader SET statement_timeout = '60s';
-
-GRANT CONNECT ON DATABASE postgres TO clinic_cloudrun_reader;
-GRANT USAGE ON SCHEMA public, hp_research, treatment, provenance TO clinic_cloudrun_reader;
-GRANT SELECT ON TABLE public.clinics,
-  hp_research.clinic_hp_research,
+-- PROPOSAL ONLY. Existing target: no CREATE/ALTER ROLE, membership, password, policy
+-- replacement, or RLS enablement is included.
+GRANT USAGE ON SCHEMA hp_research, treatment TO clinic_cloudrun_reader;
+GRANT SELECT ON TABLE hp_research.clinic_hp_research,
   treatment.clinic_treatment_research,
   treatment.clinic_research_status
 TO clinic_cloudrun_reader;
-GRANT SELECT (id, clinic_id, template_id, row_json, uuid)
-  ON TABLE provenance.comdesk_original_rows TO clinic_cloudrun_reader;
-GRANT SELECT (id, headers_json, mapping_json)
-  ON TABLE provenance.templates TO clinic_cloudrun_reader;
-GRANT SELECT (clinic_id, email, status, verified_on_official)
-  ON TABLE public.clinic_email_enrichment TO clinic_cloudrun_reader;
-
--- Apply only if each table is confirmed RLS-enabled and no existing safe policy applies.
--- Policies expose every row to this server-side role; IAP is the user boundary.
-ALTER TABLE public.clinics ENABLE ROW LEVEL SECURITY;
+-- Existing role already has table-wide SELECT on public.clinics (all columns).
+-- Preserve existing policies. These additions expose all rows to this server-side role;
+-- IAP is the end-user boundary.
 CREATE POLICY clinic_cloudrun_reader_select ON public.clinics
   FOR SELECT TO clinic_cloudrun_reader USING (true);
 
-ALTER TABLE hp_research.clinic_hp_research ENABLE ROW LEVEL SECURITY;
 CREATE POLICY clinic_cloudrun_reader_select ON hp_research.clinic_hp_research
   FOR SELECT TO clinic_cloudrun_reader USING (true);
 
-ALTER TABLE treatment.clinic_treatment_research ENABLE ROW LEVEL SECURITY;
 CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_treatment_research
   FOR SELECT TO clinic_cloudrun_reader USING (true);
 
-ALTER TABLE treatment.clinic_research_status ENABLE ROW LEVEL SECURITY;
 CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_research_status
   FOR SELECT TO clinic_cloudrun_reader USING (true);
-
-ALTER TABLE provenance.comdesk_original_rows ENABLE ROW LEVEL SECURITY;
-CREATE POLICY clinic_cloudrun_reader_select ON provenance.comdesk_original_rows
-  FOR SELECT TO clinic_cloudrun_reader USING (true);
-
-ALTER TABLE provenance.templates ENABLE ROW LEVEL SECURITY;
-CREATE POLICY clinic_cloudrun_reader_select ON provenance.templates
-  FOR SELECT TO clinic_cloudrun_reader USING (true);
-
-ALTER TABLE public.clinic_email_enrichment ENABLE ROW LEVEL SECURITY;
-CREATE POLICY clinic_cloudrun_reader_select ON public.clinic_email_enrichment
-  FOR SELECT TO clinic_cloudrun_reader
-  USING (status = 'VERIFIED_EMAIL' AND verified_on_official = true);
 ```
 
-Do not run the `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` / `CREATE POLICY` blindly. Confirm
-each table's current RLS flag and policy names first. If RLS is already enabled, add only the
-reader-specific SELECT policy after confirming it does not exist; do not drop or replace any
-existing policy. If RLS is disabled, stop and assess the effect on every current role before
-enabling it. Do not use `FORCE ROW LEVEL SECURITY` without checking ownership and service roles.
+Immediately before approved execution, check for policy-name conflicts again. If a name exists,
+stop for review; never replace or drop it. Do not use `FORCE ROW LEVEL SECURITY`.
+
+### New environment reference only
+
+The role already exists on the reviewed target. This reference is only for a genuinely new
+environment; do not run against this project:
+
+```sql
+CREATE ROLE clinic_cloudrun_reader
+  LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+```
 
 ## RLS, inheritance and write-safety audit status
 
@@ -185,23 +142,25 @@ enabling it. Do not use `FORCE ROW LEVEL SECURITY` without checking ownership an
   email-enrichment reader SQL adds a role-specific policy but does not itself establish the
   current live RLS state. Treat all these as historical repository evidence, not live catalog
   verification.
-- Historical design docs say mapped runtime tables had RLS enabled and role-specific policies,
-  but that is not a current catalog query for this proposed target or new role.
-- No current `clinic_cloudrun_reader` role, grants, memberships, RLS policies, or write grants
-  could be verified. No database connection was made.
-- The verified-email CSV column exposes current clinic contact addresses to every IAP-authorized
-  user who can download the standard export. Confirm this is approved; if it is not, the output
-  contract must be explicitly narrowed rather than silently blanking the column.
+- Live catalog confirms that `clinic_cloudrun_reader` exists. It is LOGIN, INHERIT, and
+  NOBYPASSRLS; has no inbound memberships; and has the unusual edge `postgres` is a member of
+  `clinic_cloudrun_reader`. No role or membership was changed.
+- `public.clinics` SELECT is a direct grant by `postgres` to the reader, with no grant option;
+  it is table-level (all columns). No explicit column ACLs were found.
+- Catalog policies: `public.clinics` has existing SELECT policies for `clinic_email_target_reader`
+  and `clinic_readonly`, plus `clinic_runtime_rw` FOR ALL; HP research has SELECT policies for
+  `clinic_email_target_reader` and `clinic_readonly`, plus `clinic_runtime_rw` FOR ALL. Both
+  treatment tables have `clinic_runtime_rw` FOR ALL. All these are for other roles. The reader
+  policies are new and additive.
+- The live `clinic_email_enrichment` table had zero rows at check time, so status distribution
+  cannot validate the verified-email row predicate. The table is excluded from initial access.
 - Add policies only for `clinic_cloudrun_reader`; do not drop, replace, or widen existing
-  policies. If any target table currently has RLS disabled, inspect its existing access paths
-  before enabling RLS because enabling it changes behavior for every role on that table. If
-  PUBLIC or inherited role grants provide out-of-scope access, stop: resolving that requires a
-  separate approved change, not a change to other roles in this proposal.
-- For the new role, acceptance criteria are: `rolsuper=false`, `rolbypassrls=false`,
-  `rolcreatedb=false`, `rolcreaterole=false`; no role memberships; no table/sequence write
-  grants; no ownership; `has_table_privilege(..., 'INSERT'/'UPDATE'/'DELETE') = false` for
-  every object; RLS enabled and only intended SELECT policies; SELECT returns the complete
-  national population. Verify attempted writes are denied in a disposable isolated database.
+  policies. The four targets already have RLS enabled. Any other PUBLIC or inherited privileges
+  must be reviewed separately before production use.
+- Live check found SELECT only on `public.clinics` (all columns) and no table write privileges
+  in public/hp_research/treatment/provenance. Required tables have RLS enabled, FORCE RLS off,
+  and no policy targeting this reader. Existing role is INHERIT (no incoming memberships) and
+  has TEMP; resolve acceptance of those states before enabling production use.
 
 ## Session Pooler assessment
 
@@ -209,25 +168,24 @@ The code uses `psycopg.connect()` with the configured URL and does not depend on
 prepared state. Existing project documentation records successful direct login as a restricted
 runtime identity over the Supabase Session Pooler, and the read-only connector explicitly sends
 `SET default_transaction_read_only = on` after connecting because poolers may ignore libpq
-startup options. This supports compatibility in principle. It is not a validation of
-`clinic_cloudrun_reader` or of the target endpoint: the required credential file is absent and
-the role does not have verified credentials. Before release, test through the exact target
+startup options. This supports compatibility in principle. It is not validation of
+`clinic_cloudrun_reader` or the target endpoint: no credential was available for testing (and
+none was displayed). Before release, test through the exact target
 Session Pooler URL: authentication, `current_user`, `session_user`, `SHOW
 default_transaction_read_only`, `SELECT 1`, representative nationwide query and CSV query;
 then confirm INSERT/UPDATE/DELETE/DDL are denied. Never print the URL.
 
 ## A担当 handoff / approvals
 
-1. C: retain `SupabaseClinicRepository.metrics()` bypass, disabled Email KPI/HP Job/Step 6
-   paths, and no audit table reads; update `export_read_only()` to preserve ordinary Comdesk
-   source-row/template behavior and verified-email column; skip only `store.revision()` in
-   READ ONLY mode. Confirm normal mode remains unchanged.
+1. C/A: retain the audit/Email KPI/HP Job/Step 6 bypass and confirm the four-table READ ONLY
+   allowlist. Product owner must approve the blank-email, fixed-field READ ONLY export versus
+   normal Comdesk export. Confirm normal mode remains unchanged.
 2. Confirm the deployed Cloud Run secret points to project `hwdvyhunozporfuefteb` and a
    Session Pooler URL, without exposing its value.
-3. Have DBA inspect current target catalog and role name availability, then approve the exact
-   role/grant/RLS statements and dedicated credential provisioning.
-4. Validate with the dedicated role in an isolated database, then run read and write-denial
-   checks on the approved target before Cloud Run configuration is separately approved.
+3. DBA/product owner must accept or separately remediate existing INHERIT, the postgres
+   membership edge, table-wide clinic SELECT, and TEMP. No role change is included here.
+4. Approve exact GRANT and new policy statements, then validate with the dedicated role in an
+   isolated database and run read/write-denial checks on the approved target before Cloud Run.
 
 No GRANT, RLS change, migration, data update, role membership change, password change, Cloud Run
 operation, Gmail operation, or PR merge was performed for this review.
