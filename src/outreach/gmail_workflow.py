@@ -28,11 +28,16 @@ from src.outreach.gmail_drafts import (
     list_existing_messages,
 )
 from src.outreach.gmail_oauth import GmailConnection, REQUIRED_SCOPES
-from src.repository.outreach_delivery_repository import DraftReservation, OutreachDeliveryRepository
+from src.repository.outreach_delivery_repository import (
+    BLOCKING_STATUSES,
+    DraftReservation,
+    OutreachDeliveryRepository,
+)
 from src.outreach.targets import valid_email
 
 JST = ZoneInfo("Asia/Tokyo")
 SCHEDULED_QUERY = "in:scheduled"
+TRASH_QUERY = "in:trash"
 TARGET_GMAIL_ACCOUNT = "info@crestix-inc.com"
 
 
@@ -41,6 +46,10 @@ class GmailState:
     drafts: tuple[ExistingDraft, ...]
     sent_today: tuple[ExistingMessage, ...]
     scheduled: tuple[ExistingMessage, ...]
+    # Gmail auto-empties Trash after ~30 days, so this query is naturally bounded;
+    # no additional date filter is applied. Distinguishing "trashed" from "no history"
+    # matters for human review even though it never silently unblocks a new draft.
+    trashed: tuple[ExistingMessage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,7 +84,8 @@ def read_gmail_state(service, *, as_of: date | None = None) -> GmailState:
     drafts = list_existing_drafts(service)
     sent = list_existing_messages(service, query=sent_query)
     scheduled = list_existing_messages(service, query=SCHEDULED_QUERY)
-    return GmailState(tuple(drafts), tuple(sent), tuple(scheduled))
+    trashed = list_existing_messages(service, query=TRASH_QUERY)
+    return GmailState(tuple(drafts), tuple(sent), tuple(scheduled), tuple(trashed))
 
 
 def _identity_match(*, clinic_id: int, clinic_uuid: str, outreach_id: str,
@@ -117,6 +127,10 @@ def classify_target_state(target, *, state: GmailState, outreach_id: str = "") -
         return "SCHEDULED_EXISTS"
     if len(_matching_rows(state.drafts, **args)) > 0:
         return "DRAFT_EXISTS"
+    # Trashed is distinguished from "no history" (not silently treated as CLEAR) so a
+    # manually deleted draft/message still routes to human review instead of a fresh send.
+    if len(_matching_rows(state.trashed, **args)) > 0:
+        return "TRASHED_EXISTS"
     return "CLEAR"
 
 
@@ -273,6 +287,27 @@ def create_gmail_draft(
         return DraftWorkflowResult("REVIEW", reason="Gmail OAuth scopes do not match the required set")
     if not repository.health_check():
         return DraftWorkflowResult("REVIEW", reason="Outreach history database health check failed")
+
+    try:
+        other_campaign_rows = [
+            row for row in repository.clinic_statuses([target.clinic_id]).get(target.clinic_id, ())
+            if str(row.get("campaign_id") or "") != campaign_id
+        ]
+    except Exception:
+        return DraftWorkflowResult("REVIEW", reason="Cross-campaign outreach history could not be verified")
+    blocking = [row for row in other_campaign_rows if str(row.get("status") or "") in BLOCKING_STATUSES]
+    if blocking:
+        # This clinic already has delivery history under a different campaign_id. The
+        # per-(clinic_id, campaign_id) ledger uniqueness below cannot see across
+        # campaigns, so this must be checked explicitly before any reservation/Gmail call.
+        return DraftWorkflowResult(
+            "REVIEW",
+            reason=(
+                "Clinic already has "
+                f"{str(blocking[0].get('status') or '')} history under campaign "
+                f"{str(blocking[0].get('campaign_id') or '')}; manual review required before a new campaign"
+            ),
+        )
 
     try:
         state = read_gmail_state(gmail.service, as_of=as_of)
