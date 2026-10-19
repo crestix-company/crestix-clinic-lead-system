@@ -1,4 +1,4 @@
--- Additive common clinic identity layer. This file is not applied to any DB.
+-- Additive common clinic identity layer.
 -- public.clinics.id and source records remain immutable and are never deleted.
 
 create table if not exists public.sales_entities (
@@ -37,7 +37,9 @@ create table if not exists public.sales_entity_comdesk_identity (
 );
 
 create or replace function public.prevent_sales_entity_uuid_replacement()
-returns trigger language plpgsql as $$
+returns trigger language plpgsql
+set search_path = pg_catalog
+as $$
 begin
   if tg_op = 'DELETE' then
     raise exception 'Comdesk UUID identity cannot be deleted; resolve conflicts through an audited review';
@@ -91,6 +93,8 @@ create table if not exists public.sales_entity_identity_audit (
   actor text not null,
   created_at timestamptz not null default now()
 );
+create index if not exists sales_entity_identity_audit_entity_idx
+  on public.sales_entity_identity_audit(common_clinic_id);
 
 alter table public.sales_entities enable row level security;
 alter table public.sales_entity_clinics enable row level security;
@@ -102,10 +106,14 @@ alter table public.sales_entity_identity_audit enable row level security;
 revoke all on public.sales_entities, public.sales_entity_clinics,
   public.sales_entity_comdesk_identity, public.sales_entity_project_memberships,
   public.sales_entity_resolution_queue, public.sales_entity_identity_audit
-  from anon, authenticated;
+  from public, anon, authenticated, service_role;
 grant select, insert, update on public.sales_entities, public.sales_entity_clinics,
   public.sales_entity_comdesk_identity, public.sales_entity_project_memberships,
   public.sales_entity_resolution_queue, public.sales_entity_identity_audit to service_role;
+revoke all on sequence public.sales_entities_common_clinic_id_seq,
+  public.sales_entity_resolution_queue_id_seq,
+  public.sales_entity_identity_audit_id_seq
+  from public, anon, authenticated, service_role;
 grant usage, select on sequence public.sales_entities_common_clinic_id_seq,
   public.sales_entity_resolution_queue_id_seq,
   public.sales_entity_identity_audit_id_seq to service_role;

@@ -1,6 +1,7 @@
 -- Read-only audit preview for an authorized operator.
--- Run against the confirmed Clinic Lead database using a dedicated role with
--- SELECT-only grants on public.clinics and provenance.comdesk_original_rows.
+-- Run against the confirmed development database using a dedicated role with
+-- SELECT-only grants on public.clinics, provenance.comdesk_original_rows, and
+-- provenance.source_records (the source_records JOIN supports reason analysis).
 -- This file intentionally contains no INSERT, UPDATE, DELETE, DDL, or backfill.
 BEGIN TRANSACTION READ ONLY;
 SET LOCAL statement_timeout = '120s';
@@ -32,26 +33,47 @@ FROM (
   HAVING count(DISTINCT id) > 1
 ) conflicts;
 
--- Existing UUID exact match with conflicting name/address/phone evidence.
--- This is a HOLD count; comparisons are conservative text checks, not an auto-merge rule.
-SELECT count(*) AS uuid_match_information_conflict_rows
-FROM provenance.source_records s
-JOIN public.clinics c
-  ON c.uuid = btrim(COALESCE(s.record_json->>'uuid',''))
- AND c.merged_into IS NULL
-WHERE s.source = 'コムデスク'
-  AND btrim(COALESCE(s.record_json->>'uuid','')) <> ''
-  AND (
-    (btrim(COALESCE(s.record_json->>'clinic_name','')) <> ''
-      AND regexp_replace(lower(btrim(s.record_json->>'clinic_name')), '[[:space:]]', '', 'g')
-          <> regexp_replace(lower(btrim(c.clinic_name)), '[[:space:]]', '', 'g'))
-    OR (btrim(COALESCE(s.record_json->>'address','')) <> ''
-      AND regexp_replace(lower(btrim(s.record_json->>'address')), '[[:space:]]', '', 'g')
-          <> regexp_replace(lower(btrim(c.address)), '[[:space:]]', '', 'g'))
-    OR (btrim(COALESCE(s.record_json->>'phone','')) <> ''
-      AND regexp_replace(s.record_json->>'phone', '[^0-9]', '', 'g')
-          <> regexp_replace(c.phone, '[^0-9]', '', 'g'))
-  );
+-- Unlinked Comdesk rows with exact UUID candidates, split by normalized conflict
+-- reason. UUID alone never authorizes a link. Normalize width/case/spacing and
+-- common separators; remaining name/address/phone conflicts are HOLD cases.
+WITH candidates AS (
+  SELECT o.id,
+    COALESCE(s.record_json->>'clinic_name', '') AS source_name,
+    COALESCE(s.record_json->>'address', '') AS source_address,
+    COALESCE(s.record_json->>'phone', '') AS source_phone,
+    COALESCE(c.clinic_name, '') AS clinic_name,
+    COALESCE(c.address, '') AS clinic_address,
+    COALESCE(c.phone, '') AS clinic_phone
+  FROM provenance.comdesk_original_rows o
+  JOIN provenance.source_records s
+    ON s.source = 'コムデスク'
+   AND s.source_hash = o.source_hash
+   AND s.row_number = o.row_number
+  JOIN public.clinics c
+    ON c.uuid = btrim(COALESCE(s.record_json->>'uuid', o.uuid, ''))
+   AND c.merged_into IS NULL
+  WHERE o.clinic_id IS NULL
+    AND btrim(COALESCE(s.record_json->>'uuid', o.uuid, '')) <> ''
+), normalized AS (
+  SELECT *,
+    (nullif(btrim(source_name), '') IS NOT NULL AND nullif(btrim(clinic_name), '') IS NOT NULL AND regexp_replace(translate(lower(normalize(btrim(source_name), NFKC)), '-‐‑‒–—―〒、，,', ''), '[[:space:]]', '', 'g')
+      <> regexp_replace(translate(lower(normalize(btrim(clinic_name), NFKC)), '-‐‑‒–—―〒、，,', ''), '[[:space:]]', '', 'g')) AS name_conflict,
+    (nullif(btrim(source_address), '') IS NOT NULL AND nullif(btrim(clinic_address), '') IS NOT NULL AND regexp_replace(translate(lower(normalize(btrim(source_address), NFKC)), '-‐‑‒–—―〒、，,', ''), '[[:space:]]', '', 'g')
+      <> regexp_replace(translate(lower(normalize(btrim(clinic_address), NFKC)), '-‐‑‒–—―〒、，,', ''), '[[:space:]]', '', 'g')) AS address_conflict,
+    (nullif(btrim(source_phone), '') IS NOT NULL AND nullif(btrim(clinic_phone), '') IS NOT NULL AND regexp_replace(source_phone, '[^0-9]', '', 'g')
+      <> regexp_replace(clinic_phone, '[^0-9]', '', 'g')) AS phone_conflict
+  FROM candidates
+)
+SELECT
+  count(*) AS uuid_candidate_rows,
+  count(*) FILTER (WHERE name_conflict AND NOT address_conflict AND NOT phone_conflict) AS name_only,
+  count(*) FILTER (WHERE address_conflict AND NOT name_conflict AND NOT phone_conflict) AS address_only,
+  count(*) FILTER (WHERE phone_conflict AND NOT name_conflict AND NOT address_conflict) AS phone_only,
+  count(*) FILTER (WHERE name_conflict AND address_conflict AND NOT phone_conflict) AS name_and_address,
+  count(*) FILTER (WHERE name_conflict AND phone_conflict AND NOT address_conflict) AS name_and_phone,
+  count(*) FILTER (WHERE address_conflict AND phone_conflict AND NOT name_conflict) AS address_and_phone,
+  count(*) FILTER (WHERE name_conflict AND address_conflict AND phone_conflict) AS all_three
+FROM normalized;
 
 -- Same normalized master name/address/phone across medical and dental registrations.
 -- Candidate counts only; every group still needs the reviewed match policy before linkage.
