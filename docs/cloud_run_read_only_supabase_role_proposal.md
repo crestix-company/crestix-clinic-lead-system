@@ -5,18 +5,18 @@ Status: investigation and SQL proposal only; no database or Cloud Run changes we
 
 ## Decision
 
-`clinic_cloudrun_reader` is a reasonable dedicated login for the IAP protected read-only
-application, provided its existing role state is accepted and it is tested through the exact
-Session Pooler endpoint before release. The desired row scope is all
+`clinic_cloudrun_reader` is an existing login for the IAP-protected read-only application. It
+must not be recreated or altered. Its current role state must be reviewed and its connection
+tested through the exact Session Pooler endpoint before release. The desired row scope is all
 national clinic rows (`USING (true)`), because IAP is the application access boundary and the
 purpose is nationwide browsing/export. This is a broad data scope, so the IAP audience and
 application export columns must be reviewed before enabling it.
 
 **Safety result: conditional / not yet ready to apply.** Read-only catalog checks were run
 against Supabase project `hwdvyhunozporfuefteb` on 2026-10-19. The existing role is a login,
-`INHERIT`, and `NOBYPASSRLS`; no role is a member of it. `public.clinics` is the only
+`INHERIT`, and `NOBYPASSRLS`; it is not a member of any other role. `public.clinics` is the only
 allowlisted object with effective SELECT today, and that grant covers all columns. The other
-three required objects have RLS enabled but no effective SELECT or schema USAGE for this role.
+six required objects have RLS enabled but no effective SELECT for this role.
 The target Cloud Run secret was not inspected, so this project cannot be confirmed as the
 deployed Cloud Run target. Do not apply until `INHERIT`, its membership edge to `postgres`, and
 the existing broad clinic SELECT are explicitly accepted or separately remediated.
@@ -37,8 +37,10 @@ the existing broad clinic SELECT are explicitly accepted or separately remediate
 `Dockerfile.cloudrun` describes `app_v2.py` behind IAP with `CLINIC_READ_ONLY_UI=true`.
 That mode limits navigation to `かんたん操作` and `営業対象・出力`, skips startup writes,
 and disables write/job controls. The READ ONLY routes now use a clinic projection overview
-and a dedicated READ ONLY CSV exporter; they do not run job, Comdesk-history, audit, or Email
-KPI lookups. Reads and CSV generation use `SupabaseRuntimeStore` and `SupabaseClinicRepository`.
+and a READ ONLY standard CSV/Excel exporter. The final C implementation reviewed is PR #119,
+head `e03f65238c882a3aea22fef43a3aca909e328646` (not the superseded PR #117 implementation).
+It retains standard Comdesk output data and columns and adds three export dependencies to the
+four browse tables.
 
 | Object | Why the READ ONLY path uses it | Proposed access |
 |---|---|---|
@@ -46,61 +48,88 @@ KPI lookups. Reads and CSV generation use `SupabaseRuntimeStore` and `SupabaseCl
 | `hp_research.clinic_hp_research` | HP rank, URLs, fetch state and website treatment categories; website summary | `SELECT` |
 | `treatment.clinic_treatment_research` | Confirmed treatment categories and category filters | `SELECT` |
 | `treatment.clinic_research_status` | Per-clinic treatment research state | `SELECT` |
+| `provenance.comdesk_original_rows` | Preserve original Comdesk values/UUID for standard export | Column SELECT: `id, clinic_id, template_id, row_json, uuid` |
+| `provenance.templates` | Restore original source-column order/mapping | Column SELECT: `id, headers_json, mapping_json` |
+| `public.clinic_email_enrichment` | Append official verified email in standard export | Conditional column SELECT: `clinic_id, email, status, verified_on_official` |
 
-`public.clinics` supplies clinic/department filters and nationwide counts. HP rank/URL data and
-the visible website-research summary use `hp_research.clinic_hp_research`. Treatment categories
-and per-clinic treatment status use the two `treatment` tables. C's READ ONLY workflow skips
-`store.metrics()`, `listing()` suppresses email status lookups, export-cache signatures bypass
-`store.revision()`, and `export_read_only()` reads only clinic projection fields. The separate
-Comdesk identity lookup in
+Column scope for the other four tables: `public.clinics` remains all existing columns under its
+direct table-level grant (`id, uuid, clinic_name, phone, address, phone_norm, name_norm,
+name_prefix, address_norm, medical_key, prefecture, medical_type, base_json, effective_json,
+active, designation_date, recent_until, registration_reason, owner_equal, age_probability,
+hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json, treatments_json,
+signals_json, first_seen_at, last_seen_at, source_as_of_date, is_new, merged_into,
+tel_match_key, merge_hold, maps_presence_status, maps_profile_url, maps_website_url,
+maps_match_method, maps_checked_at, exclude_reason`). The additional grants are restricted to
+`hp_research.clinic_hp_research(clinic_id, machine_hp_rank, fetch_status, hp_url, final_url,
+treatment_categories)`, `treatment.clinic_treatment_research(clinic_id, research_status,
+treatment_category_name)`, and `treatment.clinic_research_status(clinic_id, research_status)`.
+
+`public.clinics` supplies clinic/department filters, search and counts. HP research supplies rank,
+URL, website summary, and website treatment detection. Treatment tables supply confirmed
+categories and per-clinic treatment status. In PR #119, `export_read_only()` deliberately calls
+the same `_export_records()` and `_attach_export_metadata()` as normal export. This reads
+Comdesk original rows and template mapping; the email query selects only rows with
+`status='VERIFIED_EMAIL' AND verified_on_official=true`. `revision()` is bypassed in READ ONLY
+mode, so `provenance.change_history` is not needed. The separate Comdesk identity lookup in
 `public.sales_entity_clinics` / `public.sales_entity_comdesk_identity` is feature-gated by
 `CLINIC_COMMON_IDENTITY_ENABLED`, currently `0` in tracked production routing; do not grant
 those objects for the initial release.
 
-### Comparison with C's four-table list
+### Comparison with the superseded four-table design
 
 | Group | Tables | Decision |
 |---|---|---|
-| C core list | `public.clinics`, `hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`, `treatment.clinic_research_status` | Required for nationwide list/filter, HP rank, treatment filter/status, and counts. |
-| READ ONLY export | Same four core tables | Fixed-width export, with blank email output and no stored Comdesk row/template reads. |
+| Browse and filters | `public.clinics`, `hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`, `treatment.clinic_research_status` | Required, unchanged. |
+| Standard CSV/Excel compatibility | `provenance.comdesk_original_rows`, `provenance.templates` | Required by PR #119 to preserve original Comdesk values and mapping. |
+| Verified-email export | `public.clinic_email_enrichment` | Required for full normal-output parity; grant/policy blocked pending explicit internal approval. Without approval, C must disable/omit that column or this exporter cannot run under the reader role. |
 | Deferred | `provenance.change_history`, `provenance.match_reviews`, `provenance.source_records`, Step 6 Comdesk linkage/history, Email KPI and delivery state, HP Job/research-job tables | No initial grant. READ ONLY UI must bypass these paths. |
 
-The C branch checked was `74047333791bbbf8b8060a986a5c570b69028e31` (PR #117 head at review
-time). Live catalog checks confirmed all four objects exist and have RLS enabled. The three
-non-clinic objects have no current SELECT for this role. Do not grant
-`provenance.comdesk_original_rows`, `provenance.templates`, or `public.clinic_email_enrichment`
-for this C implementation.
+PR #119 head was fetched and reviewed. The export tests verify identical READ ONLY and normal
+CSV/Excel bytes for a fixture, Comdesk source values and mapping, verified email selection,
+no writes, and no change-history/audit/HP-job/Step6 table references in the export path. Its
+read-only treatment-filter branch skips `research.research_results` and reads confirmed
+categories from `treatment.clinic_treatment_research` instead. The older 4-table design came
+from PR #117 and is superseded.
 
-The C branch bypasses `SupabaseClinicRepository.metrics()`, which reads
-`provenance.match_reviews` and `provenance.source_records`, and avoids HP Job, Step 6, Email KPI
-and delivery history. Its READ ONLY exporter uses fixed clinic fields and leaves the email
-column blank; it does not preserve original Comdesk row/template values. This matches the
-four-table allowlist but differs from normal CSV/Excel output. Product owner must approve that
-difference, or C must restore those fields before the allowlist is expanded. Normal mode stays
-on the existing exporter.
+Focused validation on PR #119 head: 112 tests passed across READ ONLY export/isolation and
+treatment-filter suites. These use fixtures/mocks; they do not authenticate as the live reader
+or prove nationwide row counts through the Session Pooler.
+
+PR #119's READ ONLY workflow bypasses `metrics()` and email statuses, does not call HP Job,
+Step 6, or change-history paths, and uses the standard exporter for source row/template mapping
+and verified email. The verified-email filter is exact in both SQL and `_verified_email_map()`.
+However, no evidence in this task or PR establishes approval to distribute email addresses to
+all IAP users. Treat this data exposure as **unapproved / hold** until the owner explicitly
+confirms it; standard file parity for non-email fields can proceed independently.
 
 ## Out of scope
 
-No grant or policy is proposed for `provenance.*` (including Comdesk original rows/templates,
-change history, reviews and source records), `public.clinic_email_enrichment`, Step 6 linkage/
-import history, `outreach.*` / email delivery records, Gmail data, Email KPI repositories,
-`research.*`, `app_config.*`, `sales_entity_*`, identity sequences, or any write privilege.
+No grant or policy is proposed for `provenance.change_history`, `provenance.match_reviews`,
+`provenance.source_records`, HP Job/research-job tables, Step 6 linkage/import history,
+`outreach.*` / delivery records, Email KPI repositories, Gmail data, `research.*` (including
+`research.research_results`), `app_config.*`, `sales_entity_*`, sequences, or any write privilege.
 
 ## Unapplied SQL proposal for the existing environment
 
-This is a review artifact, not an executable migration. Read-only catalog checks confirmed
-tables exist, RLS is enabled, `CONNECT` and `public` USAGE already exist, and no reader-specific
-policies exist. Do not change existing roles, policies, or RLS enablement. This adds only schema
-USAGE, missing SELECT, and new role-specific SELECT policies. Review findings below before use.
+This is a review artifact, not an executable migration. Read-only catalog checks confirmed the
+seven tables exist and have RLS enabled; `CONNECT` and `public` USAGE already exist. Do not alter
+role attributes/memberships, existing CRM policies, or RLS enablement. Six-table SQL is shown
+first. The email block is separately conditional on explicit approval to export email addresses.
 
 ```sql
 -- PROPOSAL ONLY. Existing target: no CREATE/ALTER ROLE, membership, password, policy
 -- replacement, or RLS enablement is included.
-GRANT USAGE ON SCHEMA hp_research, treatment TO clinic_cloudrun_reader;
-GRANT SELECT ON TABLE hp_research.clinic_hp_research,
-  treatment.clinic_treatment_research,
-  treatment.clinic_research_status
-TO clinic_cloudrun_reader;
+GRANT USAGE ON SCHEMA hp_research, treatment, provenance TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories)
+  ON TABLE hp_research.clinic_hp_research TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, research_status, treatment_category_name)
+  ON TABLE treatment.clinic_treatment_research TO clinic_cloudrun_reader;
+GRANT SELECT (clinic_id, research_status)
+  ON TABLE treatment.clinic_research_status TO clinic_cloudrun_reader;
+GRANT SELECT (id, clinic_id, template_id, row_json, uuid)
+  ON TABLE provenance.comdesk_original_rows TO clinic_cloudrun_reader;
+GRANT SELECT (id, headers_json, mapping_json)
+  ON TABLE provenance.templates TO clinic_cloudrun_reader;
 -- Existing role already has table-wide SELECT on public.clinics (all columns).
 -- Preserve existing policies. These additions expose all rows to this server-side role;
 -- IAP is the end-user boundary.
@@ -115,10 +144,203 @@ CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_treatment_resear
 
 CREATE POLICY clinic_cloudrun_reader_select ON treatment.clinic_research_status
   FOR SELECT TO clinic_cloudrun_reader USING (true);
+
+CREATE POLICY clinic_cloudrun_reader_select ON provenance.comdesk_original_rows
+  FOR SELECT TO clinic_cloudrun_reader USING (true);
+
+CREATE POLICY clinic_cloudrun_reader_select ON provenance.templates
+  FOR SELECT TO clinic_cloudrun_reader
+  USING (EXISTS (
+    SELECT 1 FROM provenance.comdesk_original_rows original
+    WHERE original.template_id = templates.id
+  ));
 ```
+
+`public.clinics` already has a direct table-level SELECT grant to this role, so all its 41
+catalog columns remain accessible. Changing/revoking that grant would be a separate privilege
+change and is not included. Other table grants are limited to columns read by the browse/filter
+and export paths. The provenance column grants are the exact columns referenced by the exporter;
+`id` is also needed for the `ORDER BY` on original rows. PR #119 currently selects all
+templates, but the proposed templates RLS policy limits visible rows to template IDs referenced
+by stored Comdesk rows. It depends on the reader policy/grant on `comdesk_original_rows`.
+
+Email access is **not yet approved** based on available evidence. If the data owner explicitly
+approves email addresses for IAP-authorized CSV/Excel downloads, append this conditional SQL;
+otherwise leave it unapplied and do not enable an exporter that requires it:
+
+```sql
+-- CONDITIONAL: only after explicit data-owner approval for email CSV/Excel output.
+GRANT SELECT (clinic_id, email, status, verified_on_official)
+  ON TABLE public.clinic_email_enrichment TO clinic_cloudrun_reader;
+CREATE POLICY clinic_cloudrun_reader_select ON public.clinic_email_enrichment
+  FOR SELECT TO clinic_cloudrun_reader
+  USING (status = 'VERIFIED_EMAIL'
+         AND verified_on_official IS TRUE
+         AND NULLIF(BTRIM(email), '') IS NOT NULL);
+```
+
+This RLS predicate is a safe narrowing of PR #119's SQL filter
+(`status='VERIFIED_EMAIL' AND verified_on_official=true`); `_verified_email_map()` also drops
+blank addresses and deduplicates case-insensitively. Thus only nonempty official verified
+addresses are exposed/output. At the last live check the table had zero rows, so the current
+status distribution and match counts cannot be validated. Enrichment evidence/source columns
+are not granted.
 
 Immediately before approved execution, check for policy-name conflicts again. If a name exists,
 stop for review; never replace or drop it. Do not use `FORCE ROW LEVEL SECURITY`.
+
+### Pre-apply catalog checks
+
+Run these SELECT-only checks immediately before a separately approved application. They inspect
+the existing role, membership direction, effective privileges, RLS flags and policy-name
+conflicts. Do not include password or credential queries.
+
+```sql
+SELECT rolname, rolcanlogin, rolinherit, rolsuper, rolbypassrls,
+       rolcreatedb, rolcreaterole,
+       has_database_privilege(oid, current_database(), 'CONNECT') AS can_connect,
+       has_database_privilege(oid, current_database(), 'TEMP') AS can_temp
+FROM pg_roles WHERE rolname = 'clinic_cloudrun_reader';
+
+SELECT parent.rolname AS granted_role, member.rolname AS member_role, m.admin_option
+FROM pg_auth_members m
+JOIN pg_roles parent ON parent.oid = m.roleid
+JOIN pg_roles member ON member.oid = m.member
+WHERE parent.rolname = 'clinic_cloudrun_reader'
+   OR member.rolname = 'clinic_cloudrun_reader';
+
+-- TEMP/CONNECT source: PUBLIC or explicit database ACLs.
+SELECT COALESCE(grantee.rolname, 'PUBLIC') AS grantee, x.privilege_type, x.is_grantable
+FROM pg_database d
+CROSS JOIN LATERAL aclexplode(COALESCE(d.datacl, acldefault('d', d.datdba))) x
+LEFT JOIN pg_roles grantee ON grantee.oid = x.grantee
+WHERE d.datname = current_database()
+  AND x.privilege_type IN ('CONNECT', 'TEMPORARY', 'CREATE')
+ORDER BY 1, 2;
+
+SELECT n.nspname,
+       has_schema_privilege('clinic_cloudrun_reader', n.oid, 'USAGE') AS can_use,
+       has_schema_privilege('clinic_cloudrun_reader', n.oid, 'CREATE') AS can_create
+FROM pg_namespace n
+WHERE n.nspname IN ('public','hp_research','treatment','provenance','extensions','research','outreach')
+ORDER BY 1;
+
+SELECT n.nspname, c.relname, c.relrowsecurity, c.relforcerowsecurity,
+       has_table_privilege('clinic_cloudrun_reader', c.oid, 'SELECT') AS table_select,
+       has_table_privilege('clinic_cloudrun_reader', c.oid, 'INSERT') AS can_insert,
+       has_table_privilege('clinic_cloudrun_reader', c.oid, 'UPDATE') AS can_update,
+       has_table_privilege('clinic_cloudrun_reader', c.oid, 'DELETE') AS can_delete
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE (n.nspname, c.relname) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY 1, 2;
+
+SELECT n.nspname, c.relname,
+       ARRAY(SELECT a.attname::text FROM pg_attribute a
+             WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+               AND has_column_privilege('clinic_cloudrun_reader', c.oid, a.attnum, 'SELECT')
+             ORDER BY a.attnum) AS select_columns
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE (n.nspname, c.relname) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY 1, 2;
+
+SELECT schemaname, tablename, policyname, roles, cmd, qual, with_check
+FROM pg_policies
+WHERE (schemaname, tablename) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY 1, 2, 3;
+
+-- Email is a privacy approval gate; this returns only counts, never email values.
+SELECT count(*) AS total_rows,
+       count(*) FILTER (WHERE status = 'VERIFIED_EMAIL'
+                        AND verified_on_official IS TRUE
+                        AND NULLIF(BTRIM(email), '') IS NOT NULL) AS policy_visible_rows,
+       count(*) FILTER (WHERE status IS DISTINCT FROM 'VERIFIED_EMAIL'
+                        OR verified_on_official IS DISTINCT FROM TRUE
+                        OR NULLIF(BTRIM(email), '') IS NULL) AS policy_hidden_rows
+FROM public.clinic_email_enrichment;
+```
+
+### Post-apply verification SQL
+
+Run catalog checks as an authorized verifier, then run the final block through the exact
+Session Pooler using the reader credential (never print the URL). The database changes remain
+unapplied by this PR.
+
+```sql
+-- Expected effective write privileges: false for every listed table.
+SELECT n.nspname, c.relname,
+       has_table_privilege(current_user, c.oid, 'INSERT') AS can_insert,
+       has_table_privilege(current_user, c.oid, 'UPDATE') AS can_update,
+       has_table_privilege(current_user, c.oid, 'DELETE') AS can_delete,
+       has_table_privilege(current_user, c.oid, 'TRUNCATE') AS can_truncate
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE (n.nspname, c.relname) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY 1, 2;
+
+-- Expected no rows: sequence privileges or ownership when current_user is the reader.
+SELECT n.nspname, c.relname, pg_get_userbyid(c.relowner) AS owner
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'S'
+  AND (pg_get_userbyid(c.relowner) = current_user
+       OR has_sequence_privilege(current_user, c.oid, 'USAGE')
+       OR has_sequence_privilege(current_user, c.oid, 'SELECT')
+       OR has_sequence_privilege(current_user, c.oid, 'UPDATE'))
+ORDER BY 1, 2;
+
+-- Compare these effective column arrays to the allowlist above.
+SELECT n.nspname, c.relname,
+       ARRAY(SELECT a.attname::text FROM pg_attribute a
+             WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+               AND has_column_privilege(current_user, c.oid, a.attnum, 'SELECT')
+             ORDER BY a.attnum) AS select_columns
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE (n.nspname, c.relname) IN
+  (('public','clinics'), ('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'), ('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'), ('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY 1, 2;
+
+-- Run as clinic_cloudrun_reader: six non-email object counts should succeed. Email is conditional.
+SELECT current_user, current_setting('transaction_read_only') AS transaction_read_only;
+SELECT 'public.clinics' AS object_name, count(*) FROM public.clinics
+UNION ALL SELECT 'hp_research.clinic_hp_research', count(*) FROM hp_research.clinic_hp_research
+UNION ALL SELECT 'treatment.clinic_treatment_research', count(*) FROM treatment.clinic_treatment_research
+UNION ALL SELECT 'treatment.clinic_research_status', count(*) FROM treatment.clinic_research_status
+UNION ALL SELECT 'provenance.comdesk_original_rows', count(*) FROM provenance.comdesk_original_rows
+UNION ALL SELECT 'provenance.templates', count(*) FROM provenance.templates;
+
+-- Conditional: run only after email approval and its grant/policy.
+SELECT count(*) AS exportable_verified_emails
+FROM public.clinic_email_enrichment
+WHERE status = 'VERIFIED_EMAIL' AND verified_on_official IS TRUE
+  AND NULLIF(BTRIM(email), '') IS NOT NULL;
+
+-- Expected false; do not grant these schemas for this application.
+SELECT has_schema_privilege(current_user, 'extensions', 'USAGE') AS extensions_usage,
+       has_schema_privilege(current_user, 'research', 'USAGE') AS research_usage,
+       has_schema_privilege(current_user, 'outreach', 'USAGE') AS outreach_usage;
+```
+
+The email count query is valid only after email approval and its conditional grant/policy.
+The national row counts must be compared with an independently authorized baseline to confirm
+that IAP's intended nationwide population is visible; no restricted credential was available
+for that live test during this review.
 
 ### New environment reference only
 
@@ -137,30 +359,36 @@ CREATE ROLE clinic_cloudrun_reader
   write-path tables, including some read-path tables. The email-enrichment SELECT design also
   grants `clinic_runtime` access. Those grants and policies belong to the existing application
   role; do not reuse or alter it for this Cloud Run reader.
-- The repository migration states its 19 runtime tables had RLS enabled, including the four
-  core tables and `provenance.templates` / `provenance.comdesk_original_rows`. The checked-in
-  email-enrichment reader SQL adds a role-specific policy but does not itself establish the
-  current live RLS state. Treat all these as historical repository evidence, not live catalog
-  verification.
 - Live catalog confirms that `clinic_cloudrun_reader` exists. It is LOGIN, INHERIT, and
-  NOBYPASSRLS; has no inbound memberships; and has the unusual edge `postgres` is a member of
-  `clinic_cloudrun_reader`. No role or membership was changed.
+  NOBYPASSRLS; it is not a member of another role. The reverse membership exists: `postgres`
+  is a member of `clinic_cloudrun_reader` with ADMIN OPTION. This does not make the reader
+  inherit postgres privileges. No role or membership was changed; confirm this unusual reverse
+  grant is intentional.
 - `public.clinics` SELECT is a direct grant by `postgres` to the reader, with no grant option;
   it is table-level (all columns). No explicit column ACLs were found.
+- The reader has no sequence privileges and owns none of the seven tables. The all-schema
+  privilege scan found SELECT on only `public.clinics` plus `extensions.pg_stat_statements` and
+  `extensions.pg_stat_statements_info`; the latter two are granted to PUBLIC, but the reader
+  currently lacks USAGE on `extensions`, so they are not queryable. Do not grant that schema.
 - Catalog policies: `public.clinics` has existing SELECT policies for `clinic_email_target_reader`
   and `clinic_readonly`, plus `clinic_runtime_rw` FOR ALL; HP research has SELECT policies for
   `clinic_email_target_reader` and `clinic_readonly`, plus `clinic_runtime_rw` FOR ALL. Both
   treatment tables have `clinic_runtime_rw` FOR ALL. All these are for other roles. The reader
   policies are new and additive.
-- The live `clinic_email_enrichment` table had zero rows at check time, so status distribution
-  cannot validate the verified-email row predicate. The table is excluded from initial access.
+- `TEMPORARY` comes from the database ACL granted to `PUBLIC`, not a reader-specific grant. It
+  permits temporary objects but not persistent writes to CRM tables; no PUBLIC/database ACL was
+  changed.
+- The live `clinic_email_enrichment` table had zero rows, so status distribution cannot validate
+  the verified-email row predicate. Public docs and PR #119 contain no explicit approval to
+  export addresses; access is withheld pending data-owner approval.
 - Add policies only for `clinic_cloudrun_reader`; do not drop, replace, or widen existing
-  policies. The four targets already have RLS enabled. Any other PUBLIC or inherited privileges
+  policies. All seven targets already have RLS enabled. Any other PUBLIC or inherited privileges
   must be reviewed separately before production use.
-- Live check found SELECT only on `public.clinics` (all columns) and no table write privileges
-  in public/hp_research/treatment/provenance. Required tables have RLS enabled, FORCE RLS off,
-  and no policy targeting this reader. Existing role is INHERIT (no incoming memberships) and
-  has TEMP; resolve acceptance of those states before enabling production use.
+- Live check found target-table SELECT only on `public.clinics` (all 41 columns) and no table
+  or column INSERT/UPDATE/DELETE/REFERENCES privileges, sequence privileges, or ownership in
+  user schemas. All seven targets have RLS enabled, FORCE RLS off,
+  and no policy targeting this reader. The reader is not a member of any other role; future
+  membership grants to it would be inherited automatically because `INHERIT` is set.
 
 ## Session Pooler assessment
 
@@ -177,9 +405,9 @@ then confirm INSERT/UPDATE/DELETE/DDL are denied. Never print the URL.
 
 ## A担当 handoff / approvals
 
-1. C/A: retain the audit/Email KPI/HP Job/Step 6 bypass and confirm the four-table READ ONLY
-   allowlist. Product owner must approve the blank-email, fixed-field READ ONLY export versus
-   normal Comdesk export. Confirm normal mode remains unchanged.
+1. C/A: retain the audit/Email KPI/HP Job/Step 6 bypass and confirm the seven-table dependency.
+   If email exposure is not approved, update C's READ ONLY exporter to omit the email dependency
+   and output column. Confirm normal mode remains unchanged.
 2. Confirm the deployed Cloud Run secret points to project `hwdvyhunozporfuefteb` and a
    Session Pooler URL, without exposing its value.
 3. DBA/product owner must accept or separately remediate existing INHERIT, the postgres
