@@ -156,6 +156,9 @@ SQLファイル一式は隔離DBで実行可能・検証済み。ただし本番
   そのfixture専用依存を除いた後の限定rollbackは成功し、元テーブルを保持・raw Reader権限を復活させない。
 - #122アプリ自体は変更していない。既報のPython 3.12 full pytestは2,204 passed / 55 skipped。
   今回は変更した統合SQLに対する隔離試験を追加した。100,000件上限の既存fail-closed仕様も変更していない。
+- CIで既存メール生成テスト22件が日付依存で失敗したため、3テストファイルの`GenerationSettings.as_of`を
+  固定fixtureの2026-10-19に明示した。予定日が実行日の翌日以降かどうかという本体チェックやGmail gateは変更していない。
+  関連40テストは成功。DB設計とは別のテスト安定化commitとしてレビュー可能。
 - 本番Reader認証、全国count parity、本番規模の性能、Cloud Run/IAPは未検証。
 
 再現用（別名のbootstrap管理者でinitdbし、非superuser/LOGIN/CREATEROLE/CREATEDBのpostgresを作成してDB ownerにした、新しい使い捨てlocalhost DBでのみ使用）:
