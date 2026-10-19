@@ -5,16 +5,21 @@ Concretizes the role-separation question the implementation plan left open
 (docs/cloud_run_on_demand_hp_implementation_plan.md, PR B, "重要" paragraph):
 Cloud Run Web's general write backend (CLINIC_WRITE_BACKEND/
 SUPABASE_RUNTIME_DB_URL -- used by e.g. refresh_age_model()/Comdesk import/
-Google Maps import) and the HP Job create/pause/resume path are now routed
+Google Maps import) and the HP Job create/pause/resume path are routed
 through separate connection strings, so a human can provision two genuinely
 distinct, least-privilege Postgres roles and point each env var at its own
-role without any further code change.
+role.
 
-This module does not create, grant, or alter any database role or run any
-migration/DDL -- provisioning SUPABASE_JOB_CONTROL_DB_URL's actual role is a
-separate, human infra action. Until that role exists, SUPABASE_JOB_CONTROL_DB_URL
-stays unset and this falls back to SUPABASE_RUNTIME_DB_URL, i.e. today's
-behavior (job control shares the general write connection) is unchanged.
+Fail-closed, no implicit fallback (review requirement): SUPABASE_JOB_CONTROL_DB_URL
+must be set explicitly whenever CLINIC_HP_EXECUTOR=cloud_run. This module will
+never silently reuse SUPABASE_RUNTIME_DB_URL (the general write connection) as
+a substitute -- an earlier version of this module did exactly that, which
+defeated the whole point of having a separate, least-privilege job-control
+role. Until a human provisions the dedicated role and sets this variable, the
+entire CLINIC_HP_EXECUTOR=cloud_run job-control path (create/pause/resume) is
+unusable by design; see docs/cloud_run_job_control_db_role_design.md for the
+exact privileges that role needs. This module itself never creates, grants,
+or alters any database role or runs any migration/DDL.
 """
 from __future__ import annotations
 
@@ -33,20 +38,15 @@ class JobControlNotConfiguredError(RuntimeError):
 
 def job_control_db_url(env=None):
     env = os.environ if env is None else env
-    url = (env.get(JOB_CONTROL_DB_URL_ENV_VAR) or env.get(RUNTIME_DB_URL_ENV_VAR) or "").strip()
+    url = (env.get(JOB_CONTROL_DB_URL_ENV_VAR) or "").strip()
     if not url:
         raise JobControlNotConfiguredError(
-            f"{JOB_CONTROL_DB_URL_ENV_VAR}（未設定時は{RUNTIME_DB_URL_ENV_VAR}へフォールバック）が必要です。"
+            f"{JOB_CONTROL_DB_URL_ENV_VAR}が未設定です。Cloud Runモードでは"
+            f"一般DB接続（{RUNTIME_DB_URL_ENV_VAR}）への暗黙フォールバックを行いません。"
+            "HP Job制御専用の最小権限DBロール・接続URLを人間が明示的に設定してください"
+            "（docs/cloud_run_job_control_db_role_design.md参照）。"
         )
     return url
-
-
-def using_dedicated_job_control_role(env=None):
-    """True only once a human has actually provisioned a distinct role and set
-    SUPABASE_JOB_CONTROL_DB_URL -- used purely for diagnostics/UI messaging,
-    never to change which checks run."""
-    env = os.environ if env is None else env
-    return bool((env.get(JOB_CONTROL_DB_URL_ENV_VAR) or "").strip())
 
 
 def job_control_write_repositories(env=None, *, build_write_repositories=None):

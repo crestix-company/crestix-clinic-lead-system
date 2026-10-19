@@ -74,14 +74,40 @@ def get_dispatch_state(conn, job_id):
     return state
 
 
+def _current_job_status(conn, job_id):
+    with conn.cursor() as cur:
+        cur.execute("SELECT status FROM research.research_jobs WHERE id=%s", (job_id,))
+        row = cur.fetchone()
+    conn.commit()
+    return row[0] if row else None
+
+
 def may_dispatch(conn, job_id):
-    """True if there is no recorded dispatch yet, or the last recorded
-    outcome is one a fresh dispatch is actually safe to follow. A job stuck
-    at DISPATCH_UNKNOWN (unreconciled) or CONFIRMED_RUNNING must return False."""
+    """True if a fresh dispatch for this job id is safe right now.
+
+    Fix for the "stuck forever" bug: a recorded DISPATCHED/CONFIRMED_RUNNING
+    outcome must NOT block the normal pause -> resume cycle permanently.
+    Those statuses only mean "an Execution may still be live" -- the
+    authoritative signal for whether it actually still is lives in the job's
+    own research.research_jobs.status, which is set to RUNNING at creation
+    and is the one thing every code path (the worker's own loop, an explicit
+    "一時停止" via job_control, or SIGTERM-triggered safe pause in
+    scripts/cloud_hp_worker.py) agrees on changing away from once no
+    Execution is actively processing it. So:
+
+    - DISPATCH_UNKNOWN / DISPATCHED / CONFIRMED_RUNNING only block while the
+      job's own DB status is still RUNNING.
+    - Once that status is PAUSED / BUDGET / COMPLETED / RESET (or the job
+      cannot be found), that transition itself proves no Execution is
+      currently live, and a fresh dispatch (typically "この調査を再開") must
+      be allowed again, regardless of what this module's own last-recorded
+      status says.
+    - SAFE_TO_RETRY / REJECTED were already known-safe and remain so.
+    """
     state = get_dispatch_state(conn, job_id)
-    if state is None:
+    if state is None or state.get("status") in RETRYABLE_STATUSES:
         return True
-    return state.get("status") in RETRYABLE_STATUSES
+    return _current_job_status(conn, job_id) != "RUNNING"
 
 
 def reconcile_pending_dispatch(conn, job_id, *, get_operation_fn):

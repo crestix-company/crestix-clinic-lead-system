@@ -141,9 +141,19 @@ def _default_job_control_conn(env=None):
 
 
 def precheck_budget(requested_clinic_count, *, env=None, job_control_conn=None):
-    """Read-only budget check, meant to run BEFORE a new HP research job row
-    is even created -- a budget refusal must never leave an orphaned,
-    undispatchable job behind. Returns (allowed, reason)."""
+    """Read-only, advisory-only budget check, meant to run BEFORE a new HP
+    research job row is even created -- a budget refusal must never leave an
+    orphaned, undispatchable job behind. Returns (allowed, reason).
+
+    This is UX only, not the enforcement boundary: under concurrent calls two
+    sessions could both pass this check before either reserves anything. The
+    actual, race-safe enforcement happens inside dispatch_hp_job() via
+    usage_budget.reserve_dispatch_usage(), which this function intentionally
+    does not call (reserving budget for a job that might still fail to be
+    created, e.g. due to a race on "no other HP job active", would need its
+    own compensating release and is not worth the complexity for a UX-only
+    precheck).
+    """
     from src.cloud_run.usage_budget import check_budget
 
     conn = job_control_conn or _default_job_control_conn(env)
@@ -168,8 +178,8 @@ def dispatch_hp_job(job_id, *, clinic_count=0, env=None, execute_fn=None, job_co
     must not silently retry.
     """
     from src.cloud_run.dispatch_state import may_dispatch, record_dispatch_state
-    from src.cloud_run.job_dispatch import DispatchResult, run_hp_worker_job
-    from src.cloud_run.usage_budget import check_budget, record_dispatch_usage
+    from src.cloud_run.job_dispatch import REJECTED, DispatchResult, run_hp_worker_job
+    from src.cloud_run.usage_budget import release_dispatch_usage, reserve_dispatch_usage
 
     # Cheap, I/O-free config validation first: an unconfigured deployment must
     # fail with a clear config error before this ever opens a DB connection.
@@ -183,7 +193,10 @@ def dispatch_hp_job(job_id, *, clinic_count=0, env=None, execute_fn=None, job_co
             "照合（reconcile_hp_job_dispatch）を先に行ってください。再発行は行いません。"
         ))
 
-    allowed, reason = check_budget(conn, clinic_count, env=env)
+    # Atomic check-and-reserve (not a plain read-then-write): this is what
+    # actually prevents the monthly budget from being exceeded by concurrent
+    # dispatches/double-clicks -- see usage_budget.reserve_dispatch_usage().
+    allowed, reason = reserve_dispatch_usage(conn, clinic_count, env=env)
     if not allowed:
         return DispatchResult(status=BUDGET_EXCEEDED, detail=reason)
 
@@ -191,12 +204,16 @@ def dispatch_hp_job(job_id, *, clinic_count=0, env=None, execute_fn=None, job_co
         execute_fn = default_execute_fn(env)
     result = run_hp_worker_job(execute_fn=execute_fn, job_resource_name=resource_name, clinic_job_id=job_id)
 
+    if result.status == REJECTED:
+        # Nothing was started -- give the reservation back. Never done for
+        # DISPATCH_UNKNOWN: an ambiguous outcome must stay counted (fail safe
+        # toward under-counting remaining budget, never toward exceeding it).
+        release_dispatch_usage(conn, clinic_count)
+
     record_dispatch_state(
         conn, job_id, status=result.status,
         operation_name=result.operation_name, execution_name=result.execution_name, detail=result.detail,
     )
-    if result.status == "DISPATCHED":
-        record_dispatch_usage(conn, clinic_count)
     return result
 
 

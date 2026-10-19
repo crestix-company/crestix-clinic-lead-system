@@ -62,9 +62,14 @@ def read_usage(conn, today=None):
 
 
 def check_budget(conn, requested_clinic_count, *, env=None, today=None):
-    """Returns (allowed, reason). Pure read -- never mutates usage. Callers
-    must call record_dispatch_usage() separately, and only after a dispatch
-    is actually confirmed DISPATCHED (never for DISPATCH_UNKNOWN/REJECTED)."""
+    """Advisory, non-authoritative read (returns (allowed, reason)). Safe for
+    a cheap UX precheck (e.g. before creating a job row), but NEVER a
+    correctness boundary by itself: two concurrent callers can both read
+    "allowed" here before either reserves anything (classic TOCTOU), which
+    would let the real monthly cap be exceeded under concurrent dispatches or
+    double-clicks. The actual enforcement is reserve_dispatch_usage(), which
+    checks and increments atomically under one row lock. Never call
+    record/reserve based on this function's result alone."""
     max_executions, max_clinics = monthly_limits(env)
     usage = read_usage(conn, today)
     if usage["executions"] >= max_executions:
@@ -77,8 +82,26 @@ def check_budget(conn, requested_clinic_count, *, env=None, today=None):
     return True, ""
 
 
-def record_dispatch_usage(conn, clinic_count, *, today=None):
-    """Call exactly once per confirmed DISPATCHED outcome."""
+def reserve_dispatch_usage(conn, requested_clinic_count, *, env=None, today=None):
+    """Atomically check-and-reserve one Execution + requested_clinic_count
+    clinics against the monthly budget. Returns (allowed, reason).
+
+    This is the actual enforcement point (unlike check_budget()): the check
+    and the increment happen under the same `SELECT ... FOR UPDATE` row lock,
+    so two concurrent callers (double-click, two browser tabs, retried
+    request after a network blip) can never both observe "under budget"
+    before either commits -- the second caller's row lock acquisition blocks
+    until the first's transaction commits, by which point the usage it reads
+    already reflects the first reservation. The budget can never be exceeded
+    by concurrent dispatches; it can only ever be under-counted (see
+    release_dispatch_usage) in favor of safety.
+
+    On allowed=True, usage has ALREADY been incremented. If the subsequent
+    Jobs API call turns out to be a clean REJECTED (nothing started), call
+    release_dispatch_usage() to give the reservation back. Never release for
+    DISPATCH_UNKNOWN -- an ambiguous outcome must stay counted.
+    """
+    max_executions, max_clinics = monthly_limits(env)
     key = _month_key(today)
     with conn.cursor() as cur:
         cur.execute(
@@ -88,10 +111,47 @@ def record_dispatch_usage(conn, clinic_count, *, today=None):
         cur.execute("SELECT value FROM app_config.settings WHERE key=%s FOR UPDATE", (key,))
         value = cur.fetchone()[0]
         value = value if isinstance(value, dict) else json.loads(value)
-        value["executions"] = int(value.get("executions", 0)) + 1
-        value["clinics"] = int(value.get("clinics", 0)) + int(clinic_count)
-        cur.execute(
-            "UPDATE app_config.settings SET value=%s WHERE key=%s",
-            (json.dumps(value, ensure_ascii=False), key),
-        )
+        executions = int(value.get("executions", 0))
+        clinics = int(value.get("clinics", 0))
+        if executions >= max_executions:
+            allowed, reason = False, (
+                f"今月のCloud Run実行回数が上限（{max_executions}回）に達しています。"
+                "来月まで待つか、上限設定を人間が見直してください。"
+            )
+        elif clinics + int(requested_clinic_count) > max_clinics:
+            allowed, reason = False, (
+                f"今月の累積調査件数が上限（{max_clinics}件）を超えます"
+                f"（現在{clinics}件 + 今回{requested_clinic_count}件）。"
+            )
+        else:
+            allowed, reason = True, ""
+            value["executions"] = executions + 1
+            value["clinics"] = clinics + int(requested_clinic_count)
+            cur.execute(
+                "UPDATE app_config.settings SET value=%s WHERE key=%s",
+                (json.dumps(value, ensure_ascii=False), key),
+            )
+    conn.commit()  # releases the row lock whether or not a reservation was made
+    return allowed, reason
+
+
+def release_dispatch_usage(conn, clinic_count, *, today=None):
+    """Compensating decrement for a reservation whose dispatch definitely did
+    not start anything (REJECTED). Never call this for DISPATCH_UNKNOWN --
+    an ambiguous outcome must stay counted against the budget. Atomic under
+    the same row-lock pattern as reserve_dispatch_usage(); never lets the
+    counters go negative."""
+    key = _month_key(today)
+    with conn.cursor() as cur:
+        cur.execute("SELECT value FROM app_config.settings WHERE key=%s FOR UPDATE", (key,))
+        row = cur.fetchone()
+        if row is not None:
+            value = row[0]
+            value = value if isinstance(value, dict) else json.loads(value)
+            value["executions"] = max(0, int(value.get("executions", 0)) - 1)
+            value["clinics"] = max(0, int(value.get("clinics", 0)) - int(clinic_count))
+            cur.execute(
+                "UPDATE app_config.settings SET value=%s WHERE key=%s",
+                (json.dumps(value, ensure_ascii=False), key),
+            )
     conn.commit()

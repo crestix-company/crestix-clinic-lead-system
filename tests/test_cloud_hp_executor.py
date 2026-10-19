@@ -96,7 +96,7 @@ def test_dispatch_hp_job_is_blocked_while_a_prior_unknown_is_unreconciled():
     from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN, record_dispatch_state
     from src.cloud_run.usage_budget import read_usage
 
-    conn = FakeSettingsConnection()
+    conn = FakeSettingsConnection(job_statuses={JOB_ID: "RUNNING"})
     record_dispatch_state(conn, JOB_ID, status=STATUS_DISPATCH_UNKNOWN, operation_name="op/stale")
 
     def must_not_be_called(request):
@@ -110,11 +110,11 @@ def test_dispatch_hp_job_is_blocked_while_a_prior_unknown_is_unreconciled():
 
 
 def test_dispatch_hp_job_is_refused_once_monthly_budget_is_exhausted():
-    from src.cloud_run.usage_budget import record_dispatch_usage
+    from src.cloud_run.usage_budget import read_usage, reserve_dispatch_usage
 
     conn = FakeSettingsConnection()
     env = dict(CLOUD_RUN_ENV, CLOUD_RUN_MAX_MONTHLY_EXECUTIONS="1")
-    record_dispatch_usage(conn, 10)
+    reserve_dispatch_usage(conn, 10, env=env)
 
     def must_not_be_called(request):
         raise AssertionError("the Jobs API must never be called once the monthly budget is exhausted")
@@ -123,14 +123,53 @@ def test_dispatch_hp_job_is_refused_once_monthly_budget_is_exhausted():
         JOB_ID, clinic_count=5, env=env, execute_fn=must_not_be_called, job_control_conn=conn,
     )
     assert result.status == hp_executor.BUDGET_EXCEEDED
+    # The refused attempt must not have additionally consumed budget.
+    assert read_usage(conn) == {"executions": 1, "clinics": 10}
+
+
+def test_dispatch_hp_job_releases_reserved_budget_on_clean_rejection():
+    from src.cloud_run.usage_budget import read_usage
+
+    conn = FakeSettingsConnection()
+
+    class FakeResp:
+        status = 404
+
+    class FakeHttpError(Exception):
+        resp = FakeResp()
+
+    def rejected(request):
+        raise FakeHttpError("job not found")
+
+    result = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=rejected, job_control_conn=conn,
+    )
+    assert result.status == "REJECTED"
+    assert read_usage(conn) == {"executions": 0, "clinics": 0}
+
+
+def test_dispatch_hp_job_does_not_release_budget_on_ambiguous_unknown():
+    from src.cloud_run.usage_budget import read_usage
+
+    conn = FakeSettingsConnection()
+
+    def timeout(request):
+        raise TimeoutError("deadline exceeded")
+
+    result = hp_executor.dispatch_hp_job(
+        JOB_ID, clinic_count=25, env=CLOUD_RUN_ENV, execute_fn=timeout, job_control_conn=conn,
+    )
+    assert result.status == "DISPATCH_UNKNOWN"
+    # Ambiguous outcomes stay counted -- fail safe toward never exceeding budget.
+    assert read_usage(conn) == {"executions": 1, "clinics": 25}
 
 
 def test_precheck_budget_runs_before_any_job_row_would_be_created():
-    from src.cloud_run.usage_budget import record_dispatch_usage
+    from src.cloud_run.usage_budget import reserve_dispatch_usage
 
     conn = FakeSettingsConnection()
     env = {"CLOUD_RUN_MAX_MONTHLY_CLINICS": "30"}
-    record_dispatch_usage(conn, 20)
+    reserve_dispatch_usage(conn, 20, env=env)
     allowed, reason = hp_executor.precheck_budget(20, env=env, job_control_conn=conn)
     assert allowed is False
     assert reason != ""
@@ -198,7 +237,7 @@ def test_full_unknown_then_reconcile_then_retry_scenario():
     """
     from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN, STATUS_SAFE_TO_RETRY, record_dispatch_state
 
-    conn = FakeSettingsConnection()
+    conn = FakeSettingsConnection(job_statuses={JOB_ID: "RUNNING"})
     calls = []
 
     record_dispatch_state(
