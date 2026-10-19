@@ -72,4 +72,3 @@ Every new table enables and forces RLS, revokes public/anon/authenticated/runtim
 ## Local UI and boundary
 
 The existing “メール送付文章” UI is reused. It adds an exact body/identity/article/clinic-page review, explicit duplicate status and reviewer/time, Gmail draft-only action, status/history view and raw CSV preview. The strict 328-row legacy preview is reused when canonical headers are present. There is no send or scheduled-send path. Sheets/CSV previews preserve original values and never write or deduplicate. Gmail draft creation remains disabled unless explicitly configured and the dedicated database role is available.
-
