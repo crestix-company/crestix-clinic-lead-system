@@ -1793,3 +1793,185 @@ read-only preflight; (d) credential owner confirms a usable Reader credential or
 approves issuance. Until these gates, corrected SQL, target-catalog checks, and a Reader
 Session Pooler connection test pass, production DB application remains **NO-GO**. PR #118 stays
 Draft and no production, secret, IAM, or Cloud Run changes are authorized by this review.
+
+## Production preflight update and PR #121/#122 reconciliation (2026-10-19)
+
+Latest GitHub heads retrieved for this review:
+
+- PR #118: `c3f03d70d2e4f4fe86d13d0543198b3359bfb8d5` (Open, Draft)
+- PR #121: `0f88ed24fd7eba54c82de11dd7ca99d8e4b46437` (Open, Draft)
+- PR #122: `5bf73b8de3687e88c70c3dffdb6ea8c2326fceda` (Open, Draft; based on #121 head)
+
+The owner-reported production Dashboard read-only results are `readonly_view_exists=false`
+and `reader_can_select_clinics=true`. The role exists, can LOGIN, and is neither SUPERUSER
+nor BYPASSRLS. Therefore the public clinic projection VIEW is absent and the Reader currently
+has the broad direct-clinic capability this design must remove. These two booleans do not
+establish the current RLS policy set, grants through PUBLIC/inherited roles, or effective write
+privileges; those require the preflight below before approval. No production connection or
+additional production SQL was run in this review because no approved DB session was available
+in this workspace.
+
+### Current PR conflict: Comdesk view was removed in #122
+
+PR #121 introduced `provenance.clinic_cloudrun_comdesk_rows`, granted the Reader that view,
+and revoked its direct access to `provenance.comdesk_original_rows.row_json`. Its READ ONLY
+export path selected from this filtered view. PR #122 removes that view and its checks from the
+migration/fixture and changes `_export_records` back to selecting raw `row_json` directly.
+The #122 fixture grants that raw column directly to the Reader, so it cannot prove the requested
+no-raw-JSON boundary. Blanking a few CSV fields in the UI is not a database access boundary.
+
+**Do not apply the #122 state as-is.** Do not restore the direct Reader `row_json` grant as a
+workaround. Before Phase 1 release, C must restore the #121 READ ONLY-specific Comdesk
+projection source/adapter path and its tests on the #122 head; normal mode should retain its
+existing source query. The projection preserves only approved standard-export header positions
+(UUID, kind, name, kana, postal code, prefecture, address fields, telephone fields, FAX, URL,
+former company name, lead source, and opening date); it blanks unapproved notes/history/article,
+doctor, and schedule fields. Unknown headers and malformed rows fail closed. Reader receives
+SELECT on the projection view, never on raw `row_json`. Keep `templates` access column-limited to
+`id, headers_json, mapping_json`.
+
+The intended seven Reader-facing relations remain: `public.clinic_cloudrun_readonly`,
+`hp_research.clinic_hp_research`, `treatment.clinic_treatment_research`,
+`treatment.clinic_research_status`, `provenance.clinic_cloudrun_comdesk_rows`,
+`provenance.templates`, and `public.clinic_email_enrichment`. The two projection views replace
+the direct `clinics` and raw Comdesk-row relations. This is the required ACL contract, not the
+current #122 implementation contract.
+
+### PR #122 implementation review
+
+Positive changes in #122: raw clinic `effective_json` remains hidden behind an allowlist; the
+function is create-only with a name collision guard; PUBLIC function EXECUTE is revoked; the
+returned marker no longer depends on source JSON; unused `treatment_status`, `maps_match_method`,
+and `maps_checked_at` were removed; and the hospital result is a boolean.
+
+Blockers in the current #122 migration/fixture:
+
+1. #122 removes the Comdesk projection while the current READ ONLY export path calls the common
+   exporter that reads raw `row_json`. The migration has no Comdesk projection grants or revoke.
+   With raw SELECT revoked this exporter would fail; with a direct grant it exposes unapproved
+   values. Restore and test a READ ONLY-only projected path.
+2. #122 removes the migration's `BEGIN`/`COMMIT` wrapper. DDL failures could leave a partial
+   state. Restore one reviewed transaction, or provide an explicit staged apply/compensation
+   plan and stop on each failed assertion.
+3. #122 removes preflight checks for a PUBLIC policy on `public.clinics` and for existing
+   policy/view/function names. It still creates a fixed-name permissive helper `USING (true)`
+   policy. Permissive policies combine with OR; inspect the real target policy composition and
+   prove that the helper sees the intended national rows without changing CRM role behavior.
+4. The #122 fixture re-grants raw `row_json` after including the migration and no longer asserts
+   raw Comdesk denial, filtered Comdesk values, or Reader INSERT/UPDATE/DELETE denial. Its
+   successful run cannot prove those boundaries.
+5. The migration only covers the clinic VIEW. It omits the Comdesk VIEW and the separate grants
+   for the remaining approved relations. Apply only a reviewed combined plan for all seven
+   Reader-facing relations.
+
+### Isolated PostgreSQL result
+
+The PR #122 fixture and migration completed on a fresh disposable loopback PostgreSQL 17.11
+cluster. This is a **fixture pass only**: the fixture itself grants raw Comdesk `row_json` and
+lacks assertions for raw Comdesk denial and Reader DML denial after the #122 changes. It does
+verify clinic VIEW RLS behavior, raw `effective_json` denial, the JSON allowlist,
+malformed/NULL/NUL/type-mismatch handling, and PUBLIC function EXECUTE revocation. No production
+DB was contacted. Do not count the current seven-relation design as validated until C restores
+the Comdesk view path and the isolation checks prove raw row denial, filtered/blanked values,
+RLS row behavior, no effective DML privileges, and read-only transaction behavior.
+
+### Read-only production preflight SQL for the authorized Dashboard operator
+
+Run only as a DBA in the intended project, in Supabase SQL Editor, and retain result rows without
+connection strings or secrets. Diagnostic only; it makes no changes:
+
+```sql
+-- Role flags and membership paths
+SELECT rolname, rolcanlogin, rolinherit, rolsuper, rolcreatedb, rolcreaterole,
+       rolreplication, rolbypassrls
+FROM pg_roles
+WHERE rolname IN ('clinic_cloudrun_reader','clinic_cloudrun_projection_owner');
+SELECT granted.rolname AS granted_role, member.rolname AS member_role,
+       m.admin_option, m.inherit_option, m.set_option
+FROM pg_auth_members m
+JOIN pg_roles granted ON granted.oid=m.roleid
+JOIN pg_roles member ON member.oid=m.member
+WHERE granted.rolname IN ('clinic_cloudrun_reader','clinic_cloudrun_projection_owner')
+   OR member.rolname IN ('clinic_cloudrun_reader','clinic_cloudrun_projection_owner');
+
+-- Required object existence, RLS and policies
+SELECT n.nspname, c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity,
+       pg_get_userbyid(c.relowner) AS owner
+FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+WHERE (n.nspname,c.relname) IN
+  (('public','clinics'),('public','clinic_cloudrun_readonly'),
+   ('hp_research','clinic_hp_research'),('treatment','clinic_treatment_research'),
+   ('treatment','clinic_research_status'),('provenance','comdesk_original_rows'),
+   ('provenance','clinic_cloudrun_comdesk_rows'),('provenance','templates'),
+   ('public','clinic_email_enrichment'));
+SELECT schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
+FROM pg_policies
+WHERE (schemaname,tablename) IN
+  (('public','clinics'),('hp_research','clinic_hp_research'),
+   ('treatment','clinic_treatment_research'),('treatment','clinic_research_status'),
+   ('provenance','comdesk_original_rows'),('provenance','templates'),
+   ('public','clinic_email_enrichment'))
+ORDER BY schemaname,tablename,policyname;
+
+-- Effective Reader access: direct clinic/raw JSON and writes should be false.
+SELECT has_table_privilege('clinic_cloudrun_reader','public.clinics','SELECT') AS clinics_table_select,
+       has_any_column_privilege('clinic_cloudrun_reader','public.clinics','SELECT') AS clinics_column_select,
+       has_column_privilege('clinic_cloudrun_reader','public.clinics','effective_json','SELECT') AS effective_json_select,
+       has_column_privilege('clinic_cloudrun_reader','provenance.comdesk_original_rows','row_json','SELECT') AS raw_comdesk_json_select,
+       has_table_privilege('clinic_cloudrun_reader','public.clinics','INSERT') AS clinics_insert,
+       has_table_privilege('clinic_cloudrun_reader','public.clinics','UPDATE') AS clinics_update,
+       has_table_privilege('clinic_cloudrun_reader','public.clinics','DELETE') AS clinics_delete,
+       has_table_privilege('clinic_cloudrun_reader','public.clinics','TRUNCATE') AS clinics_truncate;
+SELECT n.nspname, p.proname, pg_get_function_identity_arguments(p.oid) AS args,
+       EXISTS (
+         SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+         WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE'
+       ) AS public_execute,
+       pg_get_userbyid(p.proowner) AS owner
+FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+WHERE n.nspname='public' AND p.proname='clinic_cloudrun_effective_projection';
+```
+
+The supplied Dashboard results settle only two current facts: the clinic VIEW is absent and
+direct clinic SELECT is present. RLS, inherited/PUBLIC grants, effective writes, approved target
+project, Reader Session Pooler authentication, and national visibility remain confirmation
+gates. Do not treat similarly named projects as equivalent.
+
+### Apply contract, impact, and rollback
+
+Only after SQL corrections and named approvals, use one DBA-controlled transaction:
+
+1. Re-run the preflight; verify the actual project ref out-of-band; abort on unexpected
+   helper/view/function/policy names, PUBLIC or inherited grants, owner state, or RLS policy
+   composition. Record pre-change effective privileges and national count.
+2. Create the isolated NOLOGIN helper if absent; grant only clinic projection source columns
+   including raw JSON to that helper; add its scoped RLS policy; create the collision-guarded
+   function with PUBLIC EXECUTE revoked; create/own the clinic VIEW; revoke helper schema CREATE.
+3. Restore the reviewed Comdesk projection VIEW without any Reader grant on raw `row_json`;
+   grant Reader SELECT only on the two views and the remaining five approved relations/columns;
+   apply the verified-email row predicate. Revoke Reader table-wide and per-column direct clinic
+   SELECT. Do not modify CRM roles or policies.
+4. Assert post-change: clinic direct SELECT false, raw `effective_json` false, raw Comdesk
+   `row_json` false; both views and required five relations SELECTable; out-of-scope relations
+   denied; email condition exact; Reader DML denied; PUBLIC function EXECUTE denied; helper has
+   no memberships/BYPASSRLS/table ownership/effective schema CREATE; national count matches the
+   approved baseline.
+5. Test Reader Session Pooler login and `SET TRANSACTION READ ONLY`; run national search,
+   filters, export count parity, and synthetic/approved email checks. Never attempt production
+   DML; test write denial in isolation.
+
+On failure, stop serving the Reader credential through the separately approved application
+control, revoke only new Reader grants, and remove only objects/policies created by this change.
+Drop a helper role only if the change record proves it was created by this change. Restore prior
+Reader grants only from the captured preflight snapshot and explicit DBA approval. Do not alter
+CRM grants/policies. Keep transaction rollback available before commit; after commit use reviewed
+compensating SQL and compare with the captured ACL/policy snapshot.
+
+**Current decision: production DB application NO-GO.** The Dashboard facts confirm a missing
+clinic VIEW and broad direct Reader SELECT, but #122 currently regresses Comdesk projection and
+omits critical fixture assertions. Required approvals: service owner confirms the actual
+Supabase project; data owner approves projected export fields and email audience; C restores
+the Comdesk view-only READ ONLY path with passing isolated checks; DBA/security owner approves
+the exact combined SQL after catalog preflight; credential owner confirms or separately
+authorizes a dedicated Reader credential. No DB, Secret Manager, IAM, Cloud Run, or PR merge
+action was taken. PR #118 remains Draft.
