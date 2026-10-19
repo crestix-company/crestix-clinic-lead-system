@@ -1,7 +1,10 @@
-# Default-deny: Dockerfile.cloudrun only needs app_v2.py, src/, config/, requirements.txt.
-# Everything else (real clinic data, local credentials, backups, scratch scripts, docs,
-# tests) is excluded by default so a future accidental file in the build context can never
-# silently end up inside the image. New code must be added to app_v2.py/src/ to be shipped.
+# Default-deny: Dockerfile.cloudrun (Web) only needs app_v2.py/src/config, and
+# Dockerfile.cloudrun.worker (Cloud Run Jobs) only needs scripts/cloud_hp_worker.py
+# on top of that same src/config. Everything else (real clinic data, local
+# credentials, backups, scratch scripts, docs, tests) is excluded by default so
+# a future accidental file in the build context can never silently end up
+# inside either image. New code must be added under app_v2.py/src/ (or, for the
+# worker entry point specifically, scripts/cloud_hp_worker.py) to be shipped.
 *
 
 !app_v2.py
@@ -10,6 +13,7 @@
 !src/**
 !config
 !config/**
+!scripts/cloud_hp_worker.py
 
 # Re-exclude anything secret-shaped even if it ends up under src/ or config/ later.
 .env
