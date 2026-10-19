@@ -84,11 +84,16 @@ def auto_draft_save_page(*, demo: bool = False) -> None:
     phrase = f"CREATE_{len(plan.eligible)}_GMAIL_DRAFTS"
     typed = st.text_input(f"実行確認語：{phrase}", key=f"auto_draft_phrase_{key}")
     st.caption("処理途中で結果不明または照合エラーを検出すると以降の医院は自動停止します。失敗分を自動再作成しません。")
+    if today_japan() != settings.as_of:
+        st.error("文章生成日から日付が変わっています。本文と候補日時を再生成してください。")
+    if st.session_state.get(f"auto_draft_done_{key}"):
+        st.warning("この一括生成バッチは処理を試行済みです。履歴を再照合して新たに文章生成するまで再実行できません。")
     can_save = (
         feature_enabled and not demo and history_verified and delivery_ready
         and calendar_confirmed and provisional_approved and bool(campaign_id)
         and bool(settings.staff.strip()) and all_confirmed and history_confirmed
-        and typed == phrase
+        and typed == phrase and today_japan() == settings.as_of
+        and not st.session_state.get(f"auto_draft_done_{key}")
     )
     if st.button("確認済み医院の下書きを自動保存", key=f"auto_draft_execute_{key}",
                  type="primary", disabled=not can_save):
