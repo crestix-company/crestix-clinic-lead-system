@@ -33,7 +33,11 @@
   setting disables the controls instead of falling back to the local runner.
 - Duplicate executions are guarded by the existing durable controller lease;
   Job task retries and parallel tasks are rejected. An ambiguous Jobs API
-  response is not retried automatically.
+  response is recorded as `UNKNOWN` in the existing run metrics JSON under a
+  row lock; the UI blocks every further dispatch for that run until an operator
+  reconciles the Cloud Run Execution. No schema migration is required. A
+  confirmed dispatch is also recorded with its Execution name, and an active
+  confirmed dispatch cannot be started a second time.
 
 ## Deployment configuration still required
 

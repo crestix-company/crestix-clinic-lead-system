@@ -8,6 +8,7 @@ explicitly requested.
 from __future__ import annotations
 
 import os
+import uuid
 
 from src.master.email_auto_run import build_default_research_one
 from src.master.email_research_config import load_email_research_config
@@ -29,6 +30,10 @@ class CloudEmailNotConfiguredError(RuntimeError):
 
 class EmailDispatchOutcomeUnknownError(CloudEmailNotConfiguredError):
     """The Run exists, but the Jobs API response did not prove Execution creation."""
+
+
+class EmailDispatchBlockedError(CloudEmailNotConfiguredError):
+    """A previous or current dispatch makes another Execution unsafe."""
 
 
 def email_cloud_run_enabled(env=None):
@@ -98,7 +103,7 @@ def create_email_run(*, env=None, repositories_factory=None, target_reader=None,
             repo.close()
 
 
-def dispatch_email_worker(run_id, *, env=None, execute_fn=None):
+def dispatch_email_worker(run_id, *, env=None, execute_fn=None, dispatch_repository=None):
     """Dispatch one bounded execution. Ambiguous outcomes are surfaced for operator review."""
     env = os.environ if env is None else env
     name = job_resource_name(env)
@@ -117,17 +122,38 @@ def dispatch_email_worker(run_id, *, env=None, execute_fn=None):
             {"name": MAX_CLINICS_ENV, "value": str(max_clinics_per_execution(env))},
         ]}] }},
     }
+    repo = dispatch_repository
+    close_repo = False
+    if repo is None:
+        bundle = _repositories()
+        repo = bundle.email_research
+        close_repo = True
+    attempt_id = uuid.uuid4().hex
     try:
-        response = execute_fn(request)
-    except Exception as exc:
-        # The worker uses the durable controller lease; a duplicate execution will
-        # become standby. Do not automatically retry an ambiguous Jobs API call.
-        raise EmailDispatchOutcomeUnknownError(
-            "Email Worker起動結果を確認できません。自動再起動は行わず、Run状態とCloud Run Executionを照合してください。"
-        ) from exc
-    if not isinstance(response, dict) or not (response.get("name") or response.get("metadata", {}).get("name")):
-        raise EmailDispatchOutcomeUnknownError("Cloud Run Execution名を確認できません。自動再起動は行いません。")
-    return response
+        try:
+            repo.begin_worker_dispatch(str(run_id), attempt_id)
+        except ValueError as exc:
+            raise EmailDispatchBlockedError(str(exc)) from exc
+        try:
+            response = execute_fn(request)
+        except Exception as exc:
+            repo.finish_worker_dispatch(str(run_id), attempt_id, status="UNKNOWN")
+            raise EmailDispatchOutcomeUnknownError(
+                "Email Worker起動結果を確認できません。自動再起動は行わず、Run状態とCloud Run Executionを照合してください。"
+            ) from exc
+        execution_name = ""
+        if isinstance(response, dict):
+            execution_name = str(response.get("name") or response.get("metadata", {}).get("name") or "")
+        if not execution_name:
+            repo.finish_worker_dispatch(str(run_id), attempt_id, status="UNKNOWN")
+            raise EmailDispatchOutcomeUnknownError("Cloud Run Execution名を確認できません。自動再起動は行いません。")
+        repo.finish_worker_dispatch(
+            str(run_id), attempt_id, status="CONFIRMED", execution_name=execution_name,
+        )
+        return response
+    finally:
+        if close_repo and hasattr(repo, "close"):
+            repo.close()
 
 
 def update_run(run_id, status, *, repositories_factory=None):

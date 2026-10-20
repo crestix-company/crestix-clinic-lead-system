@@ -1198,6 +1198,77 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
+    def begin_worker_dispatch(self, run_id: str, attempt_id: str) -> dict:
+        """Atomically reserve one dispatch using the existing metrics JSON.
+
+        A timed-out Jobs API call is inherently ambiguous. Persisting REQUESTED
+        before the call makes every retry fail closed until a human reconciles
+        the Cloud Run Execution; no schema migration or new table is needed.
+        """
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status,stop_requested,metrics FROM email_research.email_auto_runs "
+                    "WHERE run_id=%s FOR UPDATE", (str(run_id),),
+                )
+                row = cur.fetchone()
+                if not row or row[0] not in {"RUNNING", "PAUSED"}:
+                    raise ValueError("Email Runは起動できる状態ではありません。")
+                metrics = _json_dict(row[2])
+                previous = metrics.get("cloud_worker_dispatch") or {}
+                previous_status = str(previous.get("status") or "")
+                if previous_status in {"REQUESTED", "UNKNOWN"}:
+                    raise ValueError("前回のWorker起動結果が未確定です。Cloud Run Executionの照合が必要です。")
+                if row[0] == "RUNNING" and previous_status == "CONFIRMED":
+                    raise ValueError("このRunには起動確認済みWorkerがあります。重複ディスパッチはできません。")
+                if bool(row[1]):
+                    raise ValueError("停止要求済みのEmail Runは再開できません。")
+                dispatch = {"status": "REQUESTED", "attempt_id": str(attempt_id)}
+                metrics["cloud_worker_dispatch"] = dispatch
+                cur.execute(
+                    "UPDATE email_research.email_auto_runs SET status='RUNNING',stop_requested=false,"
+                    "metrics=%s,updated_at=now() WHERE run_id=%s",
+                    (Jsonb(metrics), str(run_id)),
+                )
+            self._conn.commit()
+            return dispatch
+        except Exception:
+            self._safe_rollback()
+            raise
+
+    def finish_worker_dispatch(self, run_id: str, attempt_id: str, *, status: str,
+                               execution_name: str = "") -> bool:
+        if status not in {"CONFIRMED", "UNKNOWN"}:
+            raise ValueError(status)
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT metrics FROM email_research.email_auto_runs WHERE run_id=%s FOR UPDATE",
+                    (str(run_id),),
+                )
+                row = cur.fetchone()
+                if not row:
+                    self._conn.commit()
+                    return False
+                metrics = _json_dict(row[0])
+                dispatch = metrics.get("cloud_worker_dispatch") or {}
+                if str(dispatch.get("attempt_id") or "") != str(attempt_id):
+                    self._conn.commit()
+                    return False
+                dispatch.update({"status": status})
+                if execution_name:
+                    dispatch["execution_name"] = str(execution_name)
+                metrics["cloud_worker_dispatch"] = dispatch
+                cur.execute(
+                    "UPDATE email_research.email_auto_runs SET metrics=%s,updated_at=now() WHERE run_id=%s",
+                    (Jsonb(metrics), str(run_id)),
+                )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._safe_rollback()
+            raise
+
     def acquire_controller(self, run_id: str, controller_id: str,
                            lease_seconds: int = EMAIL_CONTROLLER_LEASE_SECONDS) -> dict | None:
         """Atomically acquire an empty/expired persisted controller lease for one run."""

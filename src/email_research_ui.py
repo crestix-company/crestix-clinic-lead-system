@@ -295,10 +295,19 @@ def _email_auto_research_controls(store, *, demo=False):
         disabled=(not cloud_email and not runner) or status != "PAUSED", use_container_width=True,
     ):
         if cloud_email:
-            from src.cloud_run.email_executor import dispatch_email_worker, update_run
-            update_run(run["run_id"], "RUNNING")
-            dispatch_email_worker(run["run_id"])
-            st.rerun(scope="fragment")
+            from src.cloud_run.email_executor import (
+                dispatch_email_worker, EmailDispatchBlockedError,
+                EmailDispatchOutcomeUnknownError,
+            )
+            try:
+                dispatch_email_worker(run["run_id"])
+            except (EmailDispatchBlockedError, EmailDispatchOutcomeUnknownError):
+                st.error(
+                    "Worker起動結果が未確定です。Runは再ディスパッチできない状態で保護しました。"
+                    "Cloud Run Executionを運用担当者が照合してください。"
+                )
+            else:
+                st.rerun(scope="fragment")
         elif runner.resume(run["run_id"]): st.rerun(scope="fragment")
         else: st.warning("前Runの終了処理中です。少し待ってから再度お試しください。")
     if controls[3].button(
@@ -312,11 +321,12 @@ def _email_auto_research_controls(store, *, demo=False):
             runner.kill(run["run_id"])
         st.rerun(scope="fragment")
     if cloud_email and run and status == "RUNNING" and controller_health == "RECOVERABLE":
-        st.warning("controller leaseが期限切れです。直前Executionの状態を確認してから手動でWorkerを再ディスパッチしてください。")
-        if st.button("既存RunのWorkerを再ディスパッチ", key="email_cloud_worker_recover"):
-            from src.cloud_run.email_executor import dispatch_email_worker
-            dispatch_email_worker(run["run_id"])
-            st.rerun(scope="fragment")
+        dispatch_state = (run.get("metrics") or {}).get("cloud_worker_dispatch", {})
+        state = dispatch_state.get("status")
+        if state in {"REQUESTED", "UNKNOWN"}:
+            st.error("Worker起動結果が未確定です。重複防止のため再ディスパッチを停止しました。Cloud Run Executionを運用担当者が照合してください。")
+        else:
+            st.warning("controller leaseが期限切れです。既存Executionを照合するまで再ディスパッチはできません。")
     if not enabled:
         st.caption("開始操作は環境側で許可された場合のみ有効になります。")
 

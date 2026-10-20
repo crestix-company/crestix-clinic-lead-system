@@ -49,6 +49,25 @@ def test_email_cloud_controls_require_operator_and_never_fall_back_to_local_runn
     assert "ローカル実行へ切り替えていません" in block
 
 
+def test_email_dispatch_intent_is_locked_and_ambiguous_attempts_block_retry():
+    source = _source("src/repository/email_research_repository.py")
+    start = source.index("def begin_worker_dispatch(")
+    end = source.index("def finish_worker_dispatch(", start)
+    begin = source[start:end]
+    assert "FOR UPDATE" in begin
+    assert 'previous_status in {"REQUESTED", "UNKNOWN"}' in begin
+    assert 'previous_status == "CONFIRMED"' in begin
+    assert '"status": "REQUESTED"' in begin
+
+    executor = _source("src/cloud_run/email_executor.py")
+    dispatch_start = executor.index("def dispatch_email_worker(")
+    dispatch_end = executor.index("\ndef update_run", dispatch_start)
+    dispatch = executor[dispatch_start:dispatch_end]
+    assert dispatch.index("repo.begin_worker_dispatch") < dispatch.index("response = execute_fn(request)")
+    assert 'status="UNKNOWN"' in dispatch
+    assert 'status="CONFIRMED"' in dispatch
+
+
 def test_cloud_run_page_exposes_only_dedicated_hp_and_email_controls():
     source = _source("app_v2.py")
     start = source.index("def simple_workflow_ui(")
