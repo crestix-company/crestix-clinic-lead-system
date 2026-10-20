@@ -15,7 +15,8 @@ def main():
     projection = (PACKAGE / 'projection_74d89afe.sql').read_text()
     rollback = (PACKAGE / 'projection_rollback_74d89afe.sql').read_text()
     header = ('-- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.\n'
-              '-- Pinned PR #122 head: 74d89afee68fd6c86bc44b042048f6f618b43c39\n'
+              '-- Based on PR #122 head 74d89afee68fd6c86bc44b042048f6f618b43c39.\n'
+              '-- Owner-approved EPARK contract/signal redaction overlay; mirror in #122 before merge.\n'
               f'-- Projection SHA256: {hashlib.sha256(projection.encode()).hexdigest()}\n'
               '-- Apply this combined file ONCE; do not separately apply the pinned migration.\n')
     (PACKAGE / 'apply.sql').write_text(

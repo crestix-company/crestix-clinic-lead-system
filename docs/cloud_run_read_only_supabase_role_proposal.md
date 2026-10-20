@@ -21,7 +21,7 @@
 
 `apply.sql`は#122 Migrationの本体をそのまま埋め込み、事前条件、他5テーブルの限定GRANT/RLS、
 新規オブジェクトのデフォルトACL除去を同じトランザクションに追加している。
-`projection_74d89afe.sql`と`projection_rollback_74d89afe.sql`は#122最新headの原文スナップショットであり、単独で適用しない。
+`projection_74d89afe.sql`は#122 head `74d89afe`を基に、サービス所有者承認済みのEPARK課金情報除外を重ねた提案Migrationである。C担当が同内容を#122へ反映後に一対一再照合する。`projection_rollback_74d89afe.sql`は#122 headのrollback案。どちらも単独で適用しない。
 生成は`python scripts/build_cloudrun_reader_release.py`。生成物は通常のSQLでDashboardにも貼り付け可能。
 #122のMigrationを先に実行してからこの統合SQLを実行すると衝突するため、どちらかを重複実行しない。
 今回の配布物は`docs/`配下で、Migration自動適用対象ではない。
@@ -79,8 +79,8 @@ signals_json,merge_hold,maps_presence_status,maps_profile_url,exclude_reason
 ```
 
 追加列は`effective_projection jsonb`、`projection_marker text`、`projection_valid boolean`、
-`is_hospital_or_center boolean`。投影JSON内のキーは`hp_production_companies`（文字列配列）、
-`epark_url`/`epark_contract`（文字列またはnull）の3つだけ。
+`is_hospital_or_center boolean`。投影JSON内のキーは`hp_production_companies`（文字列配列）と
+`epark_url`（文字列またはnull）の2つだけ。`epark_contract`は含めない。
 raw facility_type、年齢推定、owner_name、manager_name、診療時間、根拠JSONは含まない。
 施設除外booleanは通常モードと同じliteral LIKE条件で算出し、医院名・exclude_reason条件と併用する。
 
@@ -235,7 +235,8 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 | 同VIEW: `signal_count,hot_status,signals_json` | 数/温度区分/allowlist済みシグナル名配列のみ（根拠なし） | 営業対象判定、広告・集客施策フィルター、優先順、一覧/詳細 | 営業機能維持。根拠URL・引用文・担当者メモ・raw signal JSONは非公開。許可シグナル名を現行定義に固定 |
 | 同VIEW: `effective_projection.hp_production_companies` | 公式HPで確認された制作会社名の配列のみ | HP制作会社フィルター | サービス所有者が維持を指定。証拠URL/本文は投影しない |
 | 同VIEW: `effective_projection.epark_url` | 公開プロフィールURL | 一覧/詳細のリンク | 現行画面で表示、Comdesk標準出力には含めない。公開ページURLとして契約enumと分離して扱う |
-| 同VIEW: `effective_projection.epark_contract` | 現状は`UNKNOWN/PAID/FREE` enum | 現行一覧表示と`PAID`由来の営業シグナル/評価 | **個別判断必須。** 契約情報管理者が社内Readerへのenum表示と営業評価利用を承認するか決定する。無承認時にenumと課金由来シグナルだけを外すには、`signals_json`から同signalを除き`signal_count`/`hot_status`も再計算する必要がある。単に投影JSONキーを落とすだけでは課金状態を推測できる値が残る。他の集客シグナル/HP制作会社/Maps/営業検索は維持。標準Comdesk CSV/XLSXには出力しない |
+| 同VIEW: `effective_projection.epark_contract` | **Readerには投影しない** | なし。EPARK URLは引き続き表示 | サービス所有者決定によりREAD ONLY初期公開から除外。契約enumを表示・検索しない |
+| 同VIEW: `signals_json,signal_count,hot_status` | EPARK課金シグナルを除いたシグナル名配列、再計算件数と優先度 | 他の広告/集客シグナル検索、件数、並び順 | 課金由来シグナルは除外。他シグナルを維持し、表示件数と優先度は残存シグナルから再計算。元テーブルの集計値をそのままReaderへ渡さない |
 | `provenance.clinic_cloudrun_comdesk_rows` | Clinic ID/template ID/UUID、投影有効フラグ、18 allowlist値を元位置に保持した配列 | 既存Comdesk値の優先順位維持、標準30列CSV/XLSX | Readerへraw rowを付与しない。院長名、診療日/時間、備考、履歴、記事などallowlist外要素は空欄 |
 | `provenance.templates`: `id,headers_json,mapping_json` | 対象投影行が参照する列見出し/マッピングmetadata | 18 allowlist値を元CSV位置から標準30列へ写像 | 値行は含まない。任意ヘッダー名・全template metadataの露出を避けるためRLSは投影VIEWから参照されるtemplateに限定。出力仕様維持の最小metadataとして許可 |
 | `public.clinic_email_enrichment`: `clinic_id,email,status,verified_on_official` | 条件を満たす公式確認済みメールのみ | 営業対象CSV/XLSXのメール列 | 既承認。RLS条件は`VERIFIED_EMAIL`、`verified_on_official IS TRUE`、非NULL/空欄以外を維持 |
@@ -244,13 +245,13 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 
 - `public.clinics.effective_json`、Comdeskのraw `row_json`、HP調査raw JSON/ページ本文、treatment evidence、メール調査候補/履歴、監査/変更履歴、配信履歴/KPI、HP Job状態。
 - owner/managerの氏名・年齢推定・年齢根拠、診療時間等のComdesk allowlist外列。
-- EPARK契約書・証憑・確認メモ、制作会社の証拠文/URL、マーケティングsignalの根拠URL/引用文。契約enumは上記の個別承認待ち。
+- EPARK契約enum/課金由来シグナル/その評価加点、契約書・証憑・確認メモ、制作会社の証拠文/URL、マーケティングsignalの根拠URL/引用文。
 
-### 今回残す承認
+### 今回残る承認・検証
 
-1. EPARK契約enum（UNKNOWN/PAID/FREE）を社内IAP画面で表示し、PAIDを営業signal/優先度へ使うことの契約情報管理者承認。承認が得られない場合はenumに加えて課金由来signalを投影から除き、signal数/優先度を再計算するUI/SQL更新が必要（現状のSQLは再計算しないため未承認のまま適用不可）。
-2. EPARK契約enumと課金由来シグナルの公開・営業評価利用に関する個別承認。未承認の場合は両方の投影を外し、信号数/優先度の再計算を含む変更が必要。
-3. 最終project接続先のサービス所有者承認、Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
+1. C担当がREAD ONLY UI/検索/評価からEPARK契約状態と課金シグナルを除き、他の集客シグナル・営業機能が維持されたことをテストする。
+2. C担当が#122 Migrationを本設計のEPARK除外投影へ更新し、最新CIと3PR統合検証を通す。現在の#118投影SQLは#122 headを基にした提案overlayであり、Migrationとの一致はその後に確認する。
+3. Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
 
 その他の列は上表の営業目的・出力先に限定して維持する方針であり、「未承認列」という理由だけで一律に削除しない。
 
@@ -274,5 +275,21 @@ FORCE RLSではなく、既存policyはCRM等のロールに限定される。Re
 Reader自身は他ロールのmemberではなく、`postgres`が逆向きにReaderのmember（ADMIN=true、INHERIT/SET=false）。
 対象ソースにPUBLIC明示ACLは見つからなかった。既存CRM権限・policyは変更しない。
 
-PR #122最新CIの成功、C担当の3PR統合競合/テスト確認、EPARK契約enumと課金由来signalの個別承認、
-本番DBA適用承認、Reader Session Pooler実認証は未解決。#122 Migrationと統合`apply.sql`を二重適用しないこと。
+PR #122最新CIの成功、C担当の3PR統合競合/テスト確認、本番DBA適用承認、Reader Session Pooler実認証は未解決。
+サービス所有者はEPARK契約enumと課金由来signalの初期公開除外を決定済み。C担当のMigration反映を確認後、#122 Migrationと統合`apply.sql`を二重適用しないこと。
+
+## 2026-10-20 EPARK課金情報除外の隔離検証
+
+サービス所有者決定に基づき、#118提案Migrationから`effective_projection.epark_contract`を除き、
+`signals_json`から正確な値`EPARK課金済み確認`をReader向けに除外する。Reader向け`signal_count`と`hot_status`は、
+残ったsignal配列から再計算する。元の`signal_count`/`hot_status`列はprojection ownerへGRANTしない。
+EPARK掲載URL、HP制作会社名、他のsignal名は維持する。#122 latest `74d89afe`時点のC担当Migrationにはこのoverlayがまだ反映されていないため、
+マージ前にC担当が同じロジックをMigration/アプリ実装へ反映し、最新版headと再照合する。
+
+隔離PostgreSQL 17.11でこの統合SQLを適用し、verify.sqlの全`*_ok`がtrue、Reader smokeで全国fixture 5件、
+禁止EPARK課金情報露出0件、read-only transaction有効を確認した。5 fixtureは課金由来signalのみ/課金signal+1件/課金signal+2件/
+課金なし2件/課金signal+3件のケースを含み、Reader出力は残存数0/1/2/2/3、優先度「通常/集客投資シグナルあり/アツい/アツい/かなりアツい」と一致。
+EPARK URLとHP制作会社投影も残り、Google広告、SNS、独自LP、制作実績、昼枠のsignalは維持された。Readerの元effective_json/signals_json参照とUPDATEは拒否され、
+限定rollback後にClinic行・既存CRM policyが保持され、Readerへの元表SELECTが復活しないことを確認した。
+
+これはDB境界の隔離テストであり、READ ONLY UIの契約状態/検索条件除去、CSV/XLSX回帰、#118/#121/#122の統合pytest/CIを代替しない。
