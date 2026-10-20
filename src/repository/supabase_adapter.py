@@ -9,6 +9,8 @@ functions imported from src.master.*, called with data fetched from the migrated
 I/O (which table a column comes from) differs between this adapter and the SQLite one.
 """
 import json
+import threading
+import time
 
 from src.master.filters import Filters
 from src.master.hp_effective_rank import effective_hp_rank, effective_rank_reason
@@ -123,6 +125,43 @@ class SupabaseHpResearchRepository:
         return result
 
 
+# 2026-10-20: the hospital/center exclusion-ID query below (~14-15s, see its own comment)
+# is cached per SupabaseClinicRepository INSTANCE. On Cloud Run, Streamlit's
+# @st.cache_resource keeps the SAME SupabaseRuntimeStore alive for the whole process
+# lifetime, but src.repository.runtime_store._retry_closed_read_connection documents that
+# "a direct/session Postgres connection can still be closed by the network or server while
+# the app remains alive" -- and when that happens, _reconnect_read() builds a brand new
+# SupabaseClinicRepository (fresh, empty instance-level cache). Measured live: a Cloud Run
+# Canary request profile showed the SAME container instance ID serving requests for over an
+# hour (no cold starts), yet every single prefecture-filter change still re-paid the full
+# ~15s exclusion query -- consistent with the pooled connection being recycled between
+# requests more often than the container itself. This process-wide, TTL-bounded cache lets
+# a freshly rebuilt repository instance reuse the previous result instead of re-querying,
+# without changing which clinics are excluded (same predicate, same query, just not re-run
+# on every reconnect). TTL is a safety margin, not a correctness requirement: exclude_reason/
+# facility_type/clinic_name only change via writes, which never happen to this process
+# during READ ONLY/shadow-read usage per the existing comment on _excluded_clinic_ids().
+_EXCLUDED_IDS_PROCESS_CACHE_TTL_SECONDS = 300
+_excluded_ids_process_cache_lock = threading.Lock()
+_excluded_ids_process_cache = {}  # {read_only_ui: (monotonic_timestamp, [ids])}
+
+
+def _process_cached_excluded_ids(read_only_ui):
+    with _excluded_ids_process_cache_lock:
+        entry = _excluded_ids_process_cache.get(read_only_ui)
+    if entry is None:
+        return None
+    cached_at, ids = entry
+    if time.monotonic() - cached_at > _EXCLUDED_IDS_PROCESS_CACHE_TTL_SECONDS:
+        return None
+    return list(ids)
+
+
+def _store_process_cached_excluded_ids(read_only_ui, ids):
+    with _excluded_ids_process_cache_lock:
+        _excluded_ids_process_cache[read_only_ui] = (time.monotonic(), list(ids))
+
+
 class SupabaseClinicRepository:
     _COLUMNS = (
         "id", "uuid", "merged_into", "effective_json", "tel_match_key", "first_seen_at",
@@ -154,9 +193,15 @@ class SupabaseClinicRepository:
         predicate produces, ONCE per repository instance, then caches it. See the long comment
         in supabase_filters.clauses() for why this predicate can't be simplified and why caching
         it is safe (Supabase is never written to during Stage4-B/C shadow-read usage).
+
+        Also checks/populates the module-level, TTL-bounded process cache (see its comment
+        above SupabaseClinicRepository) before/after running the query, so a repository
+        instance rebuilt after a dropped connection doesn't re-pay the full query cost.
         """
         cache_attr = "_read_only_excluded_ids_cache" if read_only_ui else "_excluded_ids_cache"
         excluded_ids = getattr(self, cache_attr)
+        if excluded_ids is None:
+            excluded_ids = _process_cached_excluded_ids(read_only_ui)
         if excluded_ids is None:
             # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one
             # and only place it is still evaluated row-by-row. Its result is cached and reused by
@@ -196,7 +241,8 @@ class SupabaseClinicRepository:
                     excluded_ids = [r[0] for r in cur.fetchall()]
                 finally:
                     cur.execute("SET statement_timeout = DEFAULT")
-            setattr(self, cache_attr, excluded_ids)
+            _store_process_cached_excluded_ids(read_only_ui, excluded_ids)
+        setattr(self, cache_attr, excluded_ids)
         return excluded_ids
 
     def _where(self, filters, as_of, read_only_ui=False):
