@@ -91,12 +91,13 @@ class SupabaseHpResearchRepository:
             return []
         return row[0]
 
-    def batch_metrics(self):
+    def batch_metrics(self, *, read_only_ui=False):
+        source = ("public.clinic_cloudrun_readonly" if read_only_ui else "public.clinics")
         with self._conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 WITH url_clinics AS (
-                  SELECT id FROM public.clinics WHERE hp_url<>'' OR maps_website_url<>''
+                  SELECT id FROM {source} WHERE hp_url<>'' OR maps_website_url<>''
                 ), joined AS (
                   SELECT u.id, r.fetch_status, r.treatment_categories
                   FROM url_clinics u LEFT JOIN hp_research.clinic_hp_research r ON r.clinic_id=u.id
@@ -128,19 +129,35 @@ class SupabaseClinicRepository:
         "last_seen_at", "source_as_of_date", "is_new", "departments_json",
         "hp_status", "hp_url", "hp_rank", "maps_website_url",
     )
+    # This view is intentionally a different source from the ordinary Supabase path. It
+    # exposes only an allowlisted JSON projection and is granted to the Cloud Run Reader;
+    # the ordinary Mac/runtime path continues to read public.clinics.effective_json.
+    _READ_ONLY_VIEW = "public.clinic_cloudrun_readonly"
+    _READ_ONLY_COLUMNS = (
+        "id", "uuid", "merged_into", "effective_projection", "projection_marker",
+        "projection_valid", "tel_match_key", "first_seen_at", "last_seen_at",
+        "source_as_of_date", "is_new", "departments_json", "hp_status", "hp_url",
+        "hp_rank", "maps_website_url", "clinic_name", "phone", "address", "prefecture",
+        "medical_type", "owner_equal", "designation_date",
+        "signal_count", "hot_status", "treatments_json", "signals_json",
+        "maps_presence_status", "maps_profile_url",
+    )
 
     def __init__(self, conn, hp_repository: SupabaseHpResearchRepository):
         self._conn = conn
         self._hp = hp_repository
         self._excluded_ids_cache = None  # Stage4-B.6 P0-1, see _excluded_clinic_ids()
+        self._read_only_excluded_ids_cache = None
 
-    def _excluded_clinic_ids(self):
+    def _excluded_clinic_ids(self, read_only_ui=False):
         """Stage4-B.6 P0-1: computes the exact clinic_id set the hospital/center exclusion
         predicate produces, ONCE per repository instance, then caches it. See the long comment
         in supabase_filters.clauses() for why this predicate can't be simplified and why caching
         it is safe (Supabase is never written to during Stage4-B/C shadow-read usage).
         """
-        if self._excluded_ids_cache is None:
+        cache_attr = "_read_only_excluded_ids_cache" if read_only_ui else "_excluded_ids_cache"
+        excluded_ids = getattr(self, cache_attr)
+        if excluded_ids is None:
             # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one
             # and only place it is still evaluated row-by-row. Its result is cached and reused by
             # every subsequent query via the `NOT EXISTS (SELECT 1 FROM unnest(...))` anti-join
@@ -162,26 +179,39 @@ class SupabaseClinicRepository:
             with self._conn.cursor() as cur:
                 cur.execute("SET statement_timeout = '60s'")
                 try:
-                    cur.execute(
-                        "SELECT id FROM public.clinics WHERE "
-                        "exclude_reason IN ('hospital','center') "
-                        "OR effective_json LIKE '%\"facility_type\":\"病院\"%' "
-                        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
-                    )
-                    self._excluded_ids_cache = [r[0] for r in cur.fetchall()]
+                    if read_only_ui:
+                        cur.execute(
+                            "SELECT id FROM public.clinic_cloudrun_readonly WHERE "
+                            "exclude_reason IN ('hospital','center') "
+                            "OR effective_facility_is_hospital IS TRUE "
+                            "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                        )
+                    else:
+                        cur.execute(
+                            "SELECT id FROM public.clinics WHERE "
+                            "exclude_reason IN ('hospital','center') "
+                            "OR effective_json LIKE '%\"facility_type\":\"病院\"%' "
+                            "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                        )
+                    excluded_ids = [r[0] for r in cur.fetchall()]
                 finally:
                     cur.execute("SET statement_timeout = DEFAULT")
-        return self._excluded_ids_cache
+            setattr(self, cache_attr, excluded_ids)
+        return excluded_ids
 
     def _where(self, filters, as_of, read_only_ui=False):
         return sf.where(
-            filters, as_of, excluded_ids=self._excluded_clinic_ids(), read_only_ui=read_only_ui
+            filters, as_of, excluded_ids=self._excluded_clinic_ids(read_only_ui=read_only_ui),
+            read_only_ui=read_only_ui,
         )
 
     @staticmethod
-    def _from_sql(filters):
+    def _from_sql(filters, read_only_ui=False):
         """Return the FROM fragment required by SQL-pushed filters."""
-        sql = "public.clinics"
+        sql = (
+            f"{SupabaseClinicRepository._READ_ONLY_VIEW} AS clinics"
+            if read_only_ui else "public.clinics"
+        )
         if filters.effective_ranks and not set(filters.effective_ranks) <= {"A", "B"}:
             # Collision-free aliases keep existing unqualified clinic predicates valid.
             sql += (
@@ -194,19 +224,63 @@ class SupabaseClinicRepository:
     def _clauses(self, filters, as_of):
         return sf.clauses(filters, as_of, excluded_ids=self._excluded_clinic_ids())
 
-    def _fetch_row(self, where_sql, param):
-        cols = ",".join(self._COLUMNS)
+    def _fetch_row(self, where_sql, param, read_only_ui=False):
+        columns = self._READ_ONLY_COLUMNS if read_only_ui else self._COLUMNS
+        source = self._READ_ONLY_VIEW if read_only_ui else "public.clinics"
+        cols = ",".join(columns)
         with self._conn.cursor() as cur:
-            cur.execute(f"SELECT {cols} FROM public.clinics WHERE {where_sql}", (param,))
+            cur.execute(f"SELECT {cols} FROM {source} WHERE {where_sql}", (param,))
             row = cur.fetchone()
-        return dict(zip(self._COLUMNS, row)) if row else None
+        return dict(zip(columns, row)) if row else None
+
+    @staticmethod
+    def _effective_payload(d):
+        if "effective_projection" not in d:
+            return json.loads(d["effective_json"])
+        projection = d.get("effective_projection") if d.get("projection_valid") else {}
+        projection = projection or {}
+        if isinstance(projection, str):
+            projection = json.loads(projection)
+        marker = d.get("projection_marker") or ""
+
+        def restore(value):
+            if isinstance(value, str):
+                return value.replace(marker, "\x00") if marker else value
+            if isinstance(value, list):
+                return [restore(item) for item in value]
+            if isinstance(value, dict):
+                return {key: restore(item) for key, item in value.items()}
+            return value
+
+        result = restore(projection)
+        if not isinstance(result, dict):
+            result = {}
+        # These source columns are already in the narrow clinic view. Keeping them here avoids
+        # exposing their raw effective_json duplicates to the Reader.
+        result.update(
+            clinic_name=d.get("clinic_name") or "", phone=d.get("phone") or "",
+            address=d.get("address") or "", prefecture=d.get("prefecture") or "",
+            medical_type=d.get("medical_type") or "",
+            owner_manager_equal=d.get("owner_equal"),
+            designation_date=d.get("designation_date") or "",
+            marketing_signal_count=d.get("signal_count") or 0,
+            hot_status=d.get("hot_status") or "通常",
+            treatment_categories=d.get("treatments_json") or [],
+            marketing_signals=[{"name": name, "status": "CONFIRMED"}
+                               for name in (d.get("signals_json") or []) if isinstance(name, str)],
+            maps_presence_status=d.get("maps_presence_status") or "",
+            maps_profile_url=d.get("maps_profile_url") or "",
+        )
+        departments = d.get("departments_json") or []
+        result["departments"] = " / ".join(str(value) for value in departments)
+        return result
 
     def _build_record(self, d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories):
         """Shared by get() and the batch path used by query() (P0-2) -- exactly one place builds
         the record shape, so there is no risk of the two paths drifting apart.
         """
         data = {
-            **json.loads(d["effective_json"]),
+            **self._effective_payload(d),
             "id": d["id"], "uuid": d["uuid"], "tel_match_key": d["tel_match_key"],
             "first_seen_at": d["first_seen_at"], "last_seen_at": d["last_seen_at"],
             "source_as_of_date": d["source_as_of_date"],
@@ -254,17 +328,19 @@ class SupabaseClinicRepository:
             row = cur.fetchone()
         return self.get(row[0]) if row else None
 
-    def _batch_get(self, ids):
+    def _batch_get(self, ids, read_only_ui=False):
         """P0-2: fetches `ids` (already-resolved, merged_into-IS-NULL candidates, in caller's
         desired order) in a small, fixed number of round trips instead of 4 per row. Returns
         records in the SAME order as `ids`.
         """
         if not ids:
             return []
-        cols = ",".join(self._COLUMNS)
+        columns = self._READ_ONLY_COLUMNS if read_only_ui else self._COLUMNS
+        source = self._READ_ONLY_VIEW if read_only_ui else "public.clinics"
+        cols = ",".join(columns)
         with self._conn.cursor() as cur:
-            cur.execute(f"SELECT {cols} FROM public.clinics WHERE id = ANY(%s)", (list(ids),))
-            rows_by_id = {row[0]: dict(zip(self._COLUMNS, row)) for row in cur.fetchall()}
+            cur.execute(f"SELECT {cols} FROM {source} WHERE id = ANY(%s)", (list(ids),))
+            rows_by_id = {row[0]: dict(zip(columns, row)) for row in cur.fetchall()}
             cur.execute(
                 "SELECT clinic_id, machine_hp_rank, fetch_status, hp_url, final_url, treatment_categories "
                 "FROM hp_research.clinic_hp_research WHERE clinic_id = ANY(%s)",
@@ -279,7 +355,10 @@ class SupabaseClinicRepository:
             if d["merged_into"]:
                 # Candidates come from a merged_into IS NULL predicate, so this should not
                 # normally happen; fall back to the single-row path for correctness if it does.
-                records.append(self.get(d["merged_into"]))
+                if read_only_ui:
+                    records.extend(self._batch_get([d["merged_into"]], read_only_ui=True))
+                else:
+                    records.append(self.get(d["merged_into"]))
                 continue
             machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories = hp_by_id.get(cid, ("", "", "", "", []))
             records.append(self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories))
@@ -295,10 +374,13 @@ class SupabaseClinicRepository:
             if filters.municipalities:
                 cols += ["address"]
             if filters.production_companies:
-                cols += ["effective_json"]
+                if read_only_ui:
+                    cols += ["effective_projection", "projection_marker", "projection_valid"]
+                else:
+                    cols += ["effective_json"]
             with self._conn.cursor() as cur:
                 cur.execute(
-                    f"SELECT {','.join(cols)} FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id",
+                    f"SELECT {','.join(cols)} FROM {self._from_sql(filters, read_only_ui=read_only_ui)} WHERE {sql} ORDER BY signal_count DESC, id",
                     args,
                 )
                 rows = cur.fetchall()
@@ -329,7 +411,10 @@ class SupabaseClinicRepository:
                     if extract_municipality(d["address"]) not in filters.municipalities:
                         continue
                 if filters.production_companies:
-                    companies = json.loads(d["effective_json"]).get("hp_production_companies", []) or []
+                    if read_only_ui:
+                        companies = self._effective_payload(d).get("hp_production_companies", []) or []
+                    else:
+                        companies = json.loads(d["effective_json"]).get("hp_production_companies", []) or []
                     if not any(c in filters.production_companies for c in companies):
                         continue
                 ids.append(d["id"])
@@ -342,12 +427,12 @@ class SupabaseClinicRepository:
                 # remains one DB round trip and preserves ordering byte-for-byte.
                 sql, args = sf.where(filters, as_of, excluded_ids=[], read_only_ui=read_only_ui)
                 cur.execute(
-                    f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id",
+                    f"SELECT id FROM {self._from_sql(filters, read_only_ui=read_only_ui)} WHERE {sql} ORDER BY signal_count DESC, id",
                     args,
                 )
-                excluded = set(self._excluded_clinic_ids())
+                excluded = set(self._excluded_clinic_ids(read_only_ui=read_only_ui))
                 return [r[0] for r in cur.fetchall() if r[0] not in excluded]
-            cur.execute(f"SELECT id FROM {self._from_sql(filters)} WHERE {sql} ORDER BY signal_count DESC, id", args)
+            cur.execute(f"SELECT id FROM {self._from_sql(filters, read_only_ui=read_only_ui)} WHERE {sql} ORDER BY signal_count DESC, id", args)
             return [r[0] for r in cur.fetchall()]
 
     def count(self, filters=None, as_of=None, read_only_ui=False):
@@ -357,7 +442,9 @@ class SupabaseClinicRepository:
             return len(self._candidate_ids(filters, as_of, read_only_ui=read_only_ui))
         sql, args = self._where(filters, as_of, read_only_ui=read_only_ui)
         with self._conn.cursor() as cur:
-            cur.execute(f"SELECT count(*) FROM {self._from_sql(filters)} WHERE {sql}", args)
+            cur.execute(
+                f"SELECT count(*) FROM {self._from_sql(filters, read_only_ui=read_only_ui)} WHERE {sql}", args
+            )
             return cur.fetchone()[0]
 
     def query(self, filters=None, limit=100, offset=0, as_of=None, read_only_ui=False):
@@ -367,7 +454,7 @@ class SupabaseClinicRepository:
         offset = max(0, int(offset))
         ids = self._candidate_ids(filters, as_of, read_only_ui=read_only_ui)
         page_ids = ids[offset:offset + limit]
-        return self._batch_get(page_ids)  # P0-2: batched, preserves page_ids order
+        return self._batch_get(page_ids, read_only_ui=read_only_ui)  # P0-2: batched, preserves page_ids order
 
     def records_by_ids(self, clinic_ids, *, page_size=500):
         """Fetch exact, active and nonmerged/unheld Clinic Master IDs in READ ONLY batches."""
