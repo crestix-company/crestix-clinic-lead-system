@@ -71,6 +71,18 @@ def test_multiple_workers_never_duplicate_claim_and_checkpoint_each_clinic():
     assert len(shared.claimed) == 4
 
 
+def test_cloud_execution_claim_limit_pauses_run_without_claiming_past_ceiling():
+    shared = Shared()
+    runner = EmailAutoRunner(lambda: Repo(shared), lambda claim, cfg: Result(),
+                             config=EmailResearchConfig(workers=4),
+                             max_claims_per_execution=2)
+    outcome = runner.run("run")
+    assert outcome.processed == 2
+    assert len(shared.claimed) == 2
+    assert shared.run["status"] == "PAUSED"
+    assert shared.run["stop_requested"] is False
+
+
 def test_resume_existing_run_continues_remaining_checkpoint():
     shared = Shared()
     shared.completed = [1, 2]

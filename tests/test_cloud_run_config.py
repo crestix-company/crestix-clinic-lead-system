@@ -72,6 +72,8 @@ def test_dockerignore_allowlists_only_the_app_runtime_paths():
     # Keep the strict allowlist: do not grant a general scripts/** exception.
     if (ROOT / "Dockerfile.cloudrun.worker").is_file():
         expected.add("scripts/cloud_hp_worker.py")
+    if (ROOT / "Dockerfile.cloudrun.email-worker").is_file():
+        expected.add("scripts/cloud_email_worker.py")
     assert allowed == expected
 
 

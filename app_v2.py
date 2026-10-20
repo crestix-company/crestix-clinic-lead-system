@@ -429,7 +429,8 @@ def _create_cloud_hp_job(prefecture, limit, force=False, medical_types=None):
 
     Webの一般WRITE経路（write_repositories_for/CLINIC_WRITE_BACKEND、Comdesk取込・
     age model更新等が使う）とは別の接続（src.cloud_run.job_control、
-    SUPABASE_JOB_CONTROL_DB_URL未設定時はSUPABASE_RUNTIME_DB_URLへフォールバック）を使う。
+    SUPABASE_JOB_CONTROL_DB_URL未設定時はfail-closedで停止し、一般DB接続へ
+    フォールバックしない。
     """
     from src.cloud_run.job_control import job_control_write_repositories
     return job_control_write_repositories().auto_hp.create_single_job(prefecture, medical_types, force, limit)

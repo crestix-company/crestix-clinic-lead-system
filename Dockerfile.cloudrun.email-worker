@@ -1,0 +1,20 @@
+# Bounded Email Research Cloud Run Job. Configure tasks=1, parallelism=1,
+# max-retries=0 and a finite task timeout on the Job itself.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/app
+
+WORKDIR /app
+RUN groupadd --system clinicapp \
+    && useradd --system --gid clinicapp --home-dir /app --no-create-home clinicapp
+
+COPY requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+COPY src ./src
+COPY config ./config
+COPY scripts/cloud_email_worker.py ./scripts/cloud_email_worker.py
+RUN chown -R clinicapp:clinicapp /app
+USER clinicapp
+CMD ["python", "scripts/cloud_email_worker.py"]
