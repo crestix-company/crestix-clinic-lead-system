@@ -1,6 +1,7 @@
 -- Run ONLY through the dedicated Reader Session Pooler connection after approved DB apply.
 -- Dashboard execution as postgres does not validate Reader authentication or Reader RLS.
 BEGIN READ ONLY;
+SET LOCAL ROLE clinic_cloudrun_reader;
 SELECT current_user,current_setting('transaction_read_only');
 SELECT count(*) AS national_visible_rows FROM public.clinic_cloudrun_readonly;
 SELECT count(*) AS forbidden_epark_charge_exposures FROM public.clinic_cloudrun_readonly v

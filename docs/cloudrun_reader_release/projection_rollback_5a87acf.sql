@@ -36,7 +36,7 @@ DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.comdesk_origin
 DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.templates;
 REVOKE SELECT (id,uuid,clinic_name,phone,phone_norm,address,prefecture,medical_type,active,
   designation_date,recent_until,registration_reason,owner_equal,hp_status,hp_url,hp_rank,
-  departments_json,treatments_json,signals_json,first_seen_at,
+  signal_count,hot_status,departments_json,treatments_json,signals_json,first_seen_at,
   last_seen_at,source_as_of_date,is_new,merged_into,merge_hold,
   maps_presence_status,maps_profile_url,maps_website_url,exclude_reason,effective_json)
   ON public.clinics FROM clinic_cloudrun_projection_owner;
