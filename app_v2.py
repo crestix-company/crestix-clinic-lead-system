@@ -1009,6 +1009,98 @@ def current_hp_job_export_ui(store, *, key_prefix="step5"):
             )
 
 
+def cloud_hp_job_controls_ui(store, *, read_only=False):
+    """Narrow Cloud Run controls for the existing bounded HP Job executor."""
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+
+    if read_only or not is_cloud_run_deployment():
+        return
+    with st.expander("HP自動調査（Cloud Run・承認制）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_HP_JOB_CONTROL_ENABLED"):
+            st.caption("CLINIC_CLOUD_HP_JOB_CONTROL_ENABLED=1 が未設定のため無効です。")
+            return
+        email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(email):
+            st.error("IAPログインに加えて、CLINIC_CLOUD_WRITE_OPERATORSで許可されたOperator権限が必要です。")
+            return
+        if hp_executor_mode() != "cloud_run":
+            st.error("CLINIC_HP_EXECUTOR=cloud_runが必要です。ローカル実行へフォールバックしません。")
+            return
+
+        prefs = store.prefectures() if getattr(store, "is_supabase_runtime", False) else []
+        pref_options = ["すべて"] + list(prefs)
+        pref_label = st.selectbox("都道府県", pref_options, key="cloud_hp_prefecture")
+        pref = "" if pref_label == "すべて" else pref_label
+        med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], key="cloud_hp_medical_type")
+        medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
+        count = _maps_hp_available_count(store, pref, False, medical_types)
+        st.caption(f"実行対象候補：{count:,}件／1 Job最大50件。Cloud Runでは常時Auto Runを提供しません。")
+        jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
+        active_job = next((j for j in jobs if j.get("status") in {"RUNNING", "PAUSED", "BUDGET"}), None)
+        selected_job = active_job or (jobs[0] if jobs else None)
+        current = job_status(store, selected_job["id"]) if selected_job else None
+        active = bool(current and current.get("status") in {"RUNNING", "PAUSED", "BUDGET"})
+        limit = min(max_single_job_count("cloud_run"), count) if count else 0
+        requested = st.number_input("今回の最大件数", min_value=1, max_value=50, value=max(1, min(25, limit or 25)), key="cloud_hp_count")
+        if st.button("Cloud Run HP Jobを開始", key="cloud_hp_start", disabled=active or count == 0):
+            from src.cloud_run.hp_executor import precheck_budget
+            actual = min(int(requested), count)
+            allowed, reason = precheck_budget(actual)
+            if not allowed:
+                st.error(reason)
+            else:
+                job_id = _create_cloud_hp_job(pref, actual, False, medical_types)
+                _dispatch_cloud_hp_job(job_id, clinic_count=actual)
+                st.rerun()
+        if current:
+            st.caption(f"最新Job：{current['id']}／状態：{current['status']}")
+            dispatch_state = None
+            if current["status"] in {"PAUSED", "BUDGET"}:
+                from src.cloud_run.hp_executor import get_dispatch_state
+                from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN
+                try:
+                    dispatch_state = get_dispatch_state(current["id"])
+                except Exception as exc:
+                    st.error(f"起動状態を確認できないため再開を止めました：{type(exc).__name__}")
+                if dispatch_state is None:
+                    st.error("起動状態が取得できないため再開できません。復旧担当者に確認してください。")
+                elif dispatch_state.get("status") == STATUS_DISPATCH_UNKNOWN:
+                    st.warning("前回の起動結果が未確認です。再開前に照合してください。")
+                    if st.button("起動結果を照合", key="cloud_hp_reconcile"):
+                        _reconcile_cloud_hp_job(current["id"])
+                        st.rerun()
+                elif st.button("このHP Jobを再開", key="cloud_hp_resume", disabled=active and current["status"] == "RUNNING"):
+                    _dispatch_cloud_hp_job(current["id"], clinic_count=0)
+                    st.rerun()
+            if current["status"] == "RUNNING" and st.button("このHP Jobを一時停止", key="cloud_hp_pause"):
+                _pause_cloud_hp_job(current["id"])
+                st.rerun()
+            show_job_progress(store, current["id"])
+
+
+def cloud_email_human_review_ui(store, *, read_only=False):
+    """Operator-gated Cloud Run review using the existing Email review DB role."""
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+
+    if read_only or not is_cloud_run_deployment():
+        return
+    with st.expander("Email Human Review（Cloud Run・承認制）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_EMAIL_HUMAN_REVIEW_ENABLED"):
+            st.caption("CLINIC_CLOUD_EMAIL_HUMAN_REVIEW_ENABLED=1 が未設定のため無効です。")
+            return
+        email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(email):
+            st.error("IAPログインに加えて、CLINIC_CLOUD_WRITE_OPERATORSで許可されたOperator権限が必要です。")
+            return
+        email_human_review_card(store)
+        if st.session_state.pop("_open_email_human_review_dialog", False):
+            email_human_review_dialog(store)
+
+
 def simple_workflow_ui(store, demo, *, read_only=False):
     if read_only:
         st.header("クリニック営業マスター")
@@ -1252,7 +1344,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         # awareness at all -- they predate the Cloud Run write-path work entirely.
         # Gating them here (rather than inside each card) keeps this blanket lock
         # in one place, consistent with nav_locked/write_disabled above.
-        st.info("Cloud Run環境のため、HP・Email JobおよびHuman Review操作は既定で無効です。")
+        st.info("Cloud Runでは既存の書込機能を無効化しています。承認済みOperator向けの専用Job・Review画面のみ個別フラグで利用できます。")
+        cloud_hp_job_controls_ui(store, read_only=read_only)
+        email_auto_research_card(store, demo=demo)
+        cloud_email_human_review_ui(store, read_only=read_only)
     else:
         hp_human_review_card(store)
         email_human_review_card(store)

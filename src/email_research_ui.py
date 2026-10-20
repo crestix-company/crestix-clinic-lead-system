@@ -143,6 +143,28 @@ def _read_email_targets():
 @_fail_soft_on_db_loss
 def _email_auto_research_controls(store, *, demo=False):
     """Compact live controls for Email's independent HP-verified-URL consumer."""
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    cloud_deployment = is_cloud_run_deployment()
+    cloud_email_configured = (os.environ.get("EMAIL_AUTO_EXECUTOR") or "").strip().casefold() == "cloud_run"
+    if cloud_deployment:
+        from src.cloud_run.operator_identity import (
+            operator_authorized_for_cloud_write, operator_email_from_headers,
+        )
+        operator_email = operator_email_from_headers(st.context.headers)
+        if (not cloud_write_feature_enabled("EMAIL_AUTO_RUN_ENABLED")
+                or not operator_authorized_for_cloud_write(operator_email)):
+            st.subheader("メールアドレス自動調査")
+            st.info("Cloud Run Email操作は承認済みOperatorとEMAIL_AUTO_RUN_ENABLEDの設定が必要です。")
+            st.button("メール自動調査を開始", key="simple_email_auto_start_cloud_locked", disabled=True)
+            return
+    elif cloud_email_configured:
+        # An executor misconfiguration must never turn a Cloud Run Job action
+        # into a local, in-process runner on a Mac or another service.
+        st.subheader("メールアドレス自動調査")
+        st.error("EMAIL_AUTO_EXECUTOR=cloud_runはCloud Run Web環境でのみ利用できます。ローカル実行へ切り替えていません。")
+        st.button("メール自動調査を開始", key="simple_email_auto_start_wrong_runtime", disabled=True)
+        return
     repositories = email_repositories_for_ui()
     if repositories is None:
         st.subheader("メールアドレス自動調査")
@@ -193,8 +215,8 @@ def _email_auto_research_controls(store, *, demo=False):
         st.caption(target_status.message)
     runtime = bool(getattr(store, "is_supabase_runtime", False))
     from src.cloud_run.email_executor import email_cloud_run_enabled
-    cloud_email = email_cloud_run_enabled()
-    runner = _auto_runner() if enabled and runtime and not demo and not cloud_email else None
+    cloud_email = cloud_deployment and email_cloud_run_enabled()
+    runner = _auto_runner() if enabled and runtime and not demo and not cloud_email and not cloud_deployment else None
     if cloud_email:
         st.caption("Cloud Run Email Worker：1実行あたり最大件数を制限し、既存Queueを分割処理します。曖昧な起動結果は自動再実行しません。")
         try:

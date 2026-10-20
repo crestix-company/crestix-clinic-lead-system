@@ -8,6 +8,8 @@ on:
       - feat/gmail-history-backfill-dedup-328-20261019
       - feat/cloudrun-comdesk-import-writer-path-20261020
       - feat/cloudrun-maps-import-writer-path-20261020
+      - feat/cloudrun-maps-collection-orchestration-20261020
+      - feat/cloudrun-hp-email-parity-20261020
   push:
     branches:
       - main
@@ -45,4 +47,26 @@ jobs:
           fi
           if [ -f Dockerfile.cloudrun.email-worker ]; then
             docker build --file Dockerfile.cloudrun.email-worker --tag clinic-email-worker:ci .
+            if docker run --rm clinic-email-worker:ci; then
+              echo "Email Worker unexpectedly accepted missing EMAIL_WORKER_RUN_ID"
+              exit 1
+            else
+              status=$?
+              test "$status" -eq 1
+            fi
           fi
+          docker run --detach --rm --name clinic-cloudrun-web-ci \
+            --publish 127.0.0.1:18080:8080 \
+            --env CLINIC_READ_ONLY_UI=true \
+            --env CLINIC_DATA_BACKEND=sqlite \
+            --env CLINIC_WRITE_BACKEND=sqlite \
+            clinic-cloudrun:ci
+          trap 'docker stop clinic-cloudrun-web-ci >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/_stcore/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs clinic-cloudrun-web-ci
+          exit 1
