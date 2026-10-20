@@ -1070,6 +1070,12 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
+    # Independent, separately-gated Cloud Run management screen for the
+    # EXISTING, human-operated Collector (Chrome extension v5.7.0, unchanged
+    # by this work) -- see cloud_maps_collection_admin_ui()'s own docstring
+    # for the explicit scope boundary (task/assignment state only, never
+    # scripting or automating the collection itself).
+    cloud_maps_collection_admin_ui(store, key_prefix="simple_maps_collection")
 
     st.subheader("Step4：Google Maps結果を取り込む")
 
@@ -1670,6 +1676,238 @@ def cloud_maps_import_ui(store, *, key_prefix):
             )
             if result.get("PRESERVED_WEBSITE"):
                 st.caption(f"確定済みHP URLの保護対象：{result['PRESERVED_WEBSITE']:,}件（既存の確認済みHPは格下げされませんでした）")
+
+
+def cloud_maps_collection_admin_ui(store, *, key_prefix):
+    """Issue #130: Cloud Run management screen for the EXISTING, human-
+    operated Google Maps Collector (the Chrome extension at
+    extensions/google-maps-clinic-collector/, v5.7.0) -- NOT a migration of
+    collection itself to Cloud Run.
+
+    Scope boundary, deliberate and explicit (this is the single most
+    important thing to understand about this function): it only tracks
+    *which clinics are assigned to which PC slot, in what state* --
+    PENDING/ASSIGNED/ON_HOLD/FAILED/COMPLETED (src.master.
+    maps_collection_tasks). It never performs, scripts, or automates any
+    Google Maps interaction. A human still manually loads the exported
+    queue CSV into the unchanged Chrome extension on their own PC, manually
+    runs the collection, and manually exports the result CSV back here.
+    CAPTCHA pauses are the extension's own existing behavior and are never
+    bypassed or worked around by anything in this function or this PR.
+
+    This separation (task/assignment state vs. collection execution) is
+    also what Issue #130 point 10 asks for: if collection is ever replaced
+    by an automated, officially-billed API client instead of the manual
+    extension, only how a task's queue is produced and how its result is
+    consumed would need to change here -- the task lifecycle itself does
+    not assume anything about the collection mechanism.
+
+    Reuses, rather than duplicates, the existing Comdesk/厚生局/Maps-import
+    Cloud Run infrastructure: same entry gate (read_only_ui_mode()/
+    is_cloud_run_deployment()), same default-OFF-flag + IAP-operator-
+    authorization pattern, and for the "upload a result CSV" section,
+    the SAME maps_import_writer_repositories()/preview_maps_import()/
+    import_maps_results() functions cloud_maps_import_ui() already calls
+    (via a separate, dedicated DB role from this feature's own task-state
+    role -- see src.cloud_run.maps_collection_writer's docstring for why
+    they're kept distinct). The only new logic here is linking a
+    successful import to the task it completes.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.maps_collection_writer import (
+        MapsCollectionWriterNotConfiguredError, maps_collection_tasks_repository,
+    )
+    from src.cloud_run.maps_import_writer import (
+        MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.maps_collection_tasks import (
+        PC_SLOTS, TaskTransitionError, build_collection_candidates,
+        covered_clinic_ids, export_task_queue_rows,
+    )
+    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+    from src.master.store import now
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("Google Maps収集管理（Cloud Run・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_MAPS_COLLECTION_ADMIN_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_MAPS_COLLECTION_ADMIN_ENABLED=1 が未設定のため無効です。"
+                "収集対象の管理は現状どおりローカルで行ってください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Google Maps収集管理の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "実際のGoogle Maps収集は既存のChrome拡張機能（google-maps-clinic-collector v5.7.0）を"
+            "人手で操作して行います。この画面はPCへの割り当て・進捗・結果取込との連携のみを管理し、"
+            "Google Mapsへは一切アクセスしません。CAPTCHA発生時は拡張機能側でそのまま停止します。"
+        )
+        try:
+            tasks_repo = maps_collection_tasks_repository()
+        except MapsCollectionWriterNotConfiguredError as exc:
+            st.error(str(exc))
+            return
+        tasks = tasks_repo.list_tasks()
+        covered = covered_clinic_ids(tasks)
+
+        with st.expander("新規タスク作成", expanded=False):
+            prefs = store.prefectures()
+            prefecture = st.selectbox("都道府県", prefs, key=key_prefix + "_new_pref") if prefs else None
+            count = st.number_input("対象件数", min_value=1, max_value=2000, value=100, step=50, key=key_prefix + "_new_count")
+            if prefecture and st.button("候補を確認", key=key_prefix + "_new_preview"):
+                candidates = build_collection_candidates(store, prefecture, int(count), exclude_clinic_ids=covered)
+                st.session_state[key_prefix + "_new_candidates"] = {"prefecture": prefecture, "candidates": candidates}
+            pending_candidates = st.session_state.get(key_prefix + "_new_candidates")
+            if pending_candidates and pending_candidates["prefecture"] == prefecture:
+                candidates = pending_candidates["candidates"]
+                st.write(f"既存タスクと重複しない候補：{len(candidates):,}件")
+                if candidates and st.button("このタスクを作成", key=key_prefix + "_new_create"):
+                    try:
+                        task = tasks_repo.create_task(prefecture, candidates, timestamp=now())
+                    except TaskTransitionError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(f"タスクを作成しました（{len(task['clinic_ids']):,}件、ID: {task['id'][:8]}…）。")
+                        st.session_state.pop(key_prefix + "_new_candidates", None)
+                        st.rerun()
+
+        st.caption(f"タスク数：{len(tasks):,}（未着手 {sum(1 for t in tasks if t['status']=='PENDING'):,} / "
+                   f"担当中 {sum(1 for t in tasks if t['status']=='ASSIGNED'):,} / "
+                   f"保留 {sum(1 for t in tasks if t['status']=='ON_HOLD'):,} / "
+                   f"失敗 {sum(1 for t in tasks if t['status']=='FAILED'):,} / "
+                   f"完了 {sum(1 for t in tasks if t['status']=='COMPLETED'):,}）")
+        for task in sorted(tasks, key=lambda t: t["created_at"], reverse=True):
+            with st.container(border=True):
+                st.write(
+                    f"**{task['prefecture']}** ／ {len(task['clinic_ids']):,}件 ／ "
+                    f"状態：{task['status']} ／ PC：{task['pc_slot'] or '未割当'} ／ ID: {task['id'][:8]}…"
+                )
+                if task["note"]:
+                    st.caption(f"メモ：{task['note']}")
+                cols = st.columns(4)
+                if task["status"] == "PENDING":
+                    slot = cols[0].selectbox("PC", PC_SLOTS, key=key_prefix + "_slot_" + task["id"], label_visibility="collapsed")
+                    if cols[1].button("割り当て", key=key_prefix + "_assign_" + task["id"]):
+                        try:
+                            tasks_repo.assign_task(task["id"], slot, timestamp=now())
+                        except TaskTransitionError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+                elif task["status"] == "ASSIGNED":
+                    cols[0].download_button(
+                        "作業指示CSV", export_task_queue_rows(store, task),
+                        f"maps_collection_task_{task['id'][:8]}.csv", mime="text/csv",
+                        key=key_prefix + "_csv_" + task["id"],
+                    )
+                    if cols[1].button("CAPTCHA等で保留", key=key_prefix + "_hold_" + task["id"]):
+                        tasks_repo.hold_task(task["id"], "CAPTCHA等により一時停止", timestamp=now())
+                        st.rerun()
+                    if cols[2].button("失敗にする", key=key_prefix + "_fail_" + task["id"]):
+                        tasks_repo.fail_task(task["id"], "操作者により失敗とマーク", timestamp=now())
+                        st.rerun()
+                elif task["status"] == "ON_HOLD":
+                    if cols[0].button("再開", key=key_prefix + "_resume_" + task["id"]):
+                        tasks_repo.resume_task(task["id"])
+                        st.rerun()
+                    if cols[1].button("失敗にする", key=key_prefix + "_fail2_" + task["id"]):
+                        tasks_repo.fail_task(task["id"], "操作者により失敗とマーク", timestamp=now())
+                        st.rerun()
+                elif task["status"] == "FAILED":
+                    if cols[0].button("再割当てのため解放", key=key_prefix + "_release_" + task["id"]):
+                        tasks_repo.release_task(task["id"], timestamp=now())
+                        st.rerun()
+                elif task["status"] == "COMPLETED":
+                    st.caption(f"完了：{task['completed_at']} ／ 取込キー：{(task['result_batch_id'] or '')[:12]}…")
+
+        with st.expander("結果CSVアップロード → タスク完了", expanded=False):
+            linkable = [t for t in tasks if t["status"] in ("ASSIGNED", "ON_HOLD")]
+            if not linkable:
+                st.caption("担当中・保留のタスクがありません。")
+                return
+            labels = {t["id"]: f"{t['prefecture']}／{len(t['clinic_ids']):,}件／{t['pc_slot']}／ID:{t['id'][:8]}…" for t in linkable}
+            selected_id = st.selectbox(
+                "完了させるタスク", list(labels), format_func=lambda tid: labels[tid], key=key_prefix + "_complete_select",
+            )
+            selected_task = next(t for t in linkable if t["id"] == selected_id)
+            upload = st.file_uploader("Google Maps収集結果CSV", type=["csv"], key=key_prefix + "_complete_upload")
+            if not upload:
+                return
+            file_bytes = upload.getvalue()
+            idempotency_key = maps_import_idempotency_key(file_bytes)
+            applied_key = st.session_state.get(key_prefix + "_complete_applied_key")
+            if applied_key == idempotency_key:
+                st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+                return
+            try:
+                maps_table = load_table(file_bytes, upload.name)
+            except ValueError as exc:
+                st.error(f"CSVの形式・サイズ・行数を確認してください: {exc}")
+                return
+            maps_frame = maps_table.data.copy()
+            maps_frame.columns = maps_table.headers
+            uploaded_clinic_ids = {
+                int(v) for v in maps_frame.get("internal_clinic_id", []) if str(v).strip().isdigit()
+            } if "internal_clinic_id" in maps_frame.columns else set()
+            task_clinic_ids = set(selected_task["clinic_ids"])
+            overlap = uploaded_clinic_ids & task_clinic_ids
+            if not uploaded_clinic_ids or not uploaded_clinic_ids <= task_clinic_ids:
+                st.warning(
+                    "アップロードした結果の医院IDがないか、選択したタスクの対象外の医院が含まれています。"
+                    "タスクの選択、またはファイルをご確認ください。"
+                )
+                return
+            try:
+                import_writer_repositories = maps_import_writer_repositories()
+            except MapsImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            try:
+                with st.spinner("既存データと照合してプレビューを作成しています…"):
+                    preview = preview_maps_import(import_writer_repositories.provenance, maps_frame)
+            except Exception as exc:
+                st.error(f"照合中にエラーが発生したため、プレビューを中止しました: {exc}")
+                return
+            counts = preview["counts"]
+            st.write(f"対象：{preview['row_count']:,}行 ／ 選択タスクと一致：{len(overlap):,}件（推定）")
+            st.caption(
+                f"Maps発見・HP取得 {counts['WEBSITE']:,}／HPなし {counts['NO_WEBSITE']:,}／"
+                f"Maps未発見 {counts['NOT_FOUND']:,}／要確認・HOLD {counts['AMBIGUOUS']:,}／"
+                f"除外 {counts['EXCLUDED']:,}／エラー {counts['ERROR']:,}（推定）"
+            )
+            confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_complete_confirm_" + idempotency_key)
+            if st.button("確認のうえ取り込み、タスクを完了する", type="primary", disabled=not confirmed, key=key_prefix + "_complete_submit"):
+                try:
+                    import_writer_repositories = maps_import_writer_repositories()
+                except MapsImportWriterNotConfiguredError as exc:
+                    st.error(str(exc))
+                    return
+                with st.spinner("Google Maps結果を取り込んでいます…"):
+                    result = import_writer_repositories.provenance.import_maps_results(maps_frame)
+                st.session_state[key_prefix + "_complete_applied_key"] = idempotency_key
+                logging.info(
+                    "cloud_maps_collection_import operator=%s idempotency_key=%s task_id=%s result=%s",
+                    operator_email, idempotency_key, selected_task["id"], result,
+                )
+                try:
+                    tasks_repo.complete_task(
+                        selected_task["id"], uploaded_clinic_ids or overlap, idempotency_key, timestamp=now(),
+                    )
+                except TaskTransitionError as exc:
+                    st.warning(f"取込は完了しましたが、タスクの完了処理に失敗しました: {exc}")
+                else:
+                    st.success(f"取込・タスク完了を記録しました（対象 {result.get('TOTAL',0):,}件）。")
+                    st.rerun()
 
 
 def cloud_kouseikyoku_import_ui(store):
