@@ -99,3 +99,48 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     assert "if not read_only and auto_state.get" in simple
     assert "write_disabled = demo or read_only" in simple
     assert "READ ONLY画面確認中" in simple
+
+
+def test_hp_research_requires_explicit_prefecture_and_medical_type():
+    source = _app_source()
+    start = source.index("def simple_workflow_ui")
+    end = source.index("def import_ui_comdesk_step", start)
+    simple = source[start:end]
+
+    assert 'PREF_PLACEHOLDER = "未選択（選択してください）"' in simple
+    assert 'pref_options = [PREF_PLACEHOLDER, "すべて"] + prefs' in simple
+    assert 'MEDICAL_TYPE_PLACEHOLDER = "未選択"' in simple
+    assert 'index=0, key="simple_research_pref"' in simple
+    assert 'index=0, key="simple_research_medical_type"' in simple
+    assert "area_and_medical_type_selected = pref_explicitly_selected and medical_type_explicitly_selected" in simple
+    assert "or not area_and_medical_type_selected" in simple
+    assert simple.count("or not area_and_medical_type_selected") == 2
+    assert "research_medical_types = []" in simple
+
+
+def test_sales_unselected_filters_and_default_rank_are_preserved():
+    source = _app_source()
+    sales_start = source.index("def simple_sales_ui")
+    sales_end = source.index("def advanced_ui", sales_start)
+    sales = source[sales_start:sales_end]
+
+    assert 'SALES_MEDICAL_TYPE_PLACEHOLDER = "未選択（絞り込みなし）"' in sales
+    assert 'index=0, key="simple_sales_medical_type"' in sales
+    assert '[] if med_label == SALES_MEDICAL_TYPE_PLACEHOLDER else [med_label]' in sales
+    assert 'st.multiselect("都道府県", prefs, default=[], key="simple_sales_pref")' in sales
+    assert 'rank_choice = cols[2].selectbox("HP ABC判定", rank_labels, index=default_rank_index' in sales
+    assert "HP_RANK_PRESET_DEFAULT_INDEX = next(i for i, (label, _) in enumerate(HP_RANK_PRESETS) if label == \"A+B\")" in source
+    assert 'export_ranks = [r for r in (hp_ranks or ["A", "B"]) if r in ("A", "B")]' in sales
+
+
+def test_cloud_run_phase_c_and_read_only_controls_remain_gated():
+    source = _app_source()
+    start = source.index("def simple_workflow_ui")
+    end = source.index("def import_ui_comdesk_step", start)
+    simple = source[start:end]
+
+    assert "_dispatch_cloud_hp_job(jid, clinic_count=actual)" in simple
+    assert 'disabled=write_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"}' in simple
+    assert '"自動調査を再開", disabled=write_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"}' in simple
+    assert "write_disabled or runner.running() or unfinished or auto_active or actual == 0" in simple
+    assert "or not area_and_medical_type_selected" in simple
