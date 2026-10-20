@@ -125,11 +125,13 @@ def store_for(path=None, runtime_config_key=None):
     return store
 
 
-def show_web_research_metrics(store):
+def show_web_research_metrics(store, *, read_only=False):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
         if hasattr(store, "web_research_metrics"):
-            counts = store.web_research_metrics()
+            counts = (store.web_research_metrics(read_only_ui=True)
+                      if read_only and getattr(store, "is_supabase_runtime", False)
+                      else store.web_research_metrics())
         else:
             counts = web_research_metrics(store.path)
     except BatchMetricInvariantError as exc:
@@ -465,10 +467,10 @@ def _reconcile_cloud_hp_job(jid):
         )
 
 
-def ad_count_options(store):
+def ad_count_options(store, *, read_only=False):
     # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
     if getattr(store, "is_supabase_runtime", False):
-        top = store.ad_count_max()
+        top = store.ad_count_max(read_only_ui=True) if read_only else store.ad_count_max()
     else:
         with store.connect() as c:
             top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
@@ -604,7 +606,7 @@ def _email_status_label(email_status):
     return "未調査"
 
 
-def display_rows(records, *, include_email_status=True):
+def display_rows(records, *, include_email_status=True, include_age_probability=True):
     rows = []
     for r in records:
         prob = r.get("age_probability_under_59")
@@ -626,6 +628,8 @@ def display_rows(records, *, include_email_status=True):
             "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))}
         if include_email_status:
             row["Email Status"] = _email_status_label(r.get("email_status"))
+        if not include_age_probability:
+            row.pop("59歳以下確率", None)
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -738,7 +742,12 @@ def listing(store,filters,prefix="list", *, read_only=False):
             email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
             for r in records:
                 r["email_status"] = email_statuses.get(r["id"])
-        st.dataframe(display_rows(records, include_email_status=not read_only),hide_index=True,width="stretch",column_config={"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn(),"59歳以下確率":st.column_config.NumberColumn(format="percent")})
+        column_config = {"Maps HP":st.column_config.LinkColumn(),"HP URL":st.column_config.LinkColumn(),"EPARK URL":st.column_config.LinkColumn()}
+        if not read_only:
+            column_config["59歳以下確率"] = st.column_config.NumberColumn(format="percent")
+        st.dataframe(display_rows(records, include_email_status=not read_only,
+                                  include_age_probability=not read_only),
+                     hide_index=True, width="stretch", column_config=column_config)
         if not read_only:
             choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
             if choice:
@@ -948,13 +957,13 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.header("クリニック営業マスター")
         st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
         filters = Filters(active_only=False, hp_only=False)
-        total = store.count(filters)
-        with_uuid = store.count(replace(filters, uuid_mode="あり"))
+        total = store.count_read_only_ui(filters)
+        with_uuid = store.count_read_only_ui(replace(filters, uuid_mode="あり"))
         st.subheader("現在の医院データ")
         columns = st.columns(2)
         columns[0].metric("医院マスター（営業対象外施設を除く）", f"{total:,}件")
         columns[1].metric("既存UUIDあり", f"{with_uuid:,}件")
-        show_web_research_metrics(store)
+        show_web_research_metrics(store, read_only=True)
         st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
         return
 
@@ -1413,14 +1422,14 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
     st.header("営業対象・Comdesk出力")
     st.caption("普段使う営業条件だけを表示しています。")
     st.subheader("Webサイト調査状況")
-    show_web_research_metrics(store)
+    show_web_research_metrics(store, read_only=read_only)
 
     scope_options = [SCOPE_LEGACY_PRE_NATIONAL, SCOPE_ALL]
     # 2026-10-05: 正式Sales Tier分類(SSOT)のcohortを旧13,970件のlegacy scopeへ
     # 取りこぼさないよう、既定値だけを全国Clinic Masterへ変更（表示順・選択肢はそのまま）。
     scope = st.selectbox("対象データ", scope_options, index=scope_options.index(SCOPE_ALL), format_func=lambda s: SCOPE_LABELS[s], key="simple_sales_scope")
     if getattr(store, "is_supabase_runtime", False):
-        prefs = store.prefectures()
+        prefs = store.prefectures(read_only_ui=True) if read_only else store.prefectures()
     else:
         with store.connect() as c:
             prefs = [r[0] for r in c.execute(
@@ -1461,12 +1470,12 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         prefectures=pref, departments=deps, sales_pairs=sales_pairs, scope=scope,
     )
     ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
-    ad_min = st.selectbox("広告・集客施策数", ad_count_options(store), format_func=ad_count_label, key="simple_sales_ad_min")
+    ad_min = st.selectbox("広告・集客施策数", ad_count_options(store, read_only=read_only), format_func=ad_count_label, key="simple_sales_ad_min")
     companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
 
     cols = st.columns(4)
     recent = cols[0].checkbox("開業10年以内", key="simple_sales_recent")
-    age = cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
+    age = False if read_only else cols[1].checkbox("59歳以下 50%以上", key="simple_sales_age")
     # 通常営業UIはeffective_hp_rankを使用。Treatment状態はこの判定に影響しない。
     rank_labels = [label for label, _ in HP_RANK_PRESETS]
     default_rank_index = HP_RANK_PRESET_UNRESTRICTED_INDEX if demo else HP_RANK_PRESET_DEFAULT_INDEX
@@ -1554,12 +1563,17 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         disabled=demo or count == 0 or readonly_export_over_limit,
         use_container_width=True,
     ):
-        st.session_state["simple_sales_filtered_export_files"] = {
-            "signature": sales_export_signature,
-            "files": (store.export_read_only(sales_filters)
-                      if read_only and hasattr(store, "export_read_only")
-                      else store.export(sales_filters)),
-        }
+        try:
+            files = (store.export_read_only(sales_filters)
+                     if read_only and hasattr(store, "export_read_only")
+                     else store.export(sales_filters))
+        except ValueError as exc:
+            st.error(str(exc))
+        else:
+            st.session_state["simple_sales_filtered_export_files"] = {
+                "signature": sales_export_signature,
+                "files": files,
+            }
     sales_output = st.session_state.get("simple_sales_filtered_export_files")
     if sales_output and sales_output["signature"] == sales_export_signature:
         for name, content in sales_output["files"].items():
