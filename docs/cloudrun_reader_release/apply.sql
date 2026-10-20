@@ -1,7 +1,7 @@
 -- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.
 -- Based on PR #122 head 74d89afee68fd6c86bc44b042048f6f618b43c39.
 -- Owner-approved EPARK contract/signal redaction overlay; mirror in #122 before merge.
--- Projection SHA256: 728ae74a0cba20e723433095f791e5a1345d380eedd67c6885a1d214f6914e62
+-- Projection SHA256: f269c8503e20baa1722ed3a5ed575e3c63c1e78c36bb69be3599eaeb6fb258c6
 -- Apply this combined file ONCE; do not separately apply the pinned migration.
 BEGIN;
 -- Included inside apply.sql's transaction. Current catalog must match the reviewed baseline.

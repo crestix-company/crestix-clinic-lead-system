@@ -280,6 +280,7 @@ PR #122最新CIの成功、C担当の3PR統合競合/テスト確認、本番DBA
 
 ## 2026-10-20 EPARK課金情報除外の隔離検証
 
+PR #118の設計更新commitは`4edd3e8`（Draft維持）。
 サービス所有者決定に基づき、#118提案Migrationから`effective_projection.epark_contract`を除き、
 `signals_json`から正確な値`EPARK課金済み確認`をReader向けに除外する。Reader向け`signal_count`と`hot_status`は、
 残ったsignal配列から再計算する。元の`signal_count`/`hot_status`列はprojection ownerへGRANTしない。

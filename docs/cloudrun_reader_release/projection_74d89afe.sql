@@ -1,5 +1,7 @@
 -- Cloud Run READ ONLY clinic projection.
 -- PROPOSAL / integration migration only: do not apply to production without B/security review.
+-- B overlay: omit epark_contract and the EPARK charge signal; recompute Reader signal aggregates.
+-- This overlay must be mirrored by C in PR #122 before integration/merge.
 -- The Reader receives the view, never SELECT on public.clinics. The NOLOGIN view owner reads
 -- only the source columns needed by this view, is not a table owner, and has NOBYPASSRLS.
 BEGIN;
