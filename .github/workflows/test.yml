@@ -6,6 +6,7 @@ on:
       - main
       - feat/outreach-gas-sheet-bridge-phase1
       - feat/gmail-history-backfill-dedup-328-20261019
+      - feat/cloudrun-comdesk-import-writer-path-20261020
   push:
     branches:
       - main
