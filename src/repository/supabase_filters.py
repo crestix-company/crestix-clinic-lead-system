@@ -57,6 +57,7 @@ UNSUPPORTED_FIELDS = (
 POST_FILTER_FIELDS = ("site_types", "municipalities", "production_companies")
 
 _AD_NAMES_SQL = ",".join("'" + n.replace("'", "''") + "'" for n in AD_SIGNAL_NAMES)
+_READ_ONLY_EXCLUDED_SIGNALS = frozenset({"EPARK課金済み確認"})
 
 
 def raise_if_unsupported(filters):
@@ -112,6 +113,11 @@ def clauses(filters, as_of=None, excluded_ids=None, read_only_ui=False):
     """
     from src.utils.date_utils import today_japan
     raise_if_unsupported(filters)
+    forbidden_signals = _READ_ONLY_EXCLUDED_SIGNALS.intersection(filters.signals or [])
+    if read_only_ui and forbidden_signals:
+        raise BackendNotSupportedError(
+            "EPARK課金由来シグナルはCloud Run READ ONLY初回公開の検索対象外です。"
+        )
     day = (as_of or today_japan()).isoformat()
     steps = []
 
@@ -296,8 +302,11 @@ def clauses(filters, as_of=None, excluded_ids=None, read_only_ui=False):
         add("広告・集客施策", "(" + " OR ".join("signals_json @> %s::jsonb" for _ in filters.signals) + ")",
             *[json.dumps([v], ensure_ascii=False) for v in filters.signals])
     if filters.ad_min:
+        ad_names = [name for name in AD_SIGNAL_NAMES
+                    if not read_only_ui or name not in _READ_ONLY_EXCLUDED_SIGNALS]
+        ad_names_sql = ",".join("'" + name.replace("'", "''") + "'" for name in ad_names)
         add(f"広告・集客施策{filters.ad_min}個以上",
-            f"(SELECT count(DISTINCT v) FROM jsonb_array_elements_text(signals_json) v WHERE v IN ({_AD_NAMES_SQL}))>=%s",
+            f"(SELECT count(DISTINCT v) FROM jsonb_array_elements_text(signals_json) v WHERE v IN ({ad_names_sql}))>=%s",
             filters.ad_min)
     # production_companies: applied as a Python post-filter (see module docstring) -- never
     # translated to SQL, so intentionally no `add(...)` here.
