@@ -1032,7 +1032,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             st.rerun()
 
     st.subheader("Step2：厚生局データを取り込む")
-    cloud_kouseikyoku_import_ui(store, demo)
+    cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
 
@@ -1523,7 +1523,7 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
             report_import(result)
 
 
-def cloud_kouseikyoku_import_ui(store, demo):
+def cloud_kouseikyoku_import_ui(store):
     """Issue #130 P2-(1-c): Cloud Run Writer-deployment path for 厚生局 master
     import. Mirrors cloud_comdesk_import_ui() exactly -- see that function's
     docstring for the full reasoning behind every gate here, not repeated.
@@ -1538,6 +1538,18 @@ def cloud_kouseikyoku_import_ui(store, demo):
     LATTER's business logic. import_ui() itself is now structurally
     unreachable on Cloud Run anyway (詳細設定 is nav-locked out), so this is
     the only way to reach that capability on a future Writer deployment.
+
+    Deliberately takes no demo/write_disabled parameter, for the same reason
+    as cloud_comdesk_import_ui() (Issue #130 PR #131 follow-up review):
+    this panel's own is_cloud_run_deployment()/flag/operator checks below are
+    its complete, independent gate. An earlier draft of the sibling Comdesk
+    panel received the caller's write_disabled -- always True on Cloud Run --
+    through a parameter named `demo` and returned early whenever it was
+    truthy, permanently blocking that panel. This function originally
+    received the caller's real demo flag correctly (its call site never
+    passed write_disabled), so it was not actually broken the same way, but
+    the parameter is removed anyway to keep both panels structurally
+    identical and immune to the same mistake if the call site ever changes.
     """
     from src.cloud_run.deployment_context import is_cloud_run_deployment
     from src.cloud_run.feature_flags import cloud_write_feature_enabled
@@ -1555,9 +1567,6 @@ def cloud_kouseikyoku_import_ui(store, demo):
                 "CLINIC_CLOUD_KOUSEIKYOKU_IMPORT_ENABLED=1 が未設定のため無効です。"
                 "Mac通常モードでは詳細設定のマスター管理をそのままご利用ください。"
             )
-            return
-        if demo:
-            st.info("デモ・読み取り専用では利用できません。")
             return
         operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
         if not operator_authorized_for_cloud_write(operator_email):

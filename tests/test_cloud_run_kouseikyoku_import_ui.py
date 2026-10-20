@@ -34,11 +34,20 @@ def test_feature_flag_checked_before_any_file_uploader_or_write_call():
     assert flag_pos < uploader_pos < write_pos
 
 
-def test_demo_mode_blocked_before_file_uploader():
+def test_does_not_take_a_demo_or_write_disabled_parameter():
+    """Issue #130 PR #131 follow-up review lesson applied here: an earlier
+    draft of the sibling Comdesk panel received the caller's write_disabled
+    through a parameter named `demo`, permanently blocking it on Cloud Run.
+    This panel's own is_cloud_run_deployment()/flag/operator checks are its
+    complete, independent gate -- it must not take that parameter at all."""
+    source = _app_source()
+    start = source.index("def cloud_kouseikyoku_import_ui(")
+    signature_end = source.index(")", start)
+    signature = source[start:signature_end]
+    assert "demo" not in signature
+    assert "write_disabled" not in signature
     block = _cloud_kouseikyoku_import_ui_source()
-    demo_pos = block.index("if demo:")
-    uploader_pos = block.index("st.file_uploader(")
-    assert demo_pos < uploader_pos
+    assert "if demo:" not in block
 
 
 def test_identity_presence_alone_is_not_treated_as_authorization():
@@ -116,8 +125,8 @@ def test_wired_into_step2_of_simple_workflow_ui():
     end = source.index("def import_ui_comdesk_step", start)
     body = source[start:end]
     assert 'st.subheader("Step2：厚生局データを取り込む")' in body
-    assert "cloud_kouseikyoku_import_ui(store, demo)" in body
+    assert "cloud_kouseikyoku_import_ui(store)" in body
     step2_pos = body.index('st.subheader("Step2：厚生局データを取り込む")')
-    call_pos = body.index("cloud_kouseikyoku_import_ui(store, demo)")
+    call_pos = body.index("cloud_kouseikyoku_import_ui(store)")
     step3_pos = body.index('st.subheader("Step3：Google Maps Collector")')
     assert step2_pos < call_pos < step3_pos
