@@ -1545,13 +1545,23 @@ def cloud_maps_import_ui(store, *, key_prefix):
     Comdesk/厚生局 cloud panels' KNOWN GAP: the Google Maps matcher
     (SupabaseProvenanceWriteRepository._prefetch_maps_targets /
     _find_target_prefetched) is already Postgres-native, so
-    src.master.maps_cloud_import.preview_maps_import() runs the exact same
-    matching logic read-only (SELECT-only, always rolled back) to classify
-    rows into NEW/MATCHED/AMBIGUOUS/EXCLUDED/ERROR before any write -- a
-    real matching-outcome preview, not just row/column counts. It is still
-    labeled an estimate, not the confirmed result, because a concurrent
-    write between preview and apply can change which clinics match; only
-    import_maps_results()'s own return value after the real write is final.
+    src.master.maps_cloud_import.preview_maps_import() runs that exact
+    matching logic -- plus the same classify_match_status()/build_maps_
+    update() pure functions import_maps_results() itself calls -- read-only
+    (SELECT-only, always rolled back even on a mid-way exception) to return
+    the IDENTICAL counts shape (TOTAL/MATCHED/WEBSITE/NO_WEBSITE/NOT_FOUND/
+    AMBIGUOUS/EXCLUDED/ERROR/UNLINKED/PRESERVED_WEBSITE) that
+    import_maps_results()'s own return value uses after the real write.
+    Review finding: an earlier draft showed a narrower, differently-defined
+    set of buckets in the preview (its own "MATCHED" meant "an existing
+    clinic was found", not the real result's "the collector found a Maps
+    profile") -- reusing the identical shape for both removes that
+    ambiguity by construction, so an operator reading preview then result
+    is comparing the same fields, not two different definitions that happen
+    to share a label. The preview is still labeled an estimate, not the
+    confirmed result, because a concurrent write between preview and apply
+    can change which clinics match; only import_maps_results()'s own return
+    value after the real write is final.
     """
     from src.cloud_run.deployment_context import is_cloud_run_deployment
     from src.cloud_run.feature_flags import cloud_write_feature_enabled
@@ -1597,7 +1607,18 @@ def cloud_maps_import_ui(store, *, key_prefix):
         if applied_key == idempotency_key:
             st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
             return
-        maps_table = load_table(file_bytes, upload.name)
+        # load_table() already enforces a 50MB file-size cap and a 100,000-row
+        # cap (see src.io.input_loader.load_table's defaults), raising
+        # ValueError rather than reading an unbounded file into memory; this
+        # cloud panel is multi-operator-facing (unlike the single-user local
+        # Step4 uploader that calls the same function without a try/except),
+        # so it must turn that into a readable error instead of an unhandled
+        # Streamlit traceback.
+        try:
+            maps_table = load_table(file_bytes, upload.name)
+        except ValueError as exc:
+            st.error(f"CSVの形式・サイズ・行数を確認してください: {exc}")
+            return
         maps_frame = maps_table.data.copy()
         maps_frame.columns = maps_table.headers
         try:
@@ -1608,17 +1629,31 @@ def cloud_maps_import_ui(store, *, key_prefix):
         try:
             with st.spinner("既存データと照合してプレビューを作成しています…"):
                 preview = preview_maps_import(writer_repositories.provenance, maps_frame)
-        except ValueError as exc:
-            st.error(f"CSVの形式を確認してください: {exc}")
+        except Exception as exc:
+            # preview_maps_import() guarantees its own connection is always
+            # rolled back (try/finally) before this exception reaches here,
+            # whether it came from CSV validation, a SQL error, or the
+            # matching functions themselves -- this broad catch is only
+            # about showing a readable message, not about safety.
+            st.error(f"照合中にエラーが発生したため、プレビューを中止しました: {exc}")
             return
         counts = preview["counts"]
-        st.caption("以下は照合ロジックによる推定です。確定結果は取込実行後に表示されます。")
-        metrics = st.columns(5)
-        metrics[0].metric("新規（推定）", f"{counts['NEW']:,}件")
-        metrics[1].metric("既存一致（推定）", f"{counts['MATCHED']:,}件")
-        metrics[2].metric("曖昧一致（推定・HOLD）", f"{counts['AMBIGUOUS']:,}件")
-        metrics[3].metric("除外（推定）", f"{counts['EXCLUDED']:,}件")
-        metrics[4].metric("エラー（推定）", f"{counts['ERROR']:,}件")
+        st.caption(
+            "以下は本適用時と同じ照合ロジックによる推定です。確定結果は取込実行後に表示されます。"
+            "項目の意味は取込後の表示と同一です。"
+        )
+        row1 = st.columns(4)
+        row1[0].metric("対象（推定）", f"{counts['TOTAL']:,}件")
+        row1[1].metric("Maps発見・HP取得（推定）", f"{counts['WEBSITE']:,}件")
+        row1[2].metric("Maps発見・HPなし（推定）", f"{counts['NO_WEBSITE']:,}件")
+        row1[3].metric("Maps未発見（推定）", f"{counts['NOT_FOUND']:,}件")
+        row2 = st.columns(4)
+        row2[0].metric("要確認・HOLD（推定）", f"{counts['AMBIGUOUS']:,}件")
+        row2[1].metric("除外（推定）", f"{counts['EXCLUDED']:,}件")
+        row2[2].metric("エラー（推定）", f"{counts['ERROR']:,}件")
+        row2[3].metric("医院未紐付（推定）", f"{counts['UNLINKED']:,}件")
+        if counts["PRESERVED_WEBSITE"]:
+            st.caption(f"確定済みHP URLの保護対象（推定）：{counts['PRESERVED_WEBSITE']:,}件（既存の確認済みHPは格下げされません）")
         st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
         st.dataframe(preview["preview"], hide_index=True)
         confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_maps_confirm_" + idempotency_key)
@@ -1640,11 +1675,22 @@ def cloud_maps_import_ui(store, *, key_prefix):
             )
             if result.get("already_imported"):
                 st.info("このGoogle Maps結果は取込済みです。重複登録していません。")
+            # Same field set and order as the preview metrics above (by
+            # construction: preview_maps_import() returns this exact counts
+            # shape), so comparing preview vs. confirmed result is reading
+            # the same fields twice, not two different definitions.
             st.success(
-                f"取込 {result.get('TOTAL',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／"
-                f"HPなし {result.get('NO_WEBSITE',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／"
-                f"エラー {result.get('ERROR',0):,}件"
+                f"【確定】対象 {result.get('TOTAL',0):,}件／"
+                f"Maps発見・HP取得 {result.get('WEBSITE',0):,}件／"
+                f"Maps発見・HPなし {result.get('NO_WEBSITE',0):,}件／"
+                f"Maps未発見 {result.get('NOT_FOUND',0):,}件／"
+                f"要確認・HOLD {result.get('AMBIGUOUS',0):,}件／"
+                f"除外 {result.get('EXCLUDED',0):,}件／"
+                f"エラー {result.get('ERROR',0):,}件／"
+                f"医院未紐付 {result.get('UNLINKED',0):,}件"
             )
+            if result.get("PRESERVED_WEBSITE"):
+                st.caption(f"確定済みHP URLの保護対象：{result['PRESERVED_WEBSITE']:,}件（既存の確認済みHPは格下げされませんでした）")
 
 
 def render_comdesk_sync_export(store, demo):

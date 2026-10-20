@@ -108,6 +108,44 @@ def test_preview_estimate_is_never_shown_as_the_confirmed_result():
     assert "確定結果" in block
 
 
+def test_preview_and_confirmed_result_display_the_same_count_fields():
+    """Review fix: an earlier draft showed a different, narrower vocabulary
+    in the preview (NEW/MATCHED/AMBIGUOUS/EXCLUDED/ERROR, where MATCHED
+    meant something different from the real result's MATCHED). Both
+    displays must now read from the same counts keys -- the metrics block
+    and the final success message must reference the same dict fields."""
+    block = _cloud_maps_import_ui_source()
+    for field in ("TOTAL", "WEBSITE", "NO_WEBSITE", "NOT_FOUND", "AMBIGUOUS", "EXCLUDED", "ERROR", "UNLINKED"):
+        assert f"counts['{field}']" in block
+        assert f"result.get('{field}'" in block
+
+
+def test_load_table_call_is_wrapped_so_oversized_or_malformed_csv_shows_a_readable_error():
+    """load_table() enforces a file-size cap and a row-count cap (raises
+    ValueError rather than reading an unbounded file) -- this multi-operator
+    cloud panel must turn that into st.error, not an unhandled traceback,
+    unlike the single-user local Step4 uploader that calls the same
+    function unguarded."""
+    block = _cloud_maps_import_ui_source()
+    load_pos = block.index("load_table(file_bytes, upload.name)")
+    try_pos = block.rindex("try:", 0, load_pos)
+    except_pos = block.index("except ValueError as exc:", load_pos)
+    assert try_pos < load_pos < except_pos
+
+
+def test_preview_call_is_wrapped_in_a_broad_exception_handler():
+    """preview_maps_import() itself guarantees rollback via try/finally
+    regardless of exception type (see test_maps_cloud_import.py); this is
+    the separate, UI-level guarantee that any exception it raises (SQL
+    error, matcher exception, anything) still produces a readable message
+    instead of crashing the script."""
+    block = _cloud_maps_import_ui_source()
+    preview_pos = block.index("preview_maps_import(writer_repositories.provenance, maps_frame)")
+    try_pos = block.rindex("try:", 0, preview_pos)
+    except_pos = block.index("except Exception as exc:", preview_pos)
+    assert try_pos < preview_pos < except_pos
+
+
 def test_uses_dedicated_writer_connection_not_the_general_write_backend():
     block = _cloud_maps_import_ui_source()
     assert "maps_import_writer_repositories(" in block
