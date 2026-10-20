@@ -97,13 +97,13 @@ Tel1,Tel2,Tel3,Tel4,FAX,URL,旧社名,リードソース,開業日
 メールのRLS条件は`status='VERIFIED_EMAIL' AND verified_on_official IS TRUE AND NULLIF(BTRIM(email),'') IS NOT NULL`。
 公式確認済み連絡先メールをIAP許可済み社内利用者に出力する仕様はユーザー承認済みであり、再承認を要求しない。
 
-## 承認が未確認の列
+## 公開列の承認状態
 
-コード上の列契約は確定したが、この会話には残るすべての列のデータオーナー承認記録がない。
-特にComdeskの上記18ヘッダー（名前/カナ/旧社名/リードソース/開業日を含む）、
-`epark_url`/`epark_contract`、`owner_equal`、マーケティングsignal/HP情報の社内公開範囲を確認する。
-承認待ちのowner_name/manager_name/年齢推定/診療時間を新しく追加していない。
-未承認列を残したまま本番適用しない。除外が必要な場合は列契約と出力テストを更新する。
+サービス所有者の2026-10-20方針は、IAP許可ユーザー向けに既存ローカル版相当の営業検索・抽出・標準出力を維持する目的承認である。
+これはClinic VIEWの全列や契約情報を無条件に公開する承認ではない。列ごとに必要な機能、画面/出力先、DB Readerから直接読める範囲を確認する。
+Comdesk基本30列と公式確認済みメールの出力機能は維持する。メールは条件付きRLSを維持する。
+院長/管理者の氏名、年齢推定、元のeffective_json、Comdesk raw row、HPページ本文/根拠、監査・履歴・メール配信履歴はReaderへ公開しない。
+契約情報は後段の列マトリクスに示す個別判断を残す。
 
 ## VIEW owner・RLS・ACL
 
@@ -191,31 +191,7 @@ Reader SELECTはなく、対象7テーブルのReader DML権限はない。RLS�
 policyは未作成。#122のMigration投影本体と統合`apply.sql`内の固定投影本体は一致し、Migrationは`supabase/migrations`
 に存在する一方、`docs/`の統合SQLは自動Migration対象外。適用時はどちらか一方だけを使う。
 
-**新規発見の適用ブロッカー:** PR #121/#122のREAD ONLY keyword検索は`phone_norm`をWHERE句で参照するが、
-現在の`public.clinic_cloudrun_readonly`投影列に`phone_norm`がない。Reader経由でキーワード検索を実行すると失敗する。
-C担当は投影VIEWへ必要な正規化電話列を安全に追加するか、許可済み列だけで同等検索に書き換え、全国検索テストを追加する。
-その後、統合SQLを#122の最新Migrationと再生成・再テストする。現在のSQLはこのまま本番適用しない。
-
-公開列の扱いは次のとおり。初回範囲はComdesk基本18項目と既承認の公式確認済みメールを中心にし、下表の保留列は
-データオーナーの明示承認がない限りVIEWから除外する。列を落とす場合は対応する表示・検索・CSV/XLSX項目もREAD ONLY UIで無効化する。
-
-| 投影列/情報 | 初回判断 | 必要な対応 |
-|---|---|---|
-| 医院名、電話、住所、都道府県、診療科、HP rank/status/URL、治療カテゴリ | 営業リスト用途として維持 | 全国検索・フィルター・CSV/XLSX件数をReaderで確認 |
-| 公式確認済みメール | 承認済み | 既定の条件付きRLSを維持 |
-| Comdesk基本18ヘッダー | 初回出力候補 | 列ごとの所有者確認。院長名等の未承認情報は空欄を維持 |
-| `tel_match_key`, `first_seen_at`, `last_seen_at`, `source_as_of_date`, `is_new` | 内部照合/来歴 | 原則除外し、該当フィルターは初回UIから外す |
-| `merged_into`, `merge_hold`, `exclude_reason`, `is_hospital_or_center` | 統合/除外用内部判定 | VIEW内の行選別へ閉じ込め、Reader向け列としては出さない |
-| `owner_equal`, `signal_count`, `hot_status`, `signals_json` | 内部評価/営業シグナル | 未承認のため除外。関連表示・フィルターを停止 |
-| `effective_projection`内の`hp_production_companies`, `epark_url`, `epark_contract` | 追加の制作会社/契約情報 | 初回は全キー除外。制作会社フィルターとEPARK情報表示を停止 |
-| `maps_website_url`, `maps_presence_status`, `maps_profile_url` | 外部情報/照合状態 | 明示承認まで除外し、Mapsフィルターを停止 |
-| `designation_date`, `recent_until`, `registration_reason`, `active` | 追加属性/キャンペーン判定 | 明示承認まで除外し、関連フィルターを停止 |
-| `projection_marker`, `projection_valid` | 実装補助情報 | `effective_projection`を除外するなら原則VIEWからも除外。無効行はVIEWでfail-closedにする |
-| `phone_norm` | keyword検索に必要な技術列 | 必要最小の正規化列としてVIEWに追加するか、検索SQLを変更する。内部キーの他用途への転用は禁止 |
-| `provenance.templates.headers_json/mapping_json` | Comdesk列位置解釈 | 標準出力互換性に必要な最小行/列だけか再確認。必要ならVIEW化して列契約を固定 |
-
-現行SQLは上表の保留情報（特に`epark_contract`、営業シグナル、Maps/新規指定情報）をまだ投影し、ReaderはVIEW全列をSELECTできる。
-したがって現行の列契約は「基本18項目＋承認済みメール」に限定されていない。列の除外またはデータオーナー承認と、UIの列/フィルター契約更新が完了するまで適用不可。
+前回確認で見つかった`phone_norm`不整合は、#122 head `85aabbec218b1e73124bc5143a3d5dee351fe3d3`でVIEWへ列を追加し、統合SQLへ反映済み。医院名・電話・UUID検索を隔離DBで検証済み。
 
 Reader認証の確認は環境変数の有無を秘密値なしで調べた結果、専用URLは未設定で、実認証も未実施。Supabaseのproject refと
 ReaderのLOGIN属性だけではCloud Run接続先承認や有効なパスワードの証明にならない。サービス所有者による接続先承認、資格情報管理者による
@@ -234,6 +210,46 @@ Migrationが`public.clinic_cloudrun_readonly.phone_norm text`を投影し、READ
 全国fixture、7参照先境界、生JSON/raw Comdesk拒否、DML拒否、CSV/XLSX、公式メール条件、default ACL遮断、既存CRM policy保持、
 再適用拒否、依存policyのあるrollback拒否と限定rollbackを確認した。本番データ/認証情報は使用していない。
 
-この更新ではSQLパッケージと設計書だけを更新した。公開列の判断は前節のまま残り、現行投影に含まれる未承認の
-`epark_contract`、営業シグナル、Maps/新規指定関連列は承認またはUIと合わせた除外が必要。Comdesk基本18ヘッダーは出力候補であり、
-データ所有者の項目確認を省略しない。Reader資格情報も未設定/未確認のまま。したがってDB適用は引き続き **NO-GO**。
+この更新ではSQLパッケージと設計書だけを更新した。Reader資格情報は未設定/未確認のまま。公開列の最終分類は以下の
+サービス所有者方針に合わせたマトリクスを正とする。契約関連の個別判断とDB接続準備が残るため、本番適用は **NO-GO**。
+
+## 2026-10-20 サービス所有者確定方針に基づく公開列マトリクス
+
+Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画面で非表示」はDB権限上の非公開を意味しない。
+下表の「Reader可視」はDB Reader資格情報から読める列/値、「アプリ用途」はIAP画面・抽出・出力での使用先である。
+営業機能の維持を前提としつつ、raw JSON・個人名・根拠記録は引き続き除外する。
+
+| 列/参照先 | Reader可視の最小データ | アプリ用途・出力先 | 方針/個別承認 |
+|---|---|---|---|
+| `public.clinic_cloudrun_readonly`: `id,uuid,clinic_name,phone,address,prefecture,medical_type,departments_json` | 医院ID、UUID、医院の連絡/所在地/診療種別 | 全国検索、都道府県・診療科検索、一覧、Comdesk標準30列 | 機能維持。Comdesk出力は18項目allowlistから30列へ構成し、他の元値は空欄 |
+| 同VIEW: `phone_norm` | 電話番号の数字正規化値（`phone`と重複） | 医院名/電話/UUIDキーワード検索のみ | 検索に必須。CSV/XLSXには出力しない |
+| 同VIEW: `active` | 現存状態boolean | 営業対象の現存条件・件数 | 営業抽出に必要。行値としては一覧/CSVに出力しない |
+| 同VIEW: `merged_into,merge_hold,exclude_reason,is_hospital_or_center` | 統合ID、保留状態、除外理由/病院・センター判定 | 重複防止、Merge hold、病院/センター除外 | 既存除外条件維持に必要。ユーザー向け一覧/Comdeskには出力しない。今後、同等条件をVIEWの行条件へ閉じ込められれば列権限を縮小可能 |
+| 同VIEW: `first_seen_at,last_seen_at,source_as_of_date,is_new` | データ基準/更新時刻、追加判定 | 全国/旧来scope、更新差分フィルター、内部レコード処理 | 旧来scopeと詳細条件維持に必要。標準出力対象外。時刻値のUI表示は初回対象外 |
+| 同VIEW: `designation_date,recent_until,registration_reason` | 公的指定年月日/有効期限/登録理由 | 開業10年以内・新規開業候補条件、一覧の指定年月日 | 営業抽出条件維持に必要。登録理由は条件評価用でCSVには出力しない |
+| 同VIEW: `tel_match_key` | 先頭0を外した電話数字キー（電話番号と同程度に機微） | adapter record組み立て。Read Only検索/Comdesk出力での直接利用はない | 現行コード契約上は取得されるが出力しない。C担当はReaderコードから参照を外せるか確認し、不要ならView/GRANTから外す（通常モードへの影響なしを回帰確認） |
+| 同VIEW: `hp_status,hp_url,hp_rank` と `hp_research.clinic_hp_research`: `machine_hp_rank,fetch_status,hp_url,final_url,treatment_categories` | 公式HP URL、調査状態、旧/機械HP rank、転送先、確認済み治療カテゴリ | HP rank/status/URL表示、rank/site type検索、治療カテゴリ・Sales pair抽出、Comdesk URL補完 | 営業機能として維持。公開HP情報と状態のみ。ページ本文、crawl evidence、判定根拠JSONは含めない |
+| 同VIEW: `departments_json,treatments_json`、`treatment.clinic_treatment_research`: `clinic_id,research_status,treatment_category_name`、`treatment.clinic_research_status`: `clinic_id,research_status` | 診療科/治療分類、Clinic別Research状態 | 診療科・治療カテゴリ検索、CONFIRMED側のSales pair条件 | 機能維持。Treatmentの根拠本文・調査履歴は対象外 |
+| 同VIEW: `maps_presence_status,maps_profile_url,maps_website_url` | Maps掲載状態、MapsプロフィールURL、掲載HP URL | Mapsフィルター、詳細リンク、Comdesk URL補完、サイト種別分類 | サービス所有者が維持を指定。URL/状態のみ。Mapsのraw結果・一致根拠・個人投稿内容は対象外 |
+| 同VIEW: `owner_equal` | 開設者と管理者の一致booleanのみ | 営業対象の詳細フィルター、一覧分類 | 名前/免許番号/元レコードはReader対象外。関係booleanの表示・抽出はサービス所有者の営業用途承認内。個人情報と扱う社内規程がある場合はprivacy owner確認が必要 |
+| 同VIEW: `signal_count,hot_status,signals_json` | 数/温度区分/allowlist済みシグナル名配列のみ（根拠なし） | 営業対象判定、広告・集客施策フィルター、優先順、一覧/詳細 | 営業機能維持。根拠URL・引用文・担当者メモ・raw signal JSONは非公開。許可シグナル名を現行定義に固定 |
+| 同VIEW: `effective_projection.hp_production_companies` | 公式HPで確認された制作会社名の配列のみ | HP制作会社フィルター | サービス所有者が維持を指定。証拠URL/本文は投影しない |
+| 同VIEW: `effective_projection.epark_url` | 公開プロフィールURL | 一覧/詳細のリンク | 現行画面で表示、Comdesk標準出力には含めない。公開ページURLに限定 |
+| 同VIEW: `effective_projection.epark_contract` | 現状は`UNKNOWN/PAID/FREE` enum | 現行一覧表示と`PAID`由来の営業シグナル/評価 | **個別判断必須。** 契約情報管理者が社内Readerへのenum表示と営業評価利用を承認するか決定する。無承認時はURL・enumを画面/Readerから隠し、EPARK課金由来シグナルだけを営業評価から外す。他の集客シグナル/HP制作会社/Maps/営業検索は維持。標準Comdesk CSV/XLSXには出力しない |
+| `provenance.clinic_cloudrun_comdesk_rows` | Clinic ID/template ID/UUID、投影有効フラグ、18 allowlist値を元位置に保持した配列 | 既存Comdesk値の優先順位維持、標準30列CSV/XLSX | Readerへraw rowを付与しない。院長名、診療日/時間、備考、履歴、記事などallowlist外要素は空欄 |
+| `provenance.templates`: `id,headers_json,mapping_json` | 対象投影行が参照する列見出し/マッピングmetadata | 18 allowlist値を元CSV位置から標準30列へ写像 | 値行は含まない。任意ヘッダー名・全template metadataの露出を避けるためRLSは投影VIEWから参照されるtemplateに限定。出力仕様維持の最小metadataとして許可 |
+| `public.clinic_email_enrichment`: `clinic_id,email,status,verified_on_official` | 条件を満たす公式確認済みメールのみ | 営業対象CSV/XLSXのメール列 | 既承認。RLS条件は`VERIFIED_EMAIL`、`verified_on_official IS TRUE`、非NULL/空欄以外を維持 |
+
+### Readerに引き続き許可しない情報
+
+- `public.clinics.effective_json`、Comdeskのraw `row_json`、HP調査raw JSON/ページ本文、treatment evidence、メール調査候補/履歴、監査/変更履歴、配信履歴/KPI、HP Job状態。
+- owner/managerの氏名・年齢推定・年齢根拠、診療時間等のComdesk allowlist外列。
+- EPARK契約書・証憑・確認メモ、制作会社の証拠文/URL、マーケティングsignalの根拠URL/引用文。契約enumは上記の個別承認待ち。
+
+### 今回残す承認
+
+1. EPARK契約enum（UNKNOWN/PAID/FREE）を社内IAP画面で表示し、PAIDを営業signal/優先度へ使うことの契約情報管理者承認。承認が得られない場合はこの項目とEPARK課金由来signalだけを抑止する。
+2. `tel_match_key` をREAD ONLY adapterで使用しないとC担当が確認した場合の列縮小。削除する場合はPR #122と統合SQLを同じ契約へ合わせ、通常モードを回帰テストする。
+3. 最終project接続先のサービス所有者承認、Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
+
+その他の列は上表の営業目的・出力先に限定して維持する方針であり、「未承認列」という理由だけで一律に削除しない。
