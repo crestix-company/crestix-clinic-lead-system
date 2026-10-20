@@ -3,9 +3,10 @@ SELECT
  NOT has_any_column_privilege('clinic_cloudrun_reader','public.clinics','SELECT') AS clinics_denied_ok,
  NOT has_column_privilege('clinic_cloudrun_reader','public.clinics','effective_json','SELECT') AS raw_effective_denied_ok,
  has_column_privilege('clinic_cloudrun_reader','public.clinic_cloudrun_readonly','phone_norm','SELECT') AS phone_norm_select_ok,
- NOT has_column_privilege('clinic_cloudrun_reader','public.clinic_cloudrun_readonly','tel_match_key','SELECT') AS tel_match_key_denied_ok,
  NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
    AND table_name='clinic_cloudrun_readonly' AND column_name='tel_match_key') AS tel_match_key_absent_ok,
+ NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+   AND table_name='clinic_cloudrun_readonly' AND column_name='epark_contract') AS epark_contract_column_absent_ok,
  NOT has_any_column_privilege('clinic_cloudrun_reader','provenance.comdesk_original_rows','SELECT') AS raw_comdesk_denied_ok,
  NOT has_schema_privilege('clinic_cloudrun_projection_owner','public','CREATE') AS helper_public_create_denied_ok,
  NOT has_schema_privilege('clinic_cloudrun_projection_owner','provenance','CREATE') AS helper_provenance_create_denied_ok;
@@ -29,6 +30,22 @@ SELECT COALESCE((SELECT format_type(a.atttypid,a.atttypmod)='text'
   FROM pg_attribute a WHERE a.attrelid='public.clinic_cloudrun_readonly'::regclass
     AND a.attname='phone_norm' AND a.attnum>0 AND NOT a.attisdropped),false)
   AS phone_norm_type_ok;
+SELECT
+  NOT EXISTS (SELECT 1 FROM public.clinic_cloudrun_readonly
+              WHERE effective_projection ? 'epark_contract')
+  AND NOT EXISTS (
+    SELECT 1 FROM public.clinic_cloudrun_readonly v
+    CROSS JOIN LATERAL jsonb_array_elements_text(v.signals_json) s(value)
+    WHERE s.value='EPARK課金済み確認'
+  ) AS epark_charge_hidden_ok,
+  NOT EXISTS (
+    SELECT 1 FROM public.clinic_cloudrun_readonly v
+    WHERE v.signal_count<>jsonb_array_length(v.signals_json)
+       OR v.hot_status<>CASE WHEN jsonb_array_length(v.signals_json)>=3 THEN 'かなりアツい'
+                             WHEN jsonb_array_length(v.signals_json)=2 THEN 'アツい'
+                             WHEN jsonb_array_length(v.signals_json)=1 THEN '集客投資シグナルあり'
+                             ELSE '通常' END
+  ) AS signal_aggregate_consistent_ok;
 SELECT p.proname,NOT p.prosecdef AS invoker_ok,
        NOT EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) a
          WHERE a.grantee<>p.proowner AND a.grantee NOT IN

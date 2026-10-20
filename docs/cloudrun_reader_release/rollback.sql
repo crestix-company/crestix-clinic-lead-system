@@ -1,6 +1,7 @@
 -- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.
--- Pinned PR #122 head: 74d89afee68fd6c86bc44b042048f6f618b43c39
--- Projection SHA256: f9e20f3b5e6b16c12ffbb828750bcb9fe0687b1ad12b822ea38c0bcff97c7207
+-- Based on PR #122 head 74d89afee68fd6c86bc44b042048f6f618b43c39.
+-- Owner-approved EPARK contract/signal redaction overlay; mirror in #122 before merge.
+-- Projection SHA256: f269c8503e20baa1722ed3a5ed575e3c63c1e78c36bb69be3599eaeb6fb258c6
 -- Apply this combined file ONCE; do not separately apply the pinned migration.
 BEGIN;
 GRANT clinic_cloudrun_projection_owner TO postgres WITH INHERIT TRUE, SET TRUE;
@@ -56,7 +57,7 @@ DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.comdesk_origin
 DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.templates;
 REVOKE SELECT (id,uuid,clinic_name,phone,phone_norm,address,prefecture,medical_type,active,
   designation_date,recent_until,registration_reason,owner_equal,hp_status,hp_url,hp_rank,
-  signal_count,hot_status,departments_json,treatments_json,signals_json,first_seen_at,
+  departments_json,treatments_json,signals_json,first_seen_at,
   last_seen_at,source_as_of_date,is_new,merged_into,merge_hold,
   maps_presence_status,maps_profile_url,maps_website_url,exclude_reason,effective_json)
   ON public.clinics FROM clinic_cloudrun_projection_owner;
