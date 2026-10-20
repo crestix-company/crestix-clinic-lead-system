@@ -180,3 +180,44 @@ Readerの実認証は未実施。手元にある`clinic_runtime`資格情報を�
 
 **本番DB適用判定: NO-GO。** 残る条件は対象projectの最終承認、残る投影列の承認、
 再preflight、統合SQLのDBA承認、専用Reader資格情報と実接続確認。準備作業としてのSQL一式と隔離検証は完了。
+
+## 2026-10-20 最終差分確認
+
+最新head（#118 `2d282afd8d5ffe1bbfa9042dd17956fa9b279cf5`、#121
+`0f88ed24fd7eba54c82de11dd7ca99d8e4b46437`、#122
+`67f159a08dfdcc8546a437138afc3e040abbbd15`）を確認した。本番候補projectのSELECT専用カタログ結果は
+上記のベースラインと整合する。View/関数は未作成、ReaderのClinic table-wide SELECTは存在し、他6元テーブルの
+Reader SELECTはなく、対象7テーブルのReader DML権限はない。RLSは7元テーブルすべて有効で、Reader向け
+policyは未作成。#122のMigration投影本体と統合`apply.sql`内の固定投影本体は一致し、Migrationは`supabase/migrations`
+に存在する一方、`docs/`の統合SQLは自動Migration対象外。適用時はどちらか一方だけを使う。
+
+**新規発見の適用ブロッカー:** PR #121/#122のREAD ONLY keyword検索は`phone_norm`をWHERE句で参照するが、
+現在の`public.clinic_cloudrun_readonly`投影列に`phone_norm`がない。Reader経由でキーワード検索を実行すると失敗する。
+C担当は投影VIEWへ必要な正規化電話列を安全に追加するか、許可済み列だけで同等検索に書き換え、全国検索テストを追加する。
+その後、統合SQLを#122の最新Migrationと再生成・再テストする。現在のSQLはこのまま本番適用しない。
+
+公開列の扱いは次のとおり。初回範囲はComdesk基本18項目と既承認の公式確認済みメールを中心にし、下表の保留列は
+データオーナーの明示承認がない限りVIEWから除外する。列を落とす場合は対応する表示・検索・CSV/XLSX項目もREAD ONLY UIで無効化する。
+
+| 投影列/情報 | 初回判断 | 必要な対応 |
+|---|---|---|
+| 医院名、電話、住所、都道府県、診療科、HP rank/status/URL、治療カテゴリ | 営業リスト用途として維持 | 全国検索・フィルター・CSV/XLSX件数をReaderで確認 |
+| 公式確認済みメール | 承認済み | 既定の条件付きRLSを維持 |
+| Comdesk基本18ヘッダー | 初回出力候補 | 列ごとの所有者確認。院長名等の未承認情報は空欄を維持 |
+| `tel_match_key`, `first_seen_at`, `last_seen_at`, `source_as_of_date`, `is_new` | 内部照合/来歴 | 原則除外し、該当フィルターは初回UIから外す |
+| `merged_into`, `merge_hold`, `exclude_reason`, `is_hospital_or_center` | 統合/除外用内部判定 | VIEW内の行選別へ閉じ込め、Reader向け列としては出さない |
+| `owner_equal`, `signal_count`, `hot_status`, `signals_json` | 内部評価/営業シグナル | 未承認のため除外。関連表示・フィルターを停止 |
+| `effective_projection`内の`hp_production_companies`, `epark_url`, `epark_contract` | 追加の制作会社/契約情報 | 初回は全キー除外。制作会社フィルターとEPARK情報表示を停止 |
+| `maps_website_url`, `maps_presence_status`, `maps_profile_url` | 外部情報/照合状態 | 明示承認まで除外し、Mapsフィルターを停止 |
+| `designation_date`, `recent_until`, `registration_reason`, `active` | 追加属性/キャンペーン判定 | 明示承認まで除外し、関連フィルターを停止 |
+| `projection_marker`, `projection_valid` | 実装補助情報 | `effective_projection`を除外するなら原則VIEWからも除外。無効行はVIEWでfail-closedにする |
+| `phone_norm` | keyword検索に必要な技術列 | 必要最小の正規化列としてVIEWに追加するか、検索SQLを変更する。内部キーの他用途への転用は禁止 |
+| `provenance.templates.headers_json/mapping_json` | Comdesk列位置解釈 | 標準出力互換性に必要な最小行/列だけか再確認。必要ならVIEW化して列契約を固定 |
+
+現行SQLは上表の保留情報（特に`epark_contract`、営業シグナル、Maps/新規指定情報）をまだ投影し、ReaderはVIEW全列をSELECTできる。
+したがって現行の列契約は「基本18項目＋承認済みメール」に限定されていない。列の除外またはデータオーナー承認と、UIの列/フィルター契約更新が完了するまで適用不可。
+
+Reader認証の確認は環境変数の有無を秘密値なしで調べた結果、専用URLは未設定で、実認証も未実施。Supabaseのproject refと
+ReaderのLOGIN属性だけではCloud Run接続先承認や有効なパスワードの証明にならない。サービス所有者による接続先承認、資格情報管理者による
+Reader secretの安全な存在確認、専用ReaderによるSession Pooler実接続確認が残る。認証情報をログ/チャットへ出さず、
+Cloud Run用Secret参照の登録はDB接続確認後にA担当が別承認で行う。
