@@ -1,6 +1,6 @@
 -- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.
--- Pinned PR #122 head: 67f159a08dfdcc8546a437138afc3e040abbbd15
--- Projection SHA256: a70876d686c8c35314bae339a9572f5d42fbbb4e2a938eda538ab41770fc9f7a
+-- Pinned PR #122 head: 85aabbec218b1e73124bc5143a3d5dee351fe3d3
+-- Projection SHA256: ec604ee7b5203d66be4ff4b72c622b5ad1e64d1324847d01f969c5bf187d5bdc
 -- Apply this combined file ONCE; do not separately apply the pinned migration.
 BEGIN;
 GRANT clinic_cloudrun_projection_owner TO postgres WITH INHERIT TRUE, SET TRUE;
@@ -54,7 +54,7 @@ DROP FUNCTION public.clinic_cloudrun_effective_projection(text,bigint);
 DROP POLICY clinic_cloudrun_projection_owner_select ON public.clinics;
 DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.comdesk_original_rows;
 DROP POLICY clinic_cloudrun_projection_owner_select ON provenance.templates;
-REVOKE SELECT (id,uuid,clinic_name,phone,address,prefecture,medical_type,active,
+REVOKE SELECT (id,uuid,clinic_name,phone,phone_norm,address,prefecture,medical_type,active,
   designation_date,recent_until,registration_reason,owner_equal,hp_status,hp_url,hp_rank,
   signal_count,hot_status,departments_json,treatments_json,signals_json,first_seen_at,
   last_seen_at,source_as_of_date,is_new,merged_into,tel_match_key,merge_hold,

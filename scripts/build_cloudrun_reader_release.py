@@ -12,10 +12,10 @@ def transaction_body(sql):
 
 
 def main():
-    projection = (PACKAGE / 'projection_67f159a.sql').read_text()
-    rollback = (PACKAGE / 'projection_rollback_67f159a.sql').read_text()
+    projection = (PACKAGE / 'projection_85aabbec.sql').read_text()
+    rollback = (PACKAGE / 'projection_rollback_85aabbec.sql').read_text()
     header = ('-- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.\n'
-              '-- Pinned PR #122 head: 67f159a08dfdcc8546a437138afc3e040abbbd15\n'
+              '-- Pinned PR #122 head: 85aabbec218b1e73124bc5143a3d5dee351fe3d3\n'
               f'-- Projection SHA256: {hashlib.sha256(projection.encode()).hexdigest()}\n'
               '-- Apply this combined file ONCE; do not separately apply the pinned migration.\n')
     (PACKAGE / 'apply.sql').write_text(

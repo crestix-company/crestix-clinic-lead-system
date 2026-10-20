@@ -1,6 +1,6 @@
 -- REVIEW PROPOSAL ONLY. Do not apply without explicit production approval.
--- Pinned PR #122 head: 67f159a08dfdcc8546a437138afc3e040abbbd15
--- Projection SHA256: a70876d686c8c35314bae339a9572f5d42fbbb4e2a938eda538ab41770fc9f7a
+-- Pinned PR #122 head: 85aabbec218b1e73124bc5143a3d5dee351fe3d3
+-- Projection SHA256: ec604ee7b5203d66be4ff4b72c622b5ad1e64d1324847d01f969c5bf187d5bdc
 -- Apply this combined file ONCE; do not separately apply the pinned migration.
 BEGIN;
 -- Included inside apply.sql's transaction. Current catalog must match the reviewed baseline.
@@ -140,7 +140,7 @@ CREATE ROLE clinic_cloudrun_projection_owner
 -- the READ ONLY adapter anywhere (src/repository/supabase_adapter.py); omitted here rather than
 -- granted-but-unused, per the data-minimization review of this view's column set.
 GRANT SELECT (
-  id, uuid, clinic_name, phone, address, prefecture, medical_type, active,
+  id, uuid, clinic_name, phone, phone_norm, address, prefecture, medical_type, active,
   designation_date, recent_until, registration_reason, owner_equal,
   hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json,
   treatments_json, signals_json, first_seen_at, last_seen_at, source_as_of_date,
@@ -245,7 +245,7 @@ CREATE VIEW public.clinic_cloudrun_readonly WITH (security_barrier = true) AS
 WITH projected AS (
   SELECT c.id, c.uuid, c.merged_into, c.tel_match_key, c.first_seen_at, c.last_seen_at,
          c.source_as_of_date, c.is_new, c.departments_json, c.hp_status, c.hp_url,
-         c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.address, c.prefecture,
+         c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.phone_norm, c.address, c.prefecture,
          c.medical_type, c.active, c.designation_date, c.recent_until,
          c.registration_reason, c.owner_equal, c.signal_count,
          c.hot_status, c.treatments_json, c.signals_json, c.merge_hold,
@@ -259,7 +259,7 @@ WITH projected AS (
 SELECT
   id, uuid, merged_into, tel_match_key, first_seen_at, last_seen_at, source_as_of_date,
   is_new, departments_json, hp_status, hp_url, hp_rank, maps_website_url,
-  clinic_name, phone, address, prefecture, medical_type, active, designation_date,
+  clinic_name, phone, phone_norm, address, prefecture, medical_type, active, designation_date,
   recent_until, registration_reason, owner_equal, signal_count,
   hot_status, treatments_json, signals_json, merge_hold, maps_presence_status,
   maps_profile_url, exclude_reason,

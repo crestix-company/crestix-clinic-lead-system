@@ -10,7 +10,7 @@
 |---|---|
 | main | `c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` |
 | PR #121 | `0f88ed24fd7eba54c82de11dd7ca99d8e4b46437` |
-| PR #122 | `67f159a08dfdcc8546a437138afc3e040abbbd15` |
+| PR #122 (latest) | `85aabbec218b1e73124bc5143a3d5dee351fe3d3` |
 | PR #118の更新前 | `e433266b35a3a8591f5c254449d45e70cbe73638` |
 
 - [適用前カタログ検査](cloudrun_reader_release/catalog_check.sql): SELECTのみ。秘密値・患者/医院データを取得しない。
@@ -21,7 +21,7 @@
 
 `apply.sql`は#122 Migrationの本体をそのまま埋め込み、事前条件、他5テーブルの限定GRANT/RLS、
 新規オブジェクトのデフォルトACL除去を同じトランザクションに追加している。
-`projection_67f159a.sql`と`projection_rollback_67f159a.sql`は#122の原文スナップショットであり、単独で適用しない。
+`projection_85aabbec.sql`と`projection_rollback_85aabbec.sql`は#122最新headの原文スナップショットであり、単独で適用しない。
 生成は`python scripts/build_cloudrun_reader_release.py`。生成物は通常のSQLでDashboardにも貼り付け可能。
 #122のMigrationを先に実行してからこの統合SQLを実行すると衝突するため、どちらかを重複実行しない。
 今回の配布物は`docs/`配下で、Migration自動適用対象ではない。
@@ -183,9 +183,9 @@ Readerの実認証は未実施。手元にある`clinic_runtime`資格情報を�
 
 ## 2026-10-20 最終差分確認
 
-最新head（#118 `2d282afd8d5ffe1bbfa9042dd17956fa9b279cf5`、#121
+前回確認したhead（#118 `2d282afd8d5ffe1bbfa9042dd17956fa9b279cf5`、#121
 `0f88ed24fd7eba54c82de11dd7ca99d8e4b46437`、#122
-`67f159a08dfdcc8546a437138afc3e040abbbd15`）を確認した。本番候補projectのSELECT専用カタログ結果は
+`85aabbec218b1e73124bc5143a3d5dee351fe3d3`）に基づく。本番候補projectのSELECT専用カタログ結果は
 上記のベースラインと整合する。View/関数は未作成、ReaderのClinic table-wide SELECTは存在し、他6元テーブルの
 Reader SELECTはなく、対象7テーブルのReader DML権限はない。RLSは7元テーブルすべて有効で、Reader向け
 policyは未作成。#122のMigration投影本体と統合`apply.sql`内の固定投影本体は一致し、Migrationは`supabase/migrations`
@@ -221,3 +221,19 @@ Reader認証の確認は環境変数の有無を秘密値なしで調べた結�
 ReaderのLOGIN属性だけではCloud Run接続先承認や有効なパスワードの証明にならない。サービス所有者による接続先承認、資格情報管理者による
 Reader secretの安全な存在確認、専用ReaderによるSession Pooler実接続確認が残る。認証情報をログ/チャットへ出さず、
 Cloud Run用Secret参照の登録はDB接続確認後にA担当が別承認で行う。
+
+## 2026-10-20 phone_norm反映と統合SQL再検証
+
+PR #122のhead `85aabbec218b1e73124bc5143a3d5dee351fe3d3` と最新CI（pytest SUCCESS）を確認した。
+Migrationが`public.clinic_cloudrun_readonly.phone_norm text`を投影し、READ ONLY adapterと医院名・正規化電話・UUID検索テストが
+同じ列契約を使うことを確認した。PR #118の統合SQLを最新Migration本体から再生成し、Migrationスナップショットと本体のSHA-256
+一致、VIEW bodyのバイト一致、単一BEGIN/COMMIT、`verify.sql`の列型/SELECT権限検査、`reader_smoke.sql`の列解決確認、
+`rollback.sql`の列権限撤去を確認した。phone_normの以前の検索不整合は解消。
+
+新規クラスタを使った使い捨てPostgreSQL 17.11統合検証は成功。ReaderロールでのVIEW/RLS、電話番号・医院名・UUID検索、
+全国fixture、7参照先境界、生JSON/raw Comdesk拒否、DML拒否、CSV/XLSX、公式メール条件、default ACL遮断、既存CRM policy保持、
+再適用拒否、依存policyのあるrollback拒否と限定rollbackを確認した。本番データ/認証情報は使用していない。
+
+この更新ではSQLパッケージと設計書だけを更新した。公開列の判断は前節のまま残り、現行投影に含まれる未承認の
+`epark_contract`、営業シグナル、Maps/新規指定関連列は承認またはUIと合わせた除外が必要。Comdesk基本18ヘッダーは出力候補であり、
+データ所有者の項目確認を省略しない。Reader資格情報も未設定/未確認のまま。したがってDB適用は引き続き **NO-GO**。

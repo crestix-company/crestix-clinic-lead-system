@@ -3,6 +3,8 @@
 BEGIN READ ONLY;
 SELECT current_user,current_setting('transaction_read_only');
 SELECT count(*) AS national_visible_rows FROM public.clinic_cloudrun_readonly;
+-- Resolve the column contract through the Reader role without assuming any live phone value.
+SELECT phone_norm FROM public.clinic_cloudrun_readonly LIMIT 0;
 SELECT prefecture,count(*) FROM public.clinic_cloudrun_readonly GROUP BY prefecture ORDER BY prefecture;
 SELECT count(*) AS projected_comdesk_rows FROM provenance.clinic_cloudrun_comdesk_rows;
 SELECT count(*) AS referenced_templates FROM provenance.templates;
