@@ -234,6 +234,17 @@ def test_same_campaign_rerun_recovers_existing_draft_without_second_create():
     assert service.create_calls == 1
 
 
+def test_folded_idempotency_header_is_unfolded_but_still_compared_exactly():
+    from src.outreach.gmail_drafts import _headers, DRAFT_KEY_HEADER
+
+    expected = "clinic-lead-v1-" + "a" * 64
+    parsed = _headers({"payload": {"headers": [
+        {"name": DRAFT_KEY_HEADER, "value": " \r\n\t" + expected + " \t"},
+    ]}})
+    assert parsed[DRAFT_KEY_HEADER.casefold()] == expected
+    assert parsed[DRAFT_KEY_HEADER.casefold()] != expected + "-different"
+
+
 def test_competing_campaigns_are_serialized_by_unique_clinic_guard():
     class RacingRepository(FakeRepository):
         def __init__(self):

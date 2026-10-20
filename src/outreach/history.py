@@ -13,6 +13,7 @@ import os
 import sqlite3
 import uuid
 import unicodedata
+from threading import Lock
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +25,25 @@ HISTORY_COLUMNS = {
 }
 BLOCKING_STATUSES = {"DRAFTED", "SENT", "REPLY_RECEIVED", "APPOINTMENT", "EXCLUDED", "HOLD"}
 ALLOWED_STATUSES = BLOCKING_STATUSES | {"NOT_STARTED", "ARTICLE_VERIFIED", "GENERATED"}
+GMAIL_MESSAGE_STATUSES = {"DRAFT", "SCHEDULED", "SENT", "REPLIED", "TRASH", "CANCELLED", "UNKNOWN", "CONFLICT"}
+
+
+def canonical_gmail_message_status(value: str) -> str:
+    """Normalize Gmail/API vocabulary for gmail_messages without conflating Trash and cancellation."""
+    status = str(value or "").strip().upper()
+    if status == "TRASHED":
+        status = "TRASH"
+    if status not in GMAIL_MESSAGE_STATUSES:
+        raise ValueError(f"Unsupported Gmail message status: {status or 'EMPTY'}")
+    return status
+_LEDGER_LOCKS: dict[str, Lock] = {}
+_LEDGER_LOCKS_GUARD = Lock()
+
+
+def _ledger_lock(path: str) -> Lock:
+    """Serialize same-process initialization/reservation for one local SQLite ledger."""
+    with _LEDGER_LOCKS_GUARD:
+        return _LEDGER_LOCKS.setdefault(path, Lock())
 
 
 class HistoryInputError(ValueError):
@@ -112,24 +132,29 @@ class OutreachLedger:
         if not candidate.is_absolute():
             raise ValueError("OUTREACH_STATE_DB_PATHは絶対パスで指定してください")
         candidate = candidate.resolve()
-        for variable in ("CLINIC_DB_PATH", "CLINIC_DEMO_DB_PATH"):
-            configured = (os.environ.get(variable) or "").strip()
-            if configured and candidate == Path(configured).expanduser().resolve():
-                raise ValueError("送付履歴台帳はClinic Master/サンプルDBと別ファイルにしてください")
-        if candidate.exists():
-            conn = None
-            try:
-                conn = sqlite3.connect(f"file:{candidate}?mode=ro", uri=True)
-                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                if tables & {"clinics", "comdesk_original_rows", "research_jobs", "email_candidates"}:
-                    raise ValueError("Clinic Master/Email Researchデータベースを送付履歴台帳に使用できません")
-            except sqlite3.DatabaseError as exc:
-                raise ValueError("既存ファイルが独立したSQLite台帳として確認できません") from exc
-            finally:
-                if conn is not None:
-                    conn.close()
-        self.path = str(candidate)
-        self._initialize()
+        lock = _ledger_lock(str(candidate))
+        lock.acquire()
+        try:
+            for variable in ("CLINIC_DB_PATH", "CLINIC_DEMO_DB_PATH"):
+                configured = (os.environ.get(variable) or "").strip()
+                if configured and candidate == Path(configured).expanduser().resolve():
+                    raise ValueError("送付履歴台帳はClinic Master/サンプルDBと別ファイルにしてください")
+            if candidate.exists():
+                conn = None
+                try:
+                    conn = sqlite3.connect(f"file:{candidate}?mode=ro", uri=True)
+                    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                    if tables & {"clinics", "comdesk_original_rows", "research_jobs", "email_candidates"}:
+                        raise ValueError("Clinic Master/Email Researchデータベースを送付履歴台帳に使用できません")
+                except sqlite3.DatabaseError as exc:
+                    raise ValueError("既存ファイルが独立したSQLite台帳として確認できません") from exc
+                finally:
+                    if conn is not None:
+                        conn.close()
+            self.path = str(candidate)
+            self._initialize()
+        finally:
+            lock.release()
 
     def _connect(self):
         return sqlite3.connect(self.path, timeout=10, isolation_level="IMMEDIATE")
@@ -194,16 +219,17 @@ class OutreachLedger:
         key = hashlib.sha256(f"{clinic_id}|{campaign_id}".encode()).hexdigest()
         outreach_id = uuid.uuid4().hex
         now = datetime.now(timezone.utc).isoformat()
-        with self._connect() as conn:
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO outreach_records(outreach_id,clinic_id,clinic_uuid,campaign_id,"
-                "generation_batch_id,status,owner,source,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                (outreach_id, int(clinic_id), clinic_uuid, campaign_id, generation_batch_id,
-                 status, owner, source, key, now),
-            )
-            row = conn.execute("SELECT outreach_id FROM outreach_records WHERE clinic_id=? AND campaign_id=?",
-                               (int(clinic_id), campaign_id)).fetchone()
-            return row[0], cur.rowcount == 1
+        with _ledger_lock(self.path):
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO outreach_records(outreach_id,clinic_id,clinic_uuid,campaign_id,"
+                    "generation_batch_id,status,owner,source,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (outreach_id, int(clinic_id), clinic_uuid, campaign_id, generation_batch_id,
+                     status, owner, source, key, now),
+                )
+                row = conn.execute("SELECT outreach_id FROM outreach_records WHERE clinic_id=? AND campaign_id=?",
+                                   (int(clinic_id), campaign_id)).fetchone()
+                return row[0], cur.rowcount == 1
 
     def counts(self) -> dict[str, int]:
         with self._connect() as conn:
