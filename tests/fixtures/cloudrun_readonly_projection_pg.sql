@@ -62,10 +62,10 @@ INSERT INTO public.clinics (id, clinic_name, phone, address, prefecture, medical
 VALUES
  (1, 'Projection Clinic', '03-0000-0001', '東京都千代田区1-1', '東京都', '医科',
   '["内科"]', '["胃カメラ"]', '["Web予約"]',
-  $json${"facility_type":"診療所","hp_production_companies":["Alpha",1,{"x":1},null],"epark_url":"A\u0000B","owner_name":"PRIVATE_OWNER"}$json$),
+  $json${"facility_type":"診療所","hp_production_companies":["Alpha",1,{"x":1},null],"epark_url":"A\u0000B","epark_contract":"PAID","owner_name":"PRIVATE_OWNER"}$json$),
  (2, 'Second Clinic', '06-0000-0002', '大阪府大阪市1-1', '大阪府', '歯科',
   '["歯科"]', '["矯正歯科"]', '[]',
-  $json${"facility_type":"診療所","hp_production_companies":["Beta"],"epark_url":"A\\u0000B","owner_name":"PRIVATE_OWNER"}$json$),
+  $json${"facility_type":"診療所","hp_production_companies":["Beta"],"epark_url":"A\\u0000B","epark_contract":"FREE","owner_name":"PRIVATE_OWNER"}$json$),
  (3, 'Null JSON Clinic', '', '', '北海道', '医科', '[]', '[]', '[]', NULL),
  (4, 'Malformed JSON Clinic', '', '', '沖縄県', '医科', '[]', '[]', '[]', '{"facility_type":'),
  (5, 'Missing Key Clinic', '', '', '福岡県', '医科', '[]', '[]', '[]', '{}'),
@@ -83,6 +83,10 @@ VALUES
 
 UPDATE public.clinics SET uuid='uuid-1', phone_norm='0300000001' WHERE id=1;
 UPDATE public.clinics SET phone_norm='0600000002' WHERE id=2;
+UPDATE public.clinics SET signals_json='["EPARK課金済み確認","Doctors File掲載","Instagram公式運用","Doctors File掲載"]',
+  signal_count=4, hot_status='かなりアツい' WHERE id=1;
+UPDATE public.clinics SET signals_json='["EPARK課金済み確認"]',
+  signal_count=1, hot_status='集客投資シグナルあり' WHERE id=2;
 
 CREATE SCHEMA hp_research;
 CREATE TABLE hp_research.clinic_hp_research (

@@ -218,12 +218,14 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def ad_count_max(self, *, read_only_ui=False):
         from src.scoring.research_scoring import AD_SIGNAL_NAMES
+        signal_names = [name for name in AD_SIGNAL_NAMES
+                        if not read_only_ui or name != "EPARK課金済み確認"]
         source = "public.clinic_cloudrun_readonly" if read_only_ui else "public.clinics"
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT COALESCE(MAX((SELECT count(DISTINCT v) FROM "
                 "jsonb_array_elements_text(signals_json) v WHERE v=ANY(%s))),0) "
-                f"FROM {source}", (list(AD_SIGNAL_NAMES),),
+                f"FROM {source}", (signal_names,),
             )
             return cur.fetchone()[0]
 

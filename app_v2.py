@@ -62,6 +62,7 @@ READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
 _STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
 CONTRACT_LABELS = {"UNKNOWN":"不明","PAID":"課金済み","FREE":"無課金"}
+READ_ONLY_EXCLUDED_MARKETING_SIGNALS = frozenset({"EPARK課金済み確認"})
 ADS_LABELS = {"UNKNOWN":"不明","CONFIRMED":"確認済み","NOT_CONFIRMED":"未確認"}
 JOB_LABELS = {"RUNNING":"実行中","PAUSED":"一時停止","COMPLETED":"完了","BUDGET":"検索上限で停止","RESET":"リセット済み"}
 # 正式Sales Tier分類(SSOT)のプリセット。旧hp_rank(HPランクA/B)とは別軸で、営業対象判定の主軸はこちら。
@@ -469,11 +470,18 @@ def _reconcile_cloud_hp_job(jid):
 
 def ad_count_options(store, *, read_only=False):
     # 施策数の選択肢は実データの最大施策数から作る（固定の大きな数字は並べない）。
+    from src.scoring.research_scoring import AD_SIGNAL_NAMES
+    ad_signal_names = [name for name in AD_SIGNAL_NAMES
+                       if not read_only or name not in READ_ONLY_EXCLUDED_MARKETING_SIGNALS]
     if getattr(store, "is_supabase_runtime", False):
         top = store.ad_count_max(read_only_ui=True) if read_only else store.ad_count_max()
     else:
         with store.connect() as c:
-            top = c.execute("SELECT MAX("+AD_COUNT_SQL+") FROM clinics").fetchone()[0] or 0
+            ad_count_sql = AD_COUNT_SQL
+            if read_only:
+                names = ",".join("'" + name.replace("'", "''") + "'" for name in ad_signal_names)
+                ad_count_sql = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE value IN ("+names+"))"
+            top = c.execute("SELECT MAX("+ad_count_sql+") FROM clinics").fetchone()[0] or 0
     return [0]+list(range(2,top+1))
 
 
@@ -481,7 +489,7 @@ def ad_count_label(n):
     return "指定なし" if n==0 else f"{n}施策以上"
 
 
-def filters_ui(store,prefix="sales",defaults=None):
+def filters_ui(store,prefix="sales",defaults=None, *, read_only=False):
     defaults = defaults or Filters()
     if getattr(store, "is_supabase_runtime", False):
         prefs, municipality_options = store.prefectures(), store.municipalities()
@@ -559,7 +567,10 @@ def filters_ui(store,prefix="sales",defaults=None):
         ad_min = st.selectbox("広告・集客施策数",ad_options,index=ad_options.index(defaults.ad_min) if defaults.ad_min in ad_options else 0,format_func=ad_count_label,key=key("ad_min"))
         new = st.checkbox("前回の厚生局更新から追加された医院",value=defaults.new_only,key=key("new"))
         opening = st.checkbox("新規開業候補（1年以内・新規指定）",value=defaults.recent_opening,key=key("opening"))
-    signals = st.multiselect("集客投資シグナル（いずれか）",SIGNAL_NAMES,default=defaults.signals,key=key("signals"))
+    signal_options = [name for name in SIGNAL_NAMES
+                      if not read_only or name not in READ_ONLY_EXCLUDED_MARKETING_SIGNALS]
+    signals = st.multiselect("集客投資シグナル（いずれか）",signal_options,
+                             default=[name for name in defaults.signals if name in signal_options],key=key("signals"))
     keyword = st.text_input("医院名・電話番号・UUIDで検索",value=defaults.keyword,key=key("keyword"))
     st.caption("条件同士はAND。診療科・治療カテゴリなど同じ項目の複数選択はORです。HP未発見は「存在しない」と断定した状態ではありません。")
     return Filters(active_only=active,hp_only=hp,recent_only=recent,age_min=age/100 if age is not None else None,
@@ -606,7 +617,7 @@ def _email_status_label(email_status):
     return "未調査"
 
 
-def display_rows(records, *, include_email_status=True, include_age_probability=True):
+def display_rows(records, *, include_email_status=True, include_age_probability=True, read_only=False):
     rows = []
     for r in records:
         prob = r.get("age_probability_under_59")
@@ -621,11 +632,16 @@ def display_rows(records, *, include_email_status=True, include_age_probability=
             "ポータル名":r.get("portal_name", ""),
             "UUID有無":"あり" if r.get("uuid") else "なし",
             "HP ABC判定理由":r.get("effective_rank_reason", ""),
-            "EPARK URL":r.get("epark_url",""),"EPARK契約":CONTRACT_LABELS.get(r.get("epark_contract"),"不明"),
+            "EPARK URL":r.get("epark_url","")}
+        if not read_only:
+            row["EPARK契約"] = CONTRACT_LABELS.get(r.get("epark_contract"),"不明")
+        row.update({
             "治療カテゴリ":" / ".join(r.get("website_treatment_categories") or r.get("treatment_categories",[])),
             "治療カテゴリ状態":TREATMENT_STATUS_DISPLAY_LABELS.get(r.get("treatment_status"),"不明"),
             "集客投資シグナル数":r.get("marketing_signal_count",0),
-            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(s["name"] for s in r.get("marketing_signals",[]))}
+            "アツさ":r.get("hot_status","通常"),"シグナル一覧":" / ".join(
+                s["name"] for s in r.get("marketing_signals",[])
+                if not read_only or s.get("name") not in READ_ONLY_EXCLUDED_MARKETING_SIGNALS)})
         if include_email_status:
             row["Email Status"] = _email_status_label(r.get("email_status"))
         if not include_age_probability:
@@ -746,7 +762,7 @@ def listing(store,filters,prefix="list", *, read_only=False):
         if not read_only:
             column_config["59歳以下確率"] = st.column_config.NumberColumn(format="percent")
         st.dataframe(display_rows(records, include_email_status=not read_only,
-                                  include_age_probability=not read_only),
+                                  include_age_probability=not read_only, read_only=read_only),
                      hide_index=True, width="stretch", column_config=column_config)
         if not read_only:
             choice = st.selectbox("詳細を確認する医院",[None]+[r["id"] for r in records],format_func=lambda cid:"選択してください" if cid is None else next(f"{r['id']}｜{r.get('clinic_name','')}" for r in records if r["id"]==cid),key=prefix+"_detail")
@@ -1469,7 +1485,9 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
         active_only=True, hp_only=False, medical_types=sales_medical_types,
         prefectures=pref, departments=deps, sales_pairs=sales_pairs, scope=scope,
     )
-    ads = st.multiselect("広告・集客施策", list(AD_SIGNAL_LABELS), format_func=AD_SIGNAL_LABELS.get, key="simple_sales_ads")
+    ad_signal_options = {name: label for name, label in AD_SIGNAL_LABELS.items()
+                         if not read_only or name not in READ_ONLY_EXCLUDED_MARKETING_SIGNALS}
+    ads = st.multiselect("広告・集客施策", list(ad_signal_options), format_func=ad_signal_options.get, key="simple_sales_ads")
     ad_min = st.selectbox("広告・集客施策数", ad_count_options(store, read_only=read_only), format_func=ad_count_label, key="simple_sales_ad_min")
     companies = st.multiselect("HP制作会社", list(read_config(ROOT/"config/production_companies.yml")), key="simple_sales_companies")
 
