@@ -10,7 +10,7 @@
 |---|---|
 | main | `c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` |
 | PR #121 | `0f88ed24fd7eba54c82de11dd7ca99d8e4b46437` |
-| PR #122 (latest) | `85aabbec218b1e73124bc5143a3d5dee351fe3d3` |
+| PR #122 (latest checked) | `74d89afee68fd6c86bc44b042048f6f618b43c39` |
 | PR #118の更新前 | `e433266b35a3a8591f5c254449d45e70cbe73638` |
 
 - [適用前カタログ検査](cloudrun_reader_release/catalog_check.sql): SELECTのみ。秘密値・患者/医院データを取得しない。
@@ -21,7 +21,7 @@
 
 `apply.sql`は#122 Migrationの本体をそのまま埋め込み、事前条件、他5テーブルの限定GRANT/RLS、
 新規オブジェクトのデフォルトACL除去を同じトランザクションに追加している。
-`projection_85aabbec.sql`と`projection_rollback_85aabbec.sql`は#122最新headの原文スナップショットであり、単独で適用しない。
+`projection_74d89afe.sql`と`projection_rollback_74d89afe.sql`は#122最新headの原文スナップショットであり、単独で適用しない。
 生成は`python scripts/build_cloudrun_reader_release.py`。生成物は通常のSQLでDashboardにも貼り付け可能。
 #122のMigrationを先に実行してからこの統合SQLを実行すると衝突するため、どちらかを重複実行しない。
 今回の配布物は`docs/`配下で、Migration自動適用対象ではない。
@@ -71,7 +71,7 @@ Migrationは既存のtable/column SELECTを撤去し、PUBLIC・継承経路を�
 Clinic VIEWの元列（型は元テーブルの型をそのまま継承し、`catalog_check.sql`で再確認）:
 
 ```text
-id,uuid,merged_into,tel_match_key,first_seen_at,last_seen_at,source_as_of_date,
+id,uuid,merged_into,first_seen_at,last_seen_at,source_as_of_date,
 is_new,departments_json,hp_status,hp_url,hp_rank,maps_website_url,
 clinic_name,phone,address,prefecture,medical_type,active,designation_date,
 recent_until,registration_reason,owner_equal,signal_count,hot_status,treatments_json,
@@ -227,7 +227,7 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 | 同VIEW: `merged_into,merge_hold,exclude_reason,is_hospital_or_center` | 統合ID、保留状態、除外理由/病院・センター判定 | 重複防止、Merge hold、病院/センター除外 | 既存除外条件維持に必要。ユーザー向け一覧/Comdeskには出力しない。今後、同等条件をVIEWの行条件へ閉じ込められれば列権限を縮小可能 |
 | 同VIEW: `first_seen_at,last_seen_at,source_as_of_date,is_new` | データ基準/更新時刻、追加判定 | 全国/旧来scope、更新差分フィルター、内部レコード処理 | 旧来scopeと詳細条件維持に必要。標準出力対象外。時刻値のUI表示は初回対象外 |
 | 同VIEW: `designation_date,recent_until,registration_reason` | 公的指定年月日/有効期限/登録理由 | 開業10年以内・新規開業候補条件、一覧の指定年月日 | 営業抽出条件維持に必要。登録理由は条件評価用でCSVには出力しない |
-| 同VIEW: `tel_match_key` | 先頭0を外した電話数字キー（電話番号と同程度に機微） | adapter record組み立て。Read Only検索/Comdesk出力での直接利用はない | 現行コード契約上は取得されるが出力しない。C担当はReaderコードから参照を外せるか確認し、不要ならView/GRANTから外す（通常モードへの影響なしを回帰確認） |
+| `public.clinics.tel_match_key` | Reader投影対象外。内部identity matching用の電話キー | 通常モードの照合。READ ONLY検索は`phone_norm`、医院名、UUIDを使う | PR #122最新headでReader adapter/View/owner GRANTから除外済み。READ ONLY検索・Comdesk出力に依存しないことをCI対象コードで確認。通常モードの`public.clinics`経路は変更しない |
 | 同VIEW: `hp_status,hp_url,hp_rank` と `hp_research.clinic_hp_research`: `machine_hp_rank,fetch_status,hp_url,final_url,treatment_categories` | 公式HP URL、調査状態、旧/機械HP rank、転送先、確認済み治療カテゴリ | HP rank/status/URL表示、rank/site type検索、治療カテゴリ・Sales pair抽出、Comdesk URL補完 | 営業機能として維持。公開HP情報と状態のみ。ページ本文、crawl evidence、判定根拠JSONは含めない |
 | 同VIEW: `departments_json,treatments_json`、`treatment.clinic_treatment_research`: `clinic_id,research_status,treatment_category_name`、`treatment.clinic_research_status`: `clinic_id,research_status` | 診療科/治療分類、Clinic別Research状態 | 診療科・治療カテゴリ検索、CONFIRMED側のSales pair条件 | 機能維持。Treatmentの根拠本文・調査履歴は対象外 |
 | 同VIEW: `maps_presence_status,maps_profile_url,maps_website_url` | Maps掲載状態、MapsプロフィールURL、掲載HP URL | Mapsフィルター、詳細リンク、Comdesk URL補完、サイト種別分類 | サービス所有者が維持を指定。URL/状態のみ。Mapsのraw結果・一致根拠・個人投稿内容は対象外 |
@@ -249,7 +249,30 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 ### 今回残す承認
 
 1. EPARK契約enum（UNKNOWN/PAID/FREE）を社内IAP画面で表示し、PAIDを営業signal/優先度へ使うことの契約情報管理者承認。承認が得られない場合はenumに加えて課金由来signalを投影から除き、signal数/優先度を再計算するUI/SQL更新が必要（現状のSQLは再計算しないため未承認のまま適用不可）。
-2. `tel_match_key` をREAD ONLY adapterで使用しないとC担当が確認した場合の列縮小。削除する場合はPR #122と統合SQLを同じ契約へ合わせ、通常モードを回帰テストする。
+2. EPARK契約enumと課金由来シグナルの公開・営業評価利用に関する個別承認。未承認の場合は両方の投影を外し、信号数/優先度の再計算を含む変更が必要。
 3. 最終project接続先のサービス所有者承認、Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
 
 その他の列は上表の営業目的・出力先に限定して維持する方針であり、「未承認列」という理由だけで一律に削除しない。
+
+## 2026-10-20 PR #122 head 74d89afe 最終差分
+
+PR #122は`85aabbec218b1e73124bc5143a3d5dee351fe3d3`から
+`74d89afee68fd6c86bc44b042048f6f618b43c39`へ更新された。最新差分でREAD ONLY adapterの列契約、VIEW、投影ownerの列GRANTから
+`tel_match_key`が除外され、電話検索に必要な`phone_norm`は残った。PR #122の検索テストは医院名・正規化電話・UUIDを確認し、Comdesk出力へ`phone_norm`を追加しない。
+この実装差分をC担当の判定として採用し、DBビューのReader投影に`tel_match_key`は不要と確定する。通常モードの列契約は変わらない。
+
+最新Migration `20261019195000_cloudrun_readonly_clinic_view.sql` とロールバックを
+`projection_74d89afe.sql` / `projection_rollback_74d89afe.sql`として固定し、
+`build_cloudrun_reader_release.py`から`apply.sql`/`rollback.sql`を再生成した。
+統合SQLではReaderが`phone_norm`をSELECTでき、`tel_match_key`の列権限とVIEW列が存在しないことを
+`verify.sql`でも確認する。独立した#122 CIは確認時点でまだrunが報告されていない。#118と#121のpytest checksは成功。
+従って最新headの統合コードGO判定は#122 CIとC担当の一時統合pytest待ちである。
+
+今回の再確認では、本番候補DBにSELECTのみ実施した。投影VIEW/関数/helper roleは未作成、Readerには`public.clinics`の
+table-wide SELECTが残存、他6元テーブルにReader SELECTはなく、対象テーブルReader DMLもない。7元テーブルのRLSは有効で
+FORCE RLSではなく、既存policyはCRM等のロールに限定される。ReaderはINHERIT=true、属性上の昇格フラグは無効。
+Reader自身は他ロールのmemberではなく、`postgres`が逆向きにReaderのmember（ADMIN=true、INHERIT/SET=false）。
+対象ソースにPUBLIC明示ACLは見つからなかった。既存CRM権限・policyは変更しない。
+
+PR #122最新CIの成功、C担当の3PR統合競合/テスト確認、EPARK契約enumと課金由来signalの個別承認、
+本番DBA適用承認、Reader Session Pooler実認証は未解決。#122 Migrationと統合`apply.sql`を二重適用しないこと。

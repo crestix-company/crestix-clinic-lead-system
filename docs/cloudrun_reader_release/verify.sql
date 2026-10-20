@@ -3,6 +3,9 @@ SELECT
  NOT has_any_column_privilege('clinic_cloudrun_reader','public.clinics','SELECT') AS clinics_denied_ok,
  NOT has_column_privilege('clinic_cloudrun_reader','public.clinics','effective_json','SELECT') AS raw_effective_denied_ok,
  has_column_privilege('clinic_cloudrun_reader','public.clinic_cloudrun_readonly','phone_norm','SELECT') AS phone_norm_select_ok,
+ NOT has_column_privilege('clinic_cloudrun_reader','public.clinic_cloudrun_readonly','tel_match_key','SELECT') AS tel_match_key_denied_ok,
+ NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+   AND table_name='clinic_cloudrun_readonly' AND column_name='tel_match_key') AS tel_match_key_absent_ok,
  NOT has_any_column_privilege('clinic_cloudrun_reader','provenance.comdesk_original_rows','SELECT') AS raw_comdesk_denied_ok,
  NOT has_schema_privilege('clinic_cloudrun_projection_owner','public','CREATE') AS helper_public_create_denied_ok,
  NOT has_schema_privilege('clinic_cloudrun_projection_owner','provenance','CREATE') AS helper_provenance_create_denied_ok;
