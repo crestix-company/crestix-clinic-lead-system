@@ -10,7 +10,7 @@
 |---|---|
 | main | `c5829aa38a6d2fecc3023ffaa38181ab7e41f02f` |
 | PR #121 | `0f88ed24fd7eba54c82de11dd7ca99d8e4b46437` |
-| PR #122 (latest checked) | `74d89afee68fd6c86bc44b042048f6f618b43c39` |
+| PR #122 (latest checked) | `5a87acf2582213dfb080c2f033948762d6998d79` |
 | PR #118の更新前 | `e433266b35a3a8591f5c254449d45e70cbe73638` |
 
 - [適用前カタログ検査](cloudrun_reader_release/catalog_check.sql): SELECTのみ。秘密値・患者/医院データを取得しない。
@@ -21,7 +21,7 @@
 
 `apply.sql`は#122 Migrationの本体をそのまま埋め込み、事前条件、他5テーブルの限定GRANT/RLS、
 新規オブジェクトのデフォルトACL除去を同じトランザクションに追加している。
-`projection_74d89afe.sql`は#122 head `74d89afe`を基に、サービス所有者承認済みのEPARK課金情報除外を重ねた提案Migrationである。C担当が同内容を#122へ反映後に一対一再照合する。`projection_rollback_74d89afe.sql`は#122 headのrollback案。どちらも単独で適用しない。
+`projection_5a87acf.sql`と`projection_rollback_5a87acf.sql`は#122最新headのMigration/rollbackスナップショットであり、単独で適用しない。
 生成は`python scripts/build_cloudrun_reader_release.py`。生成物は通常のSQLでDashboardにも貼り付け可能。
 #122のMigrationを先に実行してからこの統合SQLを実行すると衝突するため、どちらかを重複実行しない。
 今回の配布物は`docs/`配下で、Migration自動適用対象ではない。
@@ -249,25 +249,25 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 
 ### 今回残る承認・検証
 
-1. C担当がREAD ONLY UI/検索/評価からEPARK契約状態と課金シグナルを除き、他の集客シグナル・営業機能が維持されたことをテストする。
-2. C担当が#122 Migrationを本設計のEPARK除外投影へ更新し、最新CIと3PR統合検証を通す。現在の#118投影SQLは#122 headを基にした提案overlayであり、Migrationとの一致はその後に確認する。
-3. Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
+1. Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
+2. 最新#122 headのGitHub CIはchecks未報告。対象pytestと統合full pytestはローカルで通過。#118更新後のCIはpush後に確認する。
 
 その他の列は上表の営業目的・出力先に限定して維持する方針であり、「未承認列」という理由だけで一律に削除しない。
 
-## 2026-10-20 PR #122 head 74d89afe 最終差分
+## 2026-10-20 PR #122 head 5a87acf 最終差分
 
-PR #122は`85aabbec218b1e73124bc5143a3d5dee351fe3d3`から
-`74d89afee68fd6c86bc44b042048f6f618b43c39`へ更新された。最新差分でREAD ONLY adapterの列契約、VIEW、投影ownerの列GRANTから
+PR #122は`74d89afee68fd6c86bc44b042048f6f618b43c39`から
+`5a87acf2582213dfb080c2f033948762d6998d79`へ更新された。最新差分でREAD ONLY UIからEPARK契約表示/条件と課金シグナル選択肢を除き、
+READ ONLYに限り広告・集客件数を残存signalから計算する。通常モードは従来コード経路を使う。VIEW/MigrationでもEPARK契約を返さず、
+課金signalを除外し、一意化後の件数/優先度を再計算する。同差分でREAD ONLY adapterの列契約、VIEW、投影ownerの列GRANTから
 `tel_match_key`が除外され、電話検索に必要な`phone_norm`は残った。PR #122の検索テストは医院名・正規化電話・UUIDを確認し、Comdesk出力へ`phone_norm`を追加しない。
 この実装差分をC担当の判定として採用し、DBビューのReader投影に`tel_match_key`は不要と確定する。通常モードの列契約は変わらない。
 
 最新Migration `20261019195000_cloudrun_readonly_clinic_view.sql` とロールバックを
-`projection_74d89afe.sql` / `projection_rollback_74d89afe.sql`として固定し、
-`build_cloudrun_reader_release.py`から`apply.sql`/`rollback.sql`を再生成した。
-統合SQLではReaderが`phone_norm`をSELECTでき、`tel_match_key`の列権限とVIEW列が存在しないことを
-`verify.sql`でも確認する。独立した#122 CIは確認時点でまだrunが報告されていない。#118と#121のpytest checksは成功。
-従って最新headの統合コードGO判定は#122 CIとC担当の一時統合pytest待ちである。
+`projection_5a87acf.sql` / `projection_rollback_5a87acf.sql`として固定し、
+`build_cloudrun_reader_release.py`から`apply.sql`/`rollback.sql`を再生成する。
+統合SQLとMigration本体は同じ契約で、Readerは`phone_norm`をSELECTでき、`tel_match_key`の列権限とVIEW列はない。
+PR #122のGitHub checks APIはこのheadで`no checks reported`を返した。代替としてC担当の最新worktreeでREAD ONLY export/filterテストを実行し10件成功、またPR #118/#121/#122を含む一時統合worktree（`fded4e8`、#122=`5a87acf`を含む）でfull pytestを実行し`2206 passed, 55 skipped`を確認した。Draft PR #118の今回更新後CIはpush後に確認する。
 
 今回の再確認では、本番候補DBにSELECTのみ実施した。投影VIEW/関数/helper roleは未作成、Readerには`public.clinics`の
 table-wide SELECTが残存、他6元テーブルにReader SELECTはなく、対象テーブルReader DMLもない。7元テーブルのRLSは有効で
@@ -275,22 +275,20 @@ FORCE RLSではなく、既存policyはCRM等のロールに限定される。Re
 Reader自身は他ロールのmemberではなく、`postgres`が逆向きにReaderのmember（ADMIN=true、INHERIT/SET=false）。
 対象ソースにPUBLIC明示ACLは見つからなかった。既存CRM権限・policyは変更しない。
 
-PR #122最新CIの成功、C担当の3PR統合競合/テスト確認、本番DBA適用承認、Reader Session Pooler実認証は未解決。
-サービス所有者はEPARK契約enumと課金由来signalの初期公開除外を決定済み。C担当のMigration反映を確認後、#122 Migrationと統合`apply.sql`を二重適用しないこと。
+EPARK除外はサービス所有者決定としてCのアプリ/Migrationと#118統合SQLに反映済み。C担当の一時統合では競合なし、full pytestは`2206 passed, 55 skipped`。最新PR #122 headではGitHub checksが報告されていないため、CI successとは扱わない。Draft PR #118今回更新後のCI、本番DBA適用承認、Reader Session Pooler実認証が未解決。#122 Migrationと統合`apply.sql`を二重適用しないこと。
 
 ## 2026-10-20 EPARK課金情報除外の隔離検証
 
-PR #118の設計更新commitは`4edd3e8`（Draft維持）。
-サービス所有者決定に基づき、#118提案Migrationから`effective_projection.epark_contract`を除き、
+PR #118の設計更新commitは`174e1aa`（Draft維持）。
+サービス所有者決定に基づき、最新#122 Migrationと#118統合SQLから`effective_projection.epark_contract`を除き、
 `signals_json`から正確な値`EPARK課金済み確認`をReader向けに除外する。Reader向け`signal_count`と`hot_status`は、
-残ったsignal配列から再計算する。元の`signal_count`/`hot_status`列はprojection ownerへGRANTしない。
-EPARK掲載URL、HP制作会社名、他のsignal名は維持する。#122 latest `74d89afe`時点のC担当Migrationにはこのoverlayがまだ反映されていないため、
-マージ前にC担当が同じロジックをMigration/アプリ実装へ反映し、最新版headと再照合する。
+残ったsignal配列を一意化して再計算する。元の`signal_count`/`hot_status`列はprojection ownerへGRANTしない。
+EPARK掲載URL、HP制作会社名、他のsignal名は維持する。最新#122 Migrationにこの処理が反映され、#118のSQLは同Migrationから再生成する。
 
-隔離PostgreSQL 17.11でこの統合SQLを適用し、verify.sqlの全`*_ok`がtrue、Reader smokeで全国fixture 5件、
+隔離PostgreSQL 17.11で最新統合SQLを適用し、verify.sqlの全`*_ok`がtrue、`SET LOCAL ROLE clinic_cloudrun_reader`を行うReader smokeで全国fixture 5件、
 禁止EPARK課金情報露出0件、read-only transaction有効を確認した。5 fixtureは課金由来signalのみ/課金signal+1件/課金signal+2件/
 課金なし2件/課金signal+3件のケースを含み、Reader出力は残存数0/1/2/2/3、優先度「通常/集客投資シグナルあり/アツい/アツい/かなりアツい」と一致。
 EPARK URLとHP制作会社投影も残り、Google広告、SNS、独自LP、制作実績、昼枠のsignalは維持された。Readerの元effective_json/signals_json参照とUPDATEは拒否され、
 限定rollback後にClinic行・既存CRM policyが保持され、Readerへの元表SELECTが復活しないことを確認した。
 
-これはDB境界の隔離テストであり、READ ONLY UIの契約状態/検索条件除去、CSV/XLSX回帰、#118/#121/#122の統合pytest/CIを代替しない。
+最新#122の`tests/test_cloud_run_read_only_export.py`は10件成功し、EPARK契約表示/フィルター除外、課金signal非表示、公式URLと他の集客signal保持、通常モードSQL保持を含む。#118/#121/#122統合worktreeのfull pytestは`2206 passed, 55 skipped`。GitHub上の#122 checksは未報告、#118更新後CIもpush後に要確認。

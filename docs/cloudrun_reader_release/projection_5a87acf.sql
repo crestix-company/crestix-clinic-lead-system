@@ -1,7 +1,5 @@
 -- Cloud Run READ ONLY clinic projection.
 -- PROPOSAL / integration migration only: do not apply to production without B/security review.
--- B overlay: omit epark_contract and the EPARK charge signal; recompute Reader signal aggregates.
--- This overlay must be mirrored by C in PR #122 before integration/merge.
 -- The Reader receives the view, never SELECT on public.clinics. The NOLOGIN view owner reads
 -- only the source columns needed by this view, is not a table owner, and has NOBYPASSRLS.
 BEGIN;
@@ -184,37 +182,47 @@ WITH projected AS (
          c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.phone_norm, c.address, c.prefecture,
          c.medical_type, c.active, c.designation_date, c.recent_until,
          c.registration_reason, c.owner_equal,
-         c.treatments_json,
-         CASE WHEN jsonb_typeof(c.signals_json) = 'array' THEN
-           (SELECT COALESCE(jsonb_agg(s.value ORDER BY s.ordinality), '[]'::jsonb)
-              FROM jsonb_array_elements(c.signals_json) WITH ORDINALITY AS s(value, ordinality)
-             WHERE s.value IS DISTINCT FROM to_jsonb('EPARK課金済み確認'::text))
-           ELSE '[]'::jsonb END AS signals_json,
-         c.merge_hold,
+         c.treatments_json, c.signals_json, c.merge_hold,
          c.maps_presence_status, c.maps_profile_url, c.exclude_reason,
          -- Expose only a boolean for the hospital exclusion, never the raw facility type.
          (c.effective_json LIKE '%"facility_type":"病院"%')
            AS is_hospital_or_center,
          public.clinic_cloudrun_effective_projection(c.effective_json, c.id) AS _effective
   FROM public.clinics c
+), signals_projected AS (
+  SELECT p.*,
+         COALESCE((
+           SELECT jsonb_agg(to_jsonb(s.name) ORDER BY s.ordinality)
+           FROM (
+             SELECT DISTINCT ON (item.value) item.value AS name, item.ordinality
+             FROM jsonb_array_elements_text(
+               CASE WHEN jsonb_typeof(p.signals_json)='array' THEN p.signals_json ELSE '[]'::jsonb END
+             ) WITH ORDINALITY AS item(value, ordinality)
+             WHERE item.value <> 'EPARK課金済み確認'
+             ORDER BY item.value, item.ordinality
+           ) s
+         ), '[]'::jsonb) AS readonly_signals
+  FROM projected p
+), scored AS (
+  SELECT s.*,
+         jsonb_array_length(s.readonly_signals)::integer AS readonly_signal_count,
+         CASE jsonb_array_length(s.readonly_signals)
+           WHEN 0 THEN '通常' WHEN 1 THEN '集客投資シグナルあり'
+           WHEN 2 THEN 'アツい' ELSE 'かなりアツい' END AS readonly_hot_status
+  FROM signals_projected s
 )
 SELECT
   id, uuid, merged_into, first_seen_at, last_seen_at, source_as_of_date,
   is_new, departments_json, hp_status, hp_url, hp_rank, maps_website_url,
   clinic_name, phone, phone_norm, address, prefecture, medical_type, active, designation_date,
-  recent_until, registration_reason, owner_equal,
-  jsonb_array_length(signals_json) AS signal_count,
-  CASE WHEN jsonb_array_length(signals_json) >= 3 THEN 'かなりアツい'
-       WHEN jsonb_array_length(signals_json) = 2 THEN 'アツい'
-       WHEN jsonb_array_length(signals_json) = 1 THEN '集客投資シグナルあり'
-       ELSE '通常' END AS hot_status,
-  treatments_json, signals_json, merge_hold, maps_presence_status,
+  recent_until, registration_reason, owner_equal, readonly_signal_count AS signal_count,
+  readonly_hot_status AS hot_status, treatments_json, readonly_signals AS signals_json, merge_hold, maps_presence_status,
   maps_profile_url, exclude_reason,
   (_effective->'values') AS effective_projection,
   (_effective->>'_marker') AS projection_marker,
   ((_effective->>'_valid')::boolean) AS projection_valid,
   is_hospital_or_center
-FROM projected;
+FROM scored;
 
 ALTER VIEW public.clinic_cloudrun_readonly OWNER TO clinic_cloudrun_projection_owner;
 REVOKE CREATE ON SCHEMA public FROM clinic_cloudrun_projection_owner;
