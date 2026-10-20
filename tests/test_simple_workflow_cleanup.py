@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import app_v2
+from streamlit.testing.v1 import AppTest
 
 
 def _app_source():
@@ -60,6 +61,25 @@ def test_simple_workflow_keeps_step1_through_step7_in_order():
     assert 'key_prefix="simple_comdesk_reimport"' in simple
 
 
+def test_single_job_status_is_hidden_from_simple_workflow_and_managed_in_advanced_settings():
+    source = _app_source()
+    simple_start = source.index("def simple_workflow_ui")
+    simple_end = source.index("def simple_sales_ui", simple_start)
+    simple = source[simple_start:simple_end]
+    admin_start = source.index("def single_hp_job_recovery_ui")
+    admin_end = source.index("def advanced_ui", admin_start)
+    admin = source[admin_start:admin_end]
+
+    assert "現在の調査" not in simple
+    assert "simple_pause" not in simple and "simple_resume" not in simple and "simple_reset" not in simple
+    assert '"HP単発Job管理・復旧"' in source
+    assert '"advanced_single_hp_pause"' in admin
+    assert '"advanced_single_hp_resume"' in admin
+    assert '"advanced_single_hp_reset"' in admin
+    assert "recent_jobs(store)" in admin and "job_status(store, selected)" in admin
+    assert "show_job_progress(store, current[\"id\"])" in admin
+
+
 def test_simple_sync_and_sales_export_use_separate_conditions_and_actions():
     source = _app_source()
     sync_start = source.index("def comdesk_sync_candidates")
@@ -76,6 +96,117 @@ def test_simple_sync_and_sales_export_use_separate_conditions_and_actions():
     assert "simple_comdesk_sync_export" not in sales
     assert "simple_comdesk_reimport" not in sales
     assert "sales_filters" in sales
+
+
+def test_step6_breakdown_matches_sync_exclusion_order_and_labels_populations():
+    class FixtureStore:
+        is_supabase_runtime = False
+
+        def count(self, filters):
+            return 5
+
+        def query(self, filters, *, limit, offset):
+            return [
+                {"id": 1, "uuid": "", "merge_hold": 0},
+                {"id": 2, "uuid": "", "merge_hold": 0},
+                {"id": 3, "uuid": "", "merge_hold": 1},
+                {"id": 4, "uuid": "", "merge_hold": 0},
+                {"id": 5, "uuid": "UUID-5", "merge_hold": 0},
+            ]
+
+        def comdesk_linkage_state(self):
+            return {"imported_clinic_ids": {1}, "held_clinic_ids": {2}}
+
+        def web_research_metrics(self):
+            return {"url_acquired": 20, "researched": 12}
+
+    rows = {row["項目"]: row for row in app_v2.comdesk_sync_breakdown(
+        FixtureStore(), {"厚生局取込レコード": 50},
+    )}
+    assert rows["厚生局全件"]["件数"] == "50件"
+    assert rows["HP URL取得済み"]["件数"] == "20件"
+    assert rows["HP調査完了"]["件数"] == "12件"
+    assert rows["UUID未付与"]["件数"] == "4件"
+    exclusions = sum(int(rows[key]["件数"].removesuffix("件")) for key in (
+        "除外：Comdesk取込済み", "除外：照合保留", "除外：merge hold",
+        "最終Comdesk同期対象",
+    ))
+    assert exclusions == 4
+    assert "hp_url" in rows["HP URL取得済み"]["母集団・条件"]
+    assert "最新完了HP Job" in rows["HP成功医院（同期候補の母集団）"]["母集団・条件"]
+
+
+def test_step6_breakdown_fails_closed_when_hp_population_is_unknown():
+    class FixtureStore:
+        is_supabase_runtime = False
+
+        def count(self, filters):
+            return 0
+
+        def query(self, filters, *, limit, offset):
+            return []
+
+        def comdesk_linkage_state(self):
+            return {"imported_clinic_ids": set(), "held_clinic_ids": set()}
+
+        def web_research_metrics(self):
+            return None
+
+    import pytest
+    with pytest.raises(ValueError, match="HP URL母集団"):
+        app_v2.comdesk_sync_breakdown(FixtureStore(), {})
+
+
+def test_single_hp_job_controls_survive_rerun_in_advanced_settings():
+    app = AppTest.from_string(r'''
+import streamlit as st
+import app_v2
+
+st.session_state.setdefault("job_fixture", {
+    "id": "fixture-hp-job", "kind": "hp", "status": "RUNNING",
+    "created_at": "2026-10-20T10:00:00", "options_json": {},
+    "total": 2, "counts": {"PENDING": 2, "RUNNING": 0, "DONE": 0},
+    "results": {},
+})
+job = st.session_state["job_fixture"]
+
+class FakeRunner:
+    def running(self):
+        return False
+    def start(self, store, jid, provider):
+        job["status"] = "RUNNING"
+
+class FakeJobs:
+    def pause_job(self, jid):
+        job["status"] = "PAUSED"
+    def reset_job(self, jid):
+        job["status"] = "PENDING"
+
+class FakeRepositories:
+    jobs = FakeJobs()
+
+class FakeStore:
+    path = "fixture.db"
+
+app_v2.recent_jobs = lambda store: [job]
+app_v2.job_status = lambda store, jid: job
+app_v2.runner_for = lambda path: FakeRunner()
+app_v2.hp_executor_mode = lambda: "local"
+app_v2.write_repositories_for = lambda store: FakeRepositories()
+app_v2.show_job_progress = lambda store, jid: st.caption("保存状態：" + job["status"])
+app_v2.single_hp_job_recovery_ui(FakeStore(), demo=False)
+''').run()
+    assert not app.exception
+    assert any("保存状態：RUNNING" in item.value for item in app.caption)
+
+    next(button for button in app.button if button.label == "一時停止").click().run()
+    assert not app.exception
+    assert any("保存状態：PAUSED" in item.value for item in app.caption)
+    assert any(not button.disabled for button in app.button if button.label == "この調査を再開")
+
+    next(button for button in app.button if button.label == "この調査を再開").click().run()
+    assert not app.exception
+    assert any("保存状態：RUNNING" in item.value for item in app.caption)
 
 
 def test_read_only_ui_mode_is_explicit_and_fail_closed(monkeypatch):
