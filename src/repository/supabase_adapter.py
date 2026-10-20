@@ -9,6 +9,8 @@ functions imported from src.master.*, called with data fetched from the migrated
 I/O (which table a column comes from) differs between this adapter and the SQLite one.
 """
 import json
+import threading
+import time
 
 from src.master.filters import Filters
 from src.master.hp_effective_rank import effective_hp_rank, effective_rank_reason
@@ -123,6 +125,83 @@ class SupabaseHpResearchRepository:
         return result
 
 
+# 2026-10-20: the hospital/center exclusion-ID query below (~14-15s, see its own comment)
+# is cached per SupabaseClinicRepository INSTANCE. On Cloud Run, Streamlit's
+# @st.cache_resource keeps the SAME SupabaseRuntimeStore alive for the whole process
+# lifetime, but src.repository.runtime_store._retry_closed_read_connection documents that
+# "a direct/session Postgres connection can still be closed by the network or server while
+# the app remains alive" -- and when that happens, _reconnect_read() builds a brand new
+# SupabaseClinicRepository (fresh, empty instance-level cache). Measured live: a Cloud Run
+# Canary request profile showed the SAME container instance ID serving requests for over an
+# hour (no cold starts), yet every single prefecture-filter change still re-paid the full
+# ~15s exclusion query -- consistent with the pooled connection being recycled between
+# requests more often than the container itself. This process-wide, TTL-bounded cache lets
+# a freshly rebuilt repository instance reuse the previous result instead of re-querying,
+# without changing which clinics are excluded (same predicate, same query, just not re-run
+# on every reconnect).
+#
+# 2026-10-20 review follow-up -- three correctness gaps in the first version, all fixed here:
+#   1. The cache key was `read_only_ui` alone, with no notion of WHICH database the result
+#      came from. A process that ever holds connections to two different databases under the
+#      same read_only_ui mode (tests, a future dev/staging split, anything built on top of
+#      this module) would silently serve one database's excluded-ID set to the other. The key
+#      now includes the connection's host/port/dbname/user (no password/secret -- see
+#      psycopg.ConnectionInfo) via _process_cache_key().
+#   2. The INSTANCE-level cache (self._excluded_ids_cache / self._read_only_excluded_ids_cache)
+#      had no expiry at all -- once populated, a repository instance that never gets rebuilt
+#      would serve the same excluded-ID set forever, process-cache TTL or not. Both cache
+#      layers now share the same TTL check (see _cached_at_attr in _excluded_clinic_ids()).
+#   3. Process-wide sharing is only safe for read_only_ui=True: that data is never written
+#      during a READ ONLY/shadow-read session (see the predicate comment below), so one
+#      instance's result is still correct for another instance against the same database.
+#      Normal/write mode (read_only_ui=False) has NO such guarantee -- a human can import
+#      Comdesk/厚生局 data or edit exclude_reason on the Mac app at any moment, and nothing in
+#      this codebase invalidates this cache on write. Sharing a write-mode result across
+#      repository instances could serve one user's exclusion list to a completely different,
+#      already-stale-relative-to-a-recent-write session. So read_only_ui=False NEVER reads or
+#      writes the process-wide cache -- it only ever uses its own instance-level cache, bounded
+#      by the same TTL as (2) above, which is a strict improvement over "never expires" and
+#      still never leaks across instances/connections.
+_EXCLUDED_IDS_CACHE_TTL_SECONDS = 300
+_excluded_ids_process_cache_lock = threading.Lock()
+_excluded_ids_process_cache = {}  # {(read_only_ui, host, port, dbname, user): (monotonic_timestamp, [ids])}
+_excluded_ids_key_locks = {}  # {cache_key: threading.Lock()} -- single-flight per key
+
+
+def _process_cache_key(read_only_ui, conn):
+    info = conn.info
+    return (read_only_ui, info.host, info.port, info.dbname, info.user)
+
+
+def _process_cached_excluded_ids(key):
+    with _excluded_ids_process_cache_lock:
+        entry = _excluded_ids_process_cache.get(key)
+    if entry is None:
+        return None
+    cached_at, ids = entry
+    if time.monotonic() - cached_at > _EXCLUDED_IDS_CACHE_TTL_SECONDS:
+        return None
+    return list(ids)
+
+
+def _store_process_cached_excluded_ids(key, ids):
+    with _excluded_ids_process_cache_lock:
+        _excluded_ids_process_cache[key] = (time.monotonic(), list(ids))
+
+
+def _excluded_ids_key_lock(key):
+    """One lock per cache key, so a cold/expired cache under concurrent load (Cloud Run
+    containerConcurrency can be >1) triggers exactly one ~14s query instead of a thundering
+    herd of redundant simultaneous ones. Callers must re-check the cache after acquiring the
+    lock -- another thread may have already populated it while this one was waiting."""
+    with _excluded_ids_process_cache_lock:
+        lock = _excluded_ids_key_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _excluded_ids_key_locks[key] = lock
+        return lock
+
+
 class SupabaseClinicRepository:
     _COLUMNS = (
         "id", "uuid", "merged_into", "effective_json", "tel_match_key", "first_seen_at",
@@ -147,56 +226,89 @@ class SupabaseClinicRepository:
         self._conn = conn
         self._hp = hp_repository
         self._excluded_ids_cache = None  # Stage4-B.6 P0-1, see _excluded_clinic_ids()
+        self._excluded_ids_cached_at = None
         self._read_only_excluded_ids_cache = None
+        self._read_only_excluded_ids_cached_at = None
+
+    def _query_excluded_clinic_ids(self, read_only_ui):
+        # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one
+        # and only place it is still evaluated row-by-row. Its result is cached and reused by
+        # every subsequent query via the `NOT EXISTS (SELECT 1 FROM unnest(...))` anti-join
+        # in supabase_filters.clauses(excluded_ids=...), which EXPLAIN confirmed is a 4.7x
+        # faster equivalent (4690ms -> 993ms) because it lets Postgres use a Merge Anti Join
+        # against clinics_pkey instead of evaluating an unindexable regex+LIKE per row.
+        #
+        # 2026-10-18: the facility_type term used a POSIX regex substring extraction
+        # (substring(... from '"facility_type":"([^"]*)"')), measured at ~18.6s of this
+        # query's ~18.6-19s total on the full 164k-row table -- comfortably over the
+        # clinic_runtime role's 15s statement_timeout, causing production Step6/funnel/query
+        # calls to fail with QueryCanceled. A literal substring search for the one exact
+        # value this predicate ever compares against ('病院') is semantically identical (both
+        # are plain text matches against the same un-parsed JSON string, same quote-free
+        # assumption) and was verified byte-identical in result (7907 rows, both ways) while
+        # cutting that term's cost roughly in half. The role's statement_timeout is left
+        # untouched; this call alone temporarily raises it for the one query that needs the
+        # margin, then restores the previous value immediately after.
+        with self._conn.cursor() as cur:
+            cur.execute("SET statement_timeout = '60s'")
+            try:
+                if read_only_ui:
+                    cur.execute(
+                        "SELECT id FROM public.clinic_cloudrun_readonly WHERE "
+                        "exclude_reason IN ('hospital','center') "
+                        "OR is_hospital_or_center "
+                        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id FROM public.clinics WHERE "
+                        "exclude_reason IN ('hospital','center') "
+                        "OR effective_json LIKE '%\"facility_type\":\"病院\"%' "
+                        "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
+                    )
+                return [r[0] for r in cur.fetchall()]
+            finally:
+                cur.execute("SET statement_timeout = DEFAULT")
 
     def _excluded_clinic_ids(self, read_only_ui=False):
         """Stage4-B.6 P0-1: computes the exact clinic_id set the hospital/center exclusion
-        predicate produces, ONCE per repository instance, then caches it. See the long comment
-        in supabase_filters.clauses() for why this predicate can't be simplified and why caching
-        it is safe (Supabase is never written to during Stage4-B/C shadow-read usage).
+        predicate produces, then caches it. See the long comment in supabase_filters.clauses()
+        for why this predicate can't be simplified and why caching it is safe (Supabase is
+        never written to during Stage4-B/C shadow-read usage).
+
+        Both the instance-level cache below and the module-level process cache (see its
+        comment above SupabaseClinicRepository) are bounded by the same TTL -- a long-lived
+        instance refreshes periodically instead of serving the same result forever. Only
+        read_only_ui=True ever touches the process-wide cache; read_only_ui=False (normal/
+        write mode) always recomputes within its own instance once the TTL lapses, since
+        nothing in this codebase invalidates this cache on write and this data CAN change
+        under write mode (see the module-level comment for the full reasoning).
         """
+        now = time.monotonic()
         cache_attr = "_read_only_excluded_ids_cache" if read_only_ui else "_excluded_ids_cache"
-        excluded_ids = getattr(self, cache_attr)
-        if excluded_ids is None:
-            # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one
-            # and only place it is still evaluated row-by-row. Its result is cached and reused by
-            # every subsequent query via the `NOT EXISTS (SELECT 1 FROM unnest(...))` anti-join
-            # in supabase_filters.clauses(excluded_ids=...), which EXPLAIN confirmed is a 4.7x
-            # faster equivalent (4690ms -> 993ms) because it lets Postgres use a Merge Anti Join
-            # against clinics_pkey instead of evaluating an unindexable regex+LIKE per row.
-            #
-            # 2026-10-18: the facility_type term used a POSIX regex substring extraction
-            # (substring(... from '"facility_type":"([^"]*)"')), measured at ~18.6s of this
-            # query's ~18.6-19s total on the full 164k-row table -- comfortably over the
-            # clinic_runtime role's 15s statement_timeout, causing production Step6/funnel/query
-            # calls to fail with QueryCanceled. A literal substring search for the one exact
-            # value this predicate ever compares against ('病院') is semantically identical (both
-            # are plain text matches against the same un-parsed JSON string, same quote-free
-            # assumption) and was verified byte-identical in result (7907 rows, both ways) while
-            # cutting that term's cost roughly in half. The role's statement_timeout is left
-            # untouched; this call alone temporarily raises it for the one query that needs the
-            # margin, then restores the previous value immediately after.
-            with self._conn.cursor() as cur:
-                cur.execute("SET statement_timeout = '60s'")
-                try:
-                    if read_only_ui:
-                        cur.execute(
-                            "SELECT id FROM public.clinic_cloudrun_readonly WHERE "
-                            "exclude_reason IN ('hospital','center') "
-                            "OR is_hospital_or_center "
-                            "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
-                        )
-                    else:
-                        cur.execute(
-                            "SELECT id FROM public.clinics WHERE "
-                            "exclude_reason IN ('hospital','center') "
-                            "OR effective_json LIKE '%\"facility_type\":\"病院\"%' "
-                            "OR clinic_name LIKE '%病院%' OR clinic_name LIKE '%センター%'"
-                        )
-                    excluded_ids = [r[0] for r in cur.fetchall()]
-                finally:
-                    cur.execute("SET statement_timeout = DEFAULT")
-            setattr(self, cache_attr, excluded_ids)
+        cached_at_attr = "_read_only_excluded_ids_cached_at" if read_only_ui else "_excluded_ids_cached_at"
+        cached = getattr(self, cache_attr)
+        cached_at = getattr(self, cached_at_attr)
+        if cached is not None and cached_at is not None and now - cached_at <= _EXCLUDED_IDS_CACHE_TTL_SECONDS:
+            return cached
+
+        if read_only_ui:
+            key = _process_cache_key(read_only_ui, self._conn)
+            cached = _process_cached_excluded_ids(key)
+            if cached is None:
+                with _excluded_ids_key_lock(key):
+                    # Re-check: another thread may have populated it while we waited for the
+                    # lock -- avoids a thundering herd of concurrent ~14s queries.
+                    cached = _process_cached_excluded_ids(key)
+                    if cached is None:
+                        cached = self._query_excluded_clinic_ids(read_only_ui)
+                        _store_process_cached_excluded_ids(key, cached)
+            excluded_ids = cached
+        else:
+            excluded_ids = self._query_excluded_clinic_ids(read_only_ui)
+
+        setattr(self, cache_attr, excluded_ids)
+        setattr(self, cached_at_attr, now)
         return excluded_ids
 
     def _where(self, filters, as_of, read_only_ui=False):
