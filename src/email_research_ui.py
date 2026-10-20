@@ -143,6 +143,28 @@ def _read_email_targets():
 @_fail_soft_on_db_loss
 def _email_auto_research_controls(store, *, demo=False):
     """Compact live controls for Email's independent HP-verified-URL consumer."""
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    cloud_deployment = is_cloud_run_deployment()
+    cloud_email_configured = (os.environ.get("EMAIL_AUTO_EXECUTOR") or "").strip().casefold() == "cloud_run"
+    if cloud_deployment:
+        from src.cloud_run.operator_identity import (
+            operator_authorized_for_cloud_write, operator_email_from_headers,
+        )
+        operator_email = operator_email_from_headers(st.context.headers)
+        if (not cloud_write_feature_enabled("EMAIL_AUTO_RUN_ENABLED")
+                or not operator_authorized_for_cloud_write(operator_email)):
+            st.subheader("メールアドレス自動調査")
+            st.info("Cloud Run Email操作は承認済みOperatorとEMAIL_AUTO_RUN_ENABLEDの設定が必要です。")
+            st.button("メール自動調査を開始", key="simple_email_auto_start_cloud_locked", disabled=True)
+            return
+    elif cloud_email_configured:
+        # An executor misconfiguration must never turn a Cloud Run Job action
+        # into a local, in-process runner on a Mac or another service.
+        st.subheader("メールアドレス自動調査")
+        st.error("EMAIL_AUTO_EXECUTOR=cloud_runはCloud Run Web環境でのみ利用できます。ローカル実行へ切り替えていません。")
+        st.button("メール自動調査を開始", key="simple_email_auto_start_wrong_runtime", disabled=True)
+        return
     repositories = email_repositories_for_ui()
     if repositories is None:
         st.subheader("メールアドレス自動調査")
@@ -192,7 +214,16 @@ def _email_auto_research_controls(store, *, demo=False):
     if not target_ready:
         st.caption(target_status.message)
     runtime = bool(getattr(store, "is_supabase_runtime", False))
-    runner = _auto_runner() if enabled and runtime and not demo else None
+    from src.cloud_run.email_executor import email_cloud_run_enabled
+    cloud_email = cloud_deployment and email_cloud_run_enabled()
+    runner = _auto_runner() if enabled and runtime and not demo and not cloud_email and not cloud_deployment else None
+    if cloud_email:
+        st.caption("Cloud Run Email Worker：1実行あたり最大件数を制限し、既存Queueを分割処理します。曖昧な起動結果は自動再実行しません。")
+        try:
+            from src.cloud_run.email_executor import max_clinics_per_execution
+            st.caption(f"1 Execution上限：{max_clinics_per_execution():,}件")
+        except Exception as exc:
+            st.caption(str(exc))
     if (runner is not None and hasattr(runner, "running") and run and status == "RUNNING"
             and controller_health == "RECOVERABLE" and not runner.running()):
         # Re-offer the existing run to this process. The persisted lease decides
@@ -201,22 +232,36 @@ def _email_auto_research_controls(store, *, demo=False):
     controls = st.columns(4)
     if controls[0].button(
         "メール自動調査を開始", key="simple_email_auto_start", type="primary",
-        disabled=not enabled or demo or not runtime or not target_ready or status in {"RUNNING", "PAUSED"},
+        disabled=not enabled or demo or not runtime or not target_ready or status in {"RUNNING", "PAUSED"}
+                 or (not cloud_email and runner is None),
         use_container_width=True,
     ):
         try:
-            started = runner.start()
+            if cloud_email:
+                from src.cloud_run.email_executor import create_email_run, dispatch_email_worker
+                run_id = create_email_run()
+                dispatch_email_worker(run_id)
+                started = run_id
+            else:
+                started = runner.start()
         except Exception as exc:
             stage = str(getattr(runner, "last_start_stage", "unknown") or "unknown")
             category = _safe_connection_error_category(exc)
             # Never log exc/str(exc)/exc_info: libpq errors may contain endpoint details.
             _logger.error(
-                "email_auto_start_failed stage=%s category=%s exception_type=%s",
+            "email_auto_start_failed stage=%s category=%s exception_type=%s",
                 stage, category, type(exc).__name__,
             )
-            st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY] = (
-                _email_auto_start_error_message(stage=stage, category=category)
-            )
+            from src.cloud_run.email_executor import EmailDispatchOutcomeUnknownError
+            if cloud_email and isinstance(exc, EmailDispatchOutcomeUnknownError):
+                st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY] = (
+                    "Worker起動結果が未確認です。新規Runの再作成・自動再実行は行っていません。"
+                    "状態を再読込し、Cloud Run Executionと照合してください。"
+                )
+            else:
+                st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY] = (
+                    _email_auto_start_error_message(stage=stage, category=category)
+                )
             started = False
         if started:
             st.session_state.pop(EMAIL_AUTO_START_ERROR_STATE_KEY, None)
@@ -237,20 +282,62 @@ def _email_auto_research_controls(store, *, demo=False):
         st.error(st.session_state[EMAIL_AUTO_START_ERROR_STATE_KEY])
     if controls[1].button(
         "一時停止", key="simple_email_auto_pause",
-        disabled=not runner or status != "RUNNING", use_container_width=True,
+        disabled=(not cloud_email and not runner) or status != "RUNNING", use_container_width=True,
     ):
-        runner.pause(run["run_id"]); st.rerun(scope="fragment")
+        if cloud_email:
+            from src.cloud_run.email_executor import update_run
+            update_run(run["run_id"], "PAUSED")
+        else:
+            runner.pause(run["run_id"])
+        st.rerun(scope="fragment")
     if controls[2].button(
         "再開", key="simple_email_auto_resume",
-        disabled=not runner or status != "PAUSED", use_container_width=True,
+        disabled=(not cloud_email and not runner) or status != "PAUSED", use_container_width=True,
     ):
-        if runner.resume(run["run_id"]): st.rerun(scope="fragment")
+        if cloud_email:
+            from src.cloud_run.email_executor import (
+                dispatch_email_worker, EmailDispatchBlockedError,
+                EmailDispatchOutcomeUnknownError,
+            )
+            try:
+                dispatch_email_worker(run["run_id"])
+            except (EmailDispatchBlockedError, EmailDispatchOutcomeUnknownError):
+                st.error(
+                    "Worker起動結果が未確定です。Runは再ディスパッチできない状態で保護しました。"
+                    "Cloud Run Executionを運用担当者が照合してください。"
+                )
+            else:
+                st.rerun(scope="fragment")
+        elif runner.resume(run["run_id"]): st.rerun(scope="fragment")
         else: st.warning("前Runの終了処理中です。少し待ってから再度お試しください。")
     if controls[3].button(
         "停止", key="simple_email_auto_stop",
-        disabled=not runner or status not in {"RUNNING", "PAUSED"}, use_container_width=True,
+        disabled=(not cloud_email and not runner) or status not in {"RUNNING", "PAUSED"}, use_container_width=True,
     ):
-        runner.kill(run["run_id"]); st.rerun(scope="fragment")
+        if cloud_email:
+            from src.cloud_run.email_executor import update_run
+            update_run(run["run_id"], "STOPPED")
+        else:
+            runner.kill(run["run_id"])
+        st.rerun(scope="fragment")
+    if cloud_email and run and status == "RUNNING" and controller_health == "RECOVERABLE":
+        dispatch_state = (run.get("metrics") or {}).get("cloud_worker_dispatch", {})
+        state = dispatch_state.get("status")
+        if state in {None, "REQUESTED", "UNKNOWN"}:
+            st.error("Worker起動結果が未確定です。Cloud Run JobsでこのRun IDのExecutionを照合してください。")
+            verified_absent = st.checkbox(
+                "Cloud Run Jobsで、このRun IDのExecutionが存在しないことを確認しました",
+                key="email_cloud_execution_absent_confirmed",
+            )
+            if st.button(
+                "照合結果を記録して再開可能にする", key="email_cloud_execution_reconcile",
+                disabled=not verified_absent,
+            ):
+                from src.cloud_run.email_executor import reconcile_email_worker_no_execution
+                reconcile_email_worker_no_execution(run["run_id"], reviewer=operator_email)
+                st.rerun(scope="fragment")
+        else:
+            st.warning("controller leaseが期限切れです。前回のExecution状態を照合するまで再ディスパッチはできません。")
     if not enabled:
         st.caption("開始操作は環境側で許可された場合のみ有効になります。")
 

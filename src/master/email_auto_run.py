@@ -33,11 +33,19 @@ class EmailAutoRunner:
     lease_retry_base_seconds = 0.5
 
     def __init__(self, repository_factory, research_one, *, target_reader=None,
-                 config: EmailResearchConfig | None = None):
+                 config: EmailResearchConfig | None = None, max_claims_per_execution=None):
         self.repository_factory = repository_factory
         self.research_one = research_one
         self.target_reader = target_reader
         self.config = config or load_email_research_config()
+        self.max_claims_per_execution = (
+            int(max_claims_per_execution) if max_claims_per_execution is not None else None
+        )
+        if self.max_claims_per_execution is not None and self.max_claims_per_execution < 1:
+            raise ValueError("max_claims_per_execution must be positive")
+        self._execution_claim_lock = Lock()
+        self._execution_claim_count = 0
+        self._execution_limit_reached = Event()
         self._stop = Event()
         self._thread = None
         self._lock = Lock()
@@ -149,6 +157,9 @@ class EmailAutoRunner:
             repo.close()
 
     def run(self, run_id):
+        with self._execution_claim_lock:
+            self._execution_claim_count = 0
+        self._execution_limit_reached.clear()
         outcome = RunOutcome()
         control_repo = None
         heartbeat_stop = Event()
@@ -259,8 +270,21 @@ class EmailAutoRunner:
                             repo.record_target_sync(run_id, elapsed_ms=sync_ms)
                         self._last_target_sync = time.monotonic()
                     claim_started = time.monotonic()
-                    claim = repo.claim_next(worker_id=worker_id, run_id=run_id,
-                                            lease_seconds=self.config.claim_lease_seconds)
+                    if self.max_claims_per_execution is None:
+                        claim = repo.claim_next(worker_id=worker_id, run_id=run_id,
+                                                lease_seconds=self.config.claim_lease_seconds)
+                    else:
+                        # Serialize only the short claim operation so concurrent workers
+                        # cannot claim beyond the per-Execution safety ceiling.
+                        with self._execution_claim_lock:
+                            if self._execution_claim_count >= self.max_claims_per_execution:
+                                self._execution_limit_reached.set()
+                                claim = None
+                            else:
+                                claim = repo.claim_next(worker_id=worker_id, run_id=run_id,
+                                                        lease_seconds=self.config.claim_lease_seconds)
+                                if claim is not None:
+                                    self._execution_claim_count += 1
                 except Exception as exc:
                     if self._is_connection_error(exc):
                         connection_failures += 1
@@ -280,6 +304,10 @@ class EmailAutoRunner:
                     continue
                 claim_ms = (time.monotonic() - claim_started) * 1000
                 if claim is None:
+                    if self._execution_limit_reached.is_set():
+                        repo.update_auto_run(run_id, status="PAUSED", stop_requested=False)
+                        self._stop.set()
+                        break
                     # A fixed Canary cohort stops when every member is terminal.
                     if hasattr(repo, "cohort_pending_count"):
                         pending = repo.cohort_pending_count()
