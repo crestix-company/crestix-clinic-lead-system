@@ -234,8 +234,8 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 | 同VIEW: `owner_equal` | 開設者と管理者の一致booleanのみ | 営業対象の詳細フィルター、一覧分類 | 名前/免許番号/元レコードはReader対象外。関係booleanの表示・抽出はサービス所有者の営業用途承認内。個人情報と扱う社内規程がある場合はprivacy owner確認が必要 |
 | 同VIEW: `signal_count,hot_status,signals_json` | 数/温度区分/allowlist済みシグナル名配列のみ（根拠なし） | 営業対象判定、広告・集客施策フィルター、優先順、一覧/詳細 | 営業機能維持。根拠URL・引用文・担当者メモ・raw signal JSONは非公開。許可シグナル名を現行定義に固定 |
 | 同VIEW: `effective_projection.hp_production_companies` | 公式HPで確認された制作会社名の配列のみ | HP制作会社フィルター | サービス所有者が維持を指定。証拠URL/本文は投影しない |
-| 同VIEW: `effective_projection.epark_url` | 公開プロフィールURL | 一覧/詳細のリンク | 現行画面で表示、Comdesk標準出力には含めない。公開ページURLに限定 |
-| 同VIEW: `effective_projection.epark_contract` | 現状は`UNKNOWN/PAID/FREE` enum | 現行一覧表示と`PAID`由来の営業シグナル/評価 | **個別判断必須。** 契約情報管理者が社内Readerへのenum表示と営業評価利用を承認するか決定する。無承認時はURL・enumを画面/Readerから隠し、EPARK課金由来シグナルだけを営業評価から外す。他の集客シグナル/HP制作会社/Maps/営業検索は維持。標準Comdesk CSV/XLSXには出力しない |
+| 同VIEW: `effective_projection.epark_url` | 公開プロフィールURL | 一覧/詳細のリンク | 現行画面で表示、Comdesk標準出力には含めない。公開ページURLとして契約enumと分離して扱う |
+| 同VIEW: `effective_projection.epark_contract` | 現状は`UNKNOWN/PAID/FREE` enum | 現行一覧表示と`PAID`由来の営業シグナル/評価 | **個別判断必須。** 契約情報管理者が社内Readerへのenum表示と営業評価利用を承認するか決定する。無承認時にenumと課金由来シグナルだけを外すには、`signals_json`から同signalを除き`signal_count`/`hot_status`も再計算する必要がある。単に投影JSONキーを落とすだけでは課金状態を推測できる値が残る。他の集客シグナル/HP制作会社/Maps/営業検索は維持。標準Comdesk CSV/XLSXには出力しない |
 | `provenance.clinic_cloudrun_comdesk_rows` | Clinic ID/template ID/UUID、投影有効フラグ、18 allowlist値を元位置に保持した配列 | 既存Comdesk値の優先順位維持、標準30列CSV/XLSX | Readerへraw rowを付与しない。院長名、診療日/時間、備考、履歴、記事などallowlist外要素は空欄 |
 | `provenance.templates`: `id,headers_json,mapping_json` | 対象投影行が参照する列見出し/マッピングmetadata | 18 allowlist値を元CSV位置から標準30列へ写像 | 値行は含まない。任意ヘッダー名・全template metadataの露出を避けるためRLSは投影VIEWから参照されるtemplateに限定。出力仕様維持の最小metadataとして許可 |
 | `public.clinic_email_enrichment`: `clinic_id,email,status,verified_on_official` | 条件を満たす公式確認済みメールのみ | 営業対象CSV/XLSXのメール列 | 既承認。RLS条件は`VERIFIED_EMAIL`、`verified_on_official IS TRUE`、非NULL/空欄以外を維持 |
@@ -248,7 +248,7 @@ Cloud RunのReaderにはVIEW列全体のSELECTが付く。したがって「画�
 
 ### 今回残す承認
 
-1. EPARK契約enum（UNKNOWN/PAID/FREE）を社内IAP画面で表示し、PAIDを営業signal/優先度へ使うことの契約情報管理者承認。承認が得られない場合はこの項目とEPARK課金由来signalだけを抑止する。
+1. EPARK契約enum（UNKNOWN/PAID/FREE）を社内IAP画面で表示し、PAIDを営業signal/優先度へ使うことの契約情報管理者承認。承認が得られない場合はenumに加えて課金由来signalを投影から除き、signal数/優先度を再計算するUI/SQL更新が必要（現状のSQLは再計算しないため未承認のまま適用不可）。
 2. `tel_match_key` をREAD ONLY adapterで使用しないとC担当が確認した場合の列縮小。削除する場合はPR #122と統合SQLを同じ契約へ合わせ、通常モードを回帰テストする。
 3. 最終project接続先のサービス所有者承認、Reader専用資格情報の安全な確認とSession Pooler実認証、DBAによる本番適用承認。
 
