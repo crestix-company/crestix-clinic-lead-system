@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -1032,7 +1033,20 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
         return
 
-    write_disabled = demo or read_only
+    # Review fix (Issue #130 PR #131 follow-up): CLINIC_READ_ONLY_UI=false on a
+    # Cloud Run deployment previously meant "identical write access to Mac" for
+    # every surface below (legacy Comdesk/厚生局/Maps import, HP Job dispatch,
+    # Step6/7 Comdesk sync/reimport) -- none of which were ever individually
+    # reviewed for multi-operator IAP-authenticated Cloud access (no operator
+    # identity, no preview/confirm, no dedicated writer connection, unlike
+    # cloud_comdesk_import_ui() or src.cloud_run.job_control.py's own HP Job
+    # role separation). is_cloud_run_deployment() locks this whole legacy
+    # surface on ANY Cloud Run deployment regardless of CLINIC_READ_ONLY_UI --
+    # only a deliberately-built, individually-flagged Cloud path (like
+    # cloud_comdesk_import_ui, which does NOT use write_disabled) can run
+    # there. On Mac (no K_SERVICE) this changes nothing.
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    write_disabled = demo or read_only or is_cloud_run_deployment()
     metrics = store.metrics()
 
     st.header("上から順に進めるだけ")
@@ -1054,8 +1068,15 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             st.rerun()
 
     st.subheader("Step2：厚生局データを取り込む")
+    cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
+    # Independent, separately-gated Cloud Run management screen for the
+    # EXISTING, human-operated Collector (Chrome extension v5.7.0, unchanged
+    # by this work) -- see cloud_maps_collection_admin_ui()'s own docstring
+    # for the explicit scope boundary (task/assignment state only, never
+    # scripting or automating the collection itself).
+    cloud_maps_collection_admin_ui(store, key_prefix="simple_maps_collection")
 
     st.subheader("Step4：Google Maps結果を取り込む")
 
@@ -1079,6 +1100,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
                 f"エラー {result.get('ERROR',0):,}件"
             )
             st.rerun()
+    # Independent, separately-gated Cloud Run Writer panel -- see
+    # cloud_maps_import_ui()'s own docstring. Must render regardless of
+    # whether the legacy uploader above has a file selected, same lesson as
+    # cloud_comdesk_import_ui() (Issue #130 PR #131 review fix).
+    cloud_maps_import_ui(store, key_prefix="simple_maps")
 
     st.subheader("Step5：HP・Email自動調査")
     if getattr(store, "is_supabase_runtime", False):
@@ -1125,10 +1151,15 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
     auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
-    if not read_only and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running() and not cloud_run_executor:
+    if (not read_only and not is_cloud_run_deployment() and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"}
+            and not auto_runner.running() and not cloud_run_executor):
         # Any PC may offer an executor, but the persisted lease allows only one controller.
         # Cloud Run Web never self-elects as that executor: it must stay request-driven
         # (min 0 / max 1), not an always-on background crawler charged to this service.
+        # is_cloud_run_deployment() is required here (not just not_cloud_run_executor,
+        # which only excludes the dedicated CLINIC_HP_EXECUTOR=cloud_run deployment):
+        # this call has no disable button, so it must also stay off for a Cloud Run
+        # Web deployment with CLINIC_READ_ONLY_UI=false and no CLINIC_HP_EXECUTOR set.
         auto_runner.start(store)
 
     hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
@@ -1215,6 +1246,13 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
     if read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
+    elif is_cloud_run_deployment():
+        # hp_human_review_card/email_human_review_card call write_repositories_for(store)
+        # directly from their own button handlers with no is_cloud_run_deployment()
+        # awareness at all -- they predate the Cloud Run write-path work entirely.
+        # Gating them here (rather than inside each card) keeps this blanket lock
+        # in one place, consistent with nav_locked/write_disabled above.
+        st.info("Cloud Run環境のため、HP・Email JobおよびHuman Review操作は既定で無効です。")
     else:
         hp_human_review_card(store)
         email_human_review_card(store)
@@ -1248,31 +1286,44 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     )
 
 
-def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
-    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=demo)
-    if not upload:
-        return
-    table = upload_table(upload, key_prefix)
-    inferred = infer_comdesk_columns(table)
-    labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
-              "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
-              "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
-    mapping = {}
-    with st.expander("列の対応を確認", expanded=False):
-        st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
-        for field, label in labels.items():
-            choices = [None]+list(range(len(table.headers)))
-            selected = inferred.get(field)
-            mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
-                format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
-        preview = table.data.head(5).copy()
-        preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
-        st.dataframe(preview, hide_index=True)
-    if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
-        with st.spinner("Comdeskデータを照合・登録しています…"):
-            result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
-        report_import(result)
-    render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)
+def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled)
+    if upload:
+        table = upload_table(upload, key_prefix)
+        inferred = infer_comdesk_columns(table)
+        labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+                  "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
+                  "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
+        mapping = {}
+        with st.expander("列の対応を確認", expanded=False):
+            st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+            for field, label in labels.items():
+                choices = [None]+list(range(len(table.headers)))
+                selected = inferred.get(field)
+                mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
+                    format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
+            preview = table.data.head(5).copy()
+            preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
+            st.dataframe(preview, hide_index=True)
+        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=write_disabled, use_container_width=True):
+            with st.spinner("Comdeskデータを照合・登録しています…"):
+                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+            report_import(result)
+    # These are independent, separately-gated panels -- they must render
+    # regardless of whether the legacy uploader above has a file selected.
+    # (Review fix: previously the `if not upload: return` above exited the
+    # whole function before either panel was ever reached.)
+    #
+    # write_disabled (demo or read_only or is_cloud_run_deployment()) is the
+    # correct gate for the legacy-backend snapshot-diff panel below, which
+    # writes through the general write backend and was never built with
+    # Cloud Run Writer semantics. It must NOT gate cloud_comdesk_import_ui:
+    # that panel only ever renders when is_cloud_run_deployment() is True
+    # (checked at its own entry), so gating it on write_disabled as well
+    # would make it dead code -- its own flag/operator/writer-connection
+    # checks are the real, independent gate for that path.
+    render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
+    cloud_comdesk_import_ui(store, key_prefix=key_prefix)
 
 
 def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
@@ -1346,6 +1397,622 @@ def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
             except Exception as exc:
                 st.error(f"取込をロールバックしました: {exc}")
 
+
+def cloud_comdesk_import_ui(store, *, key_prefix):
+    """Issue #130 P2-(1): Cloud Run Writer-deployment path for the existing
+    single-file Comdesk import above (import_ui_comdesk_step/import_comdesk).
+
+    Never renders under the current READ ONLY Canary (read_only_ui_mode() is
+    True there) -- this only activates in a hypothetical future, separately-
+    provisioned Cloud Run deployment with CLINIC_READ_ONLY_UI=false, gated by
+    its own default-OFF flag AND is_cloud_run_deployment() (so a non-Cloud,
+    non-Mac process, e.g. a test runner, is also excluded). On Mac/local this
+    is a no-op, same behavior as before this panel existed.
+
+    Deliberately takes no demo/write_disabled parameter: this panel's own
+    is_cloud_run_deployment() + feature-flag + operator-authorization checks
+    below are its complete, independent gate. (Review fix: an earlier draft
+    received the caller's write_disabled -- always True on Cloud Run once the
+    blanket legacy-surface lock was added -- through a parameter literally
+    named `demo`, and returned early whenever that parameter was truthy,
+    permanently blocking this panel regardless of flag/operator/writer
+    configuration.)
+
+    Reuses import_comdesk() business logic as-is (same UUID matching,
+    provenance, and import-batch idempotency as the local path), but NOT the
+    same connection: writes go through a dedicated, fail-closed Comdesk
+    import writer role (src.cloud_run.comdesk_import_writer), never the
+    general write backend every other local write path shares. Also adds
+    what a multi-operator Cloud deployment needs beyond local Mac usage: an
+    IAP-identified AND separately-authorized operator (allowlist-checked,
+    not "any IAP login"), a read-only preview before any write, and a
+      same-session double-submit guard (src.master.comdesk_cloud_import) --
+    defense in depth on top of import_comdesk()'s own data-level UUID
+    idempotency, which is what actually prevents duplication across
+    sessions/restarts/multiple users (the session guard only avoids an
+    unnecessary re-submit within one browser tab; it is not the safety
+    boundary).
+
+    KNOWN GAP, deliberately not built in this round: the preview below shows
+    row/column counts and raw file content only, not a NEW/UPDATE/HOLD
+    matching-outcome breakdown like src.master.comdesk_snapshot_import's
+    preview_comdesk_snapshot_pair() provides. src.master.matching.match_record()
+    is SQLite-specific (uses `?` placeholders against a sqlite3 connection)
+    and is not safe to call against the Postgres/Supabase connection this
+    path actually uses -- building a correct Postgres-compatible dry-run
+    classifier is real new logic, not something to guess at under time
+    pressure. Tracked as a follow-up, not silently skipped.
+    """
+    from src.cloud_run.comdesk_import_writer import (
+        ComdeskImportWriterNotConfiguredError, comdesk_import_writer_repositories,
+    )
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("Comdesk取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_COMDESK_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_COMDESK_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは上のStep1取込をそのままご利用ください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Comdesk取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビュー確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします（詳細はコード内コメント参照）。"
+        )
+        upload = st.file_uploader(
+            "Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix + "_cloud_upload",
+        )
+        if not upload:
+            return
+        table = upload_table(upload, key_prefix + "_cloud")
+        mapping = infer_comdesk_columns(table)
+        idempotency_key = comdesk_import_idempotency_key(upload.getvalue(), mapping)
+        applied_key = st.session_state.get(key_prefix + "_cloud_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+            return
+        preview = preview_comdesk_import(table, mapping)
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.caption("新規・更新・重複・HOLDの内訳は未実装です（Postgres対応の照合プレビューは別途実装予定）。")
+        display_preview = preview["preview"].copy()
+        display_preview.columns = [f"{i+1}｜{v}" for i, v in enumerate(table.headers)]
+        st.dataframe(display_preview, hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key=key_prefix + "_cloud_submit",
+        ):
+            try:
+                writer_repositories = comdesk_import_writer_repositories()
+            except ComdeskImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            with st.spinner("Comdeskデータを照合・登録しています…"):
+                result = writer_repositories.clinics.import_comdesk(table, mapping)
+            st.session_state[key_prefix + "_cloud_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_comdesk_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            report_import(result)
+
+
+def cloud_maps_import_ui(store, *, key_prefix):
+    """Issue #130: Cloud Run Writer-deployment path for the existing Google
+    Maps collection-result import above (import_maps_results()). Mirrors
+    cloud_comdesk_import_ui() exactly for every gate (read_only/is_cloud_run_
+    deployment entry guard, default-OFF flag, IAP-identified AND separately-
+    authorized operator, dedicated fail-closed Writer connection, same-
+    session double-submit guard, audit logging) -- see that function's
+    docstring for the full reasoning, not repeated here. Takes no demo/
+    write_disabled parameter for the same reason: this panel's own gates
+    below are its complete, independent gate (Issue #130 PR #131 follow-up
+    review lesson, applied here from the start).
+
+    Reuses import_maps_results() business logic as-is on the dedicated
+    Google Maps import writer connection (src.cloud_run.maps_import_writer),
+    never the general write backend. Preview goes one step further than the
+    Comdesk/厚生局 cloud panels' KNOWN GAP: the Google Maps matcher
+    (SupabaseProvenanceWriteRepository._prefetch_maps_targets /
+    _find_target_prefetched) is already Postgres-native, so
+    src.master.maps_cloud_import.preview_maps_import() runs that exact
+    matching logic -- plus the same classify_match_status()/build_maps_
+    update() pure functions import_maps_results() itself calls -- read-only
+    (SELECT-only, always rolled back even on a mid-way exception) to return
+    the IDENTICAL counts shape (TOTAL/MATCHED/WEBSITE/NO_WEBSITE/NOT_FOUND/
+    AMBIGUOUS/EXCLUDED/ERROR/UNLINKED/PRESERVED_WEBSITE) that
+    import_maps_results()'s own return value uses after the real write.
+    Review finding: an earlier draft showed a narrower, differently-defined
+    set of buckets in the preview (its own "MATCHED" meant "an existing
+    clinic was found", not the real result's "the collector found a Maps
+    profile") -- reusing the identical shape for both removes that
+    ambiguity by construction, so an operator reading preview then result
+    is comparing the same fields, not two different definitions that happen
+    to share a label. The preview is still labeled an estimate, not the
+    confirmed result, because a concurrent write between preview and apply
+    can change which clinics match; only import_maps_results()'s own return
+    value after the real write is final.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.maps_import_writer import (
+        MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("Google Maps結果取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_MAPS_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_MAPS_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは上のStep4取込をそのままご利用ください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Google Maps取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビューは照合ロジックによる推定であり確定結果ではありません。"
+            "確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします（詳細はコード内コメント参照）。"
+        )
+        upload = st.file_uploader(
+            "Google Maps収集結果CSV", type=["csv"], key=key_prefix + "_cloud_maps_upload",
+        )
+        if not upload:
+            return
+        file_bytes = upload.getvalue()
+        idempotency_key = maps_import_idempotency_key(file_bytes)
+        applied_key = st.session_state.get(key_prefix + "_cloud_maps_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+            return
+        # load_table() already enforces a 50MB file-size cap and a 100,000-row
+        # cap (see src.io.input_loader.load_table's defaults), raising
+        # ValueError rather than reading an unbounded file into memory; this
+        # cloud panel is multi-operator-facing (unlike the single-user local
+        # Step4 uploader that calls the same function without a try/except),
+        # so it must turn that into a readable error instead of an unhandled
+        # Streamlit traceback.
+        try:
+            maps_table = load_table(file_bytes, upload.name)
+        except ValueError as exc:
+            st.error(f"CSVの形式・サイズ・行数を確認してください: {exc}")
+            return
+        maps_frame = maps_table.data.copy()
+        maps_frame.columns = maps_table.headers
+        try:
+            writer_repositories = maps_import_writer_repositories()
+        except MapsImportWriterNotConfiguredError as exc:
+            st.error(str(exc))
+            return
+        try:
+            with st.spinner("既存データと照合してプレビューを作成しています…"):
+                preview = preview_maps_import(writer_repositories.provenance, maps_frame)
+        except Exception as exc:
+            # preview_maps_import() guarantees its own connection is always
+            # rolled back (try/finally) before this exception reaches here,
+            # whether it came from CSV validation, a SQL error, or the
+            # matching functions themselves -- this broad catch is only
+            # about showing a readable message, not about safety.
+            st.error(f"照合中にエラーが発生したため、プレビューを中止しました: {exc}")
+            return
+        counts = preview["counts"]
+        st.caption(
+            "以下は本適用時と同じ照合ロジックによる推定です。確定結果は取込実行後に表示されます。"
+            "項目の意味は取込後の表示と同一です。"
+        )
+        row1 = st.columns(4)
+        row1[0].metric("対象（推定）", f"{counts['TOTAL']:,}件")
+        row1[1].metric("Maps発見・HP取得（推定）", f"{counts['WEBSITE']:,}件")
+        row1[2].metric("Maps発見・HPなし（推定）", f"{counts['NO_WEBSITE']:,}件")
+        row1[3].metric("Maps未発見（推定）", f"{counts['NOT_FOUND']:,}件")
+        row2 = st.columns(4)
+        row2[0].metric("要確認・HOLD（推定）", f"{counts['AMBIGUOUS']:,}件")
+        row2[1].metric("除外（推定）", f"{counts['EXCLUDED']:,}件")
+        row2[2].metric("エラー（推定）", f"{counts['ERROR']:,}件")
+        row2[3].metric("医院未紐付（推定）", f"{counts['UNLINKED']:,}件")
+        if counts["PRESERVED_WEBSITE"]:
+            st.caption(f"確定済みHP URLの保護対象（推定）：{counts['PRESERVED_WEBSITE']:,}件（既存の確認済みHPは格下げされません）")
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.dataframe(preview["preview"], hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_maps_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key=key_prefix + "_cloud_maps_submit",
+        ):
+            try:
+                writer_repositories = maps_import_writer_repositories()
+            except MapsImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            with st.spinner("Google Maps結果を取り込んでいます…"):
+                result = writer_repositories.provenance.import_maps_results(maps_frame)
+            st.session_state[key_prefix + "_cloud_maps_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_maps_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            if result.get("already_imported"):
+                st.info("このGoogle Maps結果は取込済みです。重複登録していません。")
+            # Same field set and order as the preview metrics above (by
+            # construction: preview_maps_import() returns this exact counts
+            # shape), so comparing preview vs. confirmed result is reading
+            # the same fields twice, not two different definitions.
+            st.success(
+                f"【確定】対象 {result.get('TOTAL',0):,}件／"
+                f"Maps発見・HP取得 {result.get('WEBSITE',0):,}件／"
+                f"Maps発見・HPなし {result.get('NO_WEBSITE',0):,}件／"
+                f"Maps未発見 {result.get('NOT_FOUND',0):,}件／"
+                f"要確認・HOLD {result.get('AMBIGUOUS',0):,}件／"
+                f"除外 {result.get('EXCLUDED',0):,}件／"
+                f"エラー {result.get('ERROR',0):,}件／"
+                f"医院未紐付 {result.get('UNLINKED',0):,}件"
+            )
+            if result.get("PRESERVED_WEBSITE"):
+                st.caption(f"確定済みHP URLの保護対象：{result['PRESERVED_WEBSITE']:,}件（既存の確認済みHPは格下げされませんでした）")
+
+
+def cloud_maps_collection_admin_ui(store, *, key_prefix):
+    """Issue #130: Cloud Run management screen for the EXISTING, human-
+    operated Google Maps Collector (the Chrome extension at
+    extensions/google-maps-clinic-collector/, v5.7.0) -- NOT a migration of
+    collection itself to Cloud Run.
+
+    Scope boundary, deliberate and explicit (this is the single most
+    important thing to understand about this function): it only tracks
+    *which clinics are assigned to which PC slot, in what state* --
+    PENDING/ASSIGNED/ON_HOLD/FAILED/COMPLETED (src.master.
+    maps_collection_tasks). It never performs, scripts, or automates any
+    Google Maps interaction. A human still manually loads the exported
+    queue CSV into the unchanged Chrome extension on their own PC, manually
+    runs the collection, and manually exports the result CSV back here.
+    CAPTCHA pauses are the extension's own existing behavior and are never
+    bypassed or worked around by anything in this function or this PR.
+
+    This separation (task/assignment state vs. collection execution) is
+    also what Issue #130 point 10 asks for: if collection is ever replaced
+    by an automated, officially-billed API client instead of the manual
+    extension, only how a task's queue is produced and how its result is
+    consumed would need to change here -- the task lifecycle itself does
+    not assume anything about the collection mechanism.
+
+    Reuses, rather than duplicates, the existing Comdesk/厚生局/Maps-import
+    Cloud Run infrastructure: same entry gate (read_only_ui_mode()/
+    is_cloud_run_deployment()), same default-OFF-flag + IAP-operator-
+    authorization pattern, and for the "upload a result CSV" section,
+    the SAME maps_import_writer_repositories()/preview_maps_import()/
+    import_maps_results() functions cloud_maps_import_ui() already calls
+    (via a separate, dedicated DB role from this feature's own task-state
+    role -- see src.cloud_run.maps_collection_writer's docstring for why
+    they're kept distinct). The only new logic here is linking a
+    successful import to the task it completes.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.maps_collection_writer import (
+        MapsCollectionWriterNotConfiguredError, maps_collection_tasks_repository,
+    )
+    from src.cloud_run.maps_import_writer import (
+        MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.maps_collection_tasks import (
+        PC_SLOTS, TaskTransitionError, build_collection_candidates,
+        covered_clinic_ids, export_task_queue_rows,
+    )
+    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+    from src.master.store import now
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("Google Maps収集管理（Cloud Run・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_MAPS_COLLECTION_ADMIN_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_MAPS_COLLECTION_ADMIN_ENABLED=1 が未設定のため無効です。"
+                "収集対象の管理は現状どおりローカルで行ってください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Google Maps収集管理の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "実際のGoogle Maps収集は既存のChrome拡張機能（google-maps-clinic-collector v5.7.0）を"
+            "人手で操作して行います。この画面はPCへの割り当て・進捗・結果取込との連携のみを管理し、"
+            "Google Mapsへは一切アクセスしません。CAPTCHA発生時は拡張機能側でそのまま停止します。"
+        )
+        try:
+            tasks_repo = maps_collection_tasks_repository()
+        except MapsCollectionWriterNotConfiguredError as exc:
+            st.error(str(exc))
+            return
+        tasks = tasks_repo.list_tasks()
+        covered = covered_clinic_ids(tasks)
+
+        with st.expander("新規タスク作成", expanded=False):
+            prefs = store.prefectures()
+            prefecture = st.selectbox("都道府県", prefs, key=key_prefix + "_new_pref") if prefs else None
+            count = st.number_input("対象件数", min_value=1, max_value=2000, value=100, step=50, key=key_prefix + "_new_count")
+            if prefecture and st.button("候補を確認", key=key_prefix + "_new_preview"):
+                candidates = build_collection_candidates(store, prefecture, int(count), exclude_clinic_ids=covered)
+                st.session_state[key_prefix + "_new_candidates"] = {"prefecture": prefecture, "candidates": candidates}
+            pending_candidates = st.session_state.get(key_prefix + "_new_candidates")
+            if pending_candidates and pending_candidates["prefecture"] == prefecture:
+                candidates = pending_candidates["candidates"]
+                st.write(f"既存タスクと重複しない候補：{len(candidates):,}件")
+                if candidates and st.button("このタスクを作成", key=key_prefix + "_new_create"):
+                    try:
+                        task = tasks_repo.create_task(prefecture, candidates, timestamp=now())
+                    except TaskTransitionError as exc:
+                        st.error(str(exc))
+                    else:
+                        st.success(f"タスクを作成しました（{len(task['clinic_ids']):,}件、ID: {task['id'][:8]}…）。")
+                        st.session_state.pop(key_prefix + "_new_candidates", None)
+                        st.rerun()
+
+        st.caption(f"タスク数：{len(tasks):,}（未着手 {sum(1 for t in tasks if t['status']=='PENDING'):,} / "
+                   f"担当中 {sum(1 for t in tasks if t['status']=='ASSIGNED'):,} / "
+                   f"保留 {sum(1 for t in tasks if t['status']=='ON_HOLD'):,} / "
+                   f"失敗 {sum(1 for t in tasks if t['status']=='FAILED'):,} / "
+                   f"完了 {sum(1 for t in tasks if t['status']=='COMPLETED'):,}）")
+        for task in sorted(tasks, key=lambda t: t["created_at"], reverse=True):
+            with st.container(border=True):
+                st.write(
+                    f"**{task['prefecture']}** ／ {len(task['clinic_ids']):,}件 ／ "
+                    f"状態：{task['status']} ／ PC：{task['pc_slot'] or '未割当'} ／ ID: {task['id'][:8]}…"
+                )
+                if task["note"]:
+                    st.caption(f"メモ：{task['note']}")
+                cols = st.columns(4)
+                if task["status"] == "PENDING":
+                    slot = cols[0].selectbox("PC", PC_SLOTS, key=key_prefix + "_slot_" + task["id"], label_visibility="collapsed")
+                    if cols[1].button("割り当て", key=key_prefix + "_assign_" + task["id"]):
+                        try:
+                            tasks_repo.assign_task(task["id"], slot, timestamp=now())
+                        except TaskTransitionError as exc:
+                            st.error(str(exc))
+                        else:
+                            st.rerun()
+                elif task["status"] == "ASSIGNED":
+                    cols[0].download_button(
+                        "作業指示CSV", export_task_queue_rows(store, task),
+                        f"maps_collection_task_{task['id'][:8]}.csv", mime="text/csv",
+                        key=key_prefix + "_csv_" + task["id"],
+                    )
+                    if cols[1].button("CAPTCHA等で保留", key=key_prefix + "_hold_" + task["id"]):
+                        tasks_repo.hold_task(task["id"], "CAPTCHA等により一時停止", timestamp=now())
+                        st.rerun()
+                    if cols[2].button("失敗にする", key=key_prefix + "_fail_" + task["id"]):
+                        tasks_repo.fail_task(task["id"], "操作者により失敗とマーク", timestamp=now())
+                        st.rerun()
+                elif task["status"] == "ON_HOLD":
+                    if cols[0].button("再開", key=key_prefix + "_resume_" + task["id"]):
+                        tasks_repo.resume_task(task["id"])
+                        st.rerun()
+                    if cols[1].button("失敗にする", key=key_prefix + "_fail2_" + task["id"]):
+                        tasks_repo.fail_task(task["id"], "操作者により失敗とマーク", timestamp=now())
+                        st.rerun()
+                elif task["status"] == "FAILED":
+                    if cols[0].button("再割当てのため解放", key=key_prefix + "_release_" + task["id"]):
+                        tasks_repo.release_task(task["id"], timestamp=now())
+                        st.rerun()
+                elif task["status"] == "COMPLETED":
+                    st.caption(f"完了：{task['completed_at']} ／ 取込キー：{(task['result_batch_id'] or '')[:12]}…")
+
+        with st.expander("結果CSVアップロード → タスク完了", expanded=False):
+            linkable = [t for t in tasks if t["status"] in ("ASSIGNED", "ON_HOLD")]
+            if not linkable:
+                st.caption("担当中・保留のタスクがありません。")
+                return
+            labels = {t["id"]: f"{t['prefecture']}／{len(t['clinic_ids']):,}件／{t['pc_slot']}／ID:{t['id'][:8]}…" for t in linkable}
+            selected_id = st.selectbox(
+                "完了させるタスク", list(labels), format_func=lambda tid: labels[tid], key=key_prefix + "_complete_select",
+            )
+            selected_task = next(t for t in linkable if t["id"] == selected_id)
+            upload = st.file_uploader("Google Maps収集結果CSV", type=["csv"], key=key_prefix + "_complete_upload")
+            if not upload:
+                return
+            file_bytes = upload.getvalue()
+            idempotency_key = maps_import_idempotency_key(file_bytes)
+            applied_key = st.session_state.get(key_prefix + "_complete_applied_key")
+            if applied_key == idempotency_key:
+                st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+                return
+            try:
+                maps_table = load_table(file_bytes, upload.name)
+            except ValueError as exc:
+                st.error(f"CSVの形式・サイズ・行数を確認してください: {exc}")
+                return
+            maps_frame = maps_table.data.copy()
+            maps_frame.columns = maps_table.headers
+            uploaded_clinic_ids = {
+                int(v) for v in maps_frame.get("internal_clinic_id", []) if str(v).strip().isdigit()
+            } if "internal_clinic_id" in maps_frame.columns else set()
+            task_clinic_ids = set(selected_task["clinic_ids"])
+            overlap = uploaded_clinic_ids & task_clinic_ids
+            if not uploaded_clinic_ids or not uploaded_clinic_ids <= task_clinic_ids:
+                st.warning(
+                    "アップロードした結果の医院IDがないか、選択したタスクの対象外の医院が含まれています。"
+                    "タスクの選択、またはファイルをご確認ください。"
+                )
+                return
+            try:
+                import_writer_repositories = maps_import_writer_repositories()
+            except MapsImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            try:
+                with st.spinner("既存データと照合してプレビューを作成しています…"):
+                    preview = preview_maps_import(import_writer_repositories.provenance, maps_frame)
+            except Exception as exc:
+                st.error(f"照合中にエラーが発生したため、プレビューを中止しました: {exc}")
+                return
+            counts = preview["counts"]
+            st.write(f"対象：{preview['row_count']:,}行 ／ 選択タスクと一致：{len(overlap):,}件（推定）")
+            st.caption(
+                f"Maps発見・HP取得 {counts['WEBSITE']:,}／HPなし {counts['NO_WEBSITE']:,}／"
+                f"Maps未発見 {counts['NOT_FOUND']:,}／要確認・HOLD {counts['AMBIGUOUS']:,}／"
+                f"除外 {counts['EXCLUDED']:,}／エラー {counts['ERROR']:,}（推定）"
+            )
+            confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_complete_confirm_" + idempotency_key)
+            if st.button("確認のうえ取り込み、タスクを完了する", type="primary", disabled=not confirmed, key=key_prefix + "_complete_submit"):
+                try:
+                    import_writer_repositories = maps_import_writer_repositories()
+                except MapsImportWriterNotConfiguredError as exc:
+                    st.error(str(exc))
+                    return
+                with st.spinner("Google Maps結果を取り込んでいます…"):
+                    result = import_writer_repositories.provenance.import_maps_results(maps_frame)
+                st.session_state[key_prefix + "_complete_applied_key"] = idempotency_key
+                logging.info(
+                    "cloud_maps_collection_import operator=%s idempotency_key=%s task_id=%s result=%s",
+                    operator_email, idempotency_key, selected_task["id"], result,
+                )
+                try:
+                    tasks_repo.complete_task(
+                        selected_task["id"], uploaded_clinic_ids or overlap, idempotency_key, timestamp=now(),
+                    )
+                except TaskTransitionError as exc:
+                    st.warning(f"取込は完了しましたが、タスクの完了処理に失敗しました: {exc}")
+                else:
+                    st.success(f"取込・タスク完了を記録しました（対象 {result.get('TOTAL',0):,}件）。")
+                    st.rerun()
+
+
+def cloud_kouseikyoku_import_ui(store):
+    """Issue #130 P2-(1-c): Cloud Run Writer-deployment path for 厚生局 master
+    import. Mirrors cloud_comdesk_import_ui() exactly -- see that function's
+    docstring for the full reasoning behind every gate here, not repeated.
+
+    The LOCAL "①-c 厚生局CSV取込" capability actually lives in two places:
+    the bundled-file one-click import ("東京都マスターを取り込む", reads
+    data/master/tokyo_current.csv -- NOT shipped into the Cloud Run image
+    per Dockerfile.cloudrun's COPY list, so that specific bundled-file path
+    has no Cloud equivalent and none is built here) and the general
+    user-upload path inside import_ui() (詳細設定 -> マスター管理, "2. 厚生局
+    データを統合する", load_master()+import_master()). This panel reuses the
+    LATTER's business logic. import_ui() itself is now structurally
+    unreachable on Cloud Run anyway (詳細設定 is nav-locked out), so this is
+    the only way to reach that capability on a future Writer deployment.
+
+    Deliberately takes no demo/write_disabled parameter, for the same reason
+    as cloud_comdesk_import_ui() (Issue #130 PR #131 follow-up review):
+    this panel's own is_cloud_run_deployment()/flag/operator checks below are
+    its complete, independent gate. An earlier draft of the sibling Comdesk
+    panel received the caller's write_disabled -- always True on Cloud Run --
+    through a parameter named `demo` and returned early whenever it was
+    truthy, permanently blocking that panel. This function originally
+    received the caller's real demo flag correctly (its call site never
+    passed write_disabled), so it was not actually broken the same way, but
+    the parameter is removed anyway to keep both panels structurally
+    identical and immune to the same mistake if the call site ever changes.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.kouseikyoku_import_writer import (
+        KouseikyokuImportWriterNotConfiguredError, kouseikyoku_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.kouseikyoku_cloud_import import kouseikyoku_import_idempotency_key, preview_kouseikyoku_import
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("厚生局データ取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_KOUSEIKYOKU_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_KOUSEIKYOKU_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは詳細設定のマスター管理をそのままご利用ください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、厚生局取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビュー確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします。"
+        )
+        upload = st.file_uploader(
+            "厚生局CSV・Excel", type=["csv", "xlsx", "xls"], key="cloud_kouseikyoku_upload",
+        )
+        if not upload:
+            return
+        mode_label = st.selectbox(
+            "データ形式", ["標準CSV/Excel", "関東信越厚生局の帳票Excel"], key="cloud_kouseikyoku_mode",
+        )
+        mode = "kanto_excel" if "帳票" in mode_label else "standard"
+        prefecture = st.text_input("都道府県（帳票Excel用）", "東京都", key="cloud_kouseikyoku_pref")
+        names = sheet_names(upload.getvalue(), upload.name)
+        sheet = st.selectbox("厚生局シート", names, key="cloud_kouseikyoku_sheet") if names else None
+        idempotency_key = kouseikyoku_import_idempotency_key(
+            upload.getvalue(), mode=mode, prefecture=prefecture, sheet=sheet,
+        )
+        applied_key = st.session_state.get("cloud_kouseikyoku_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイル・設定を選択してください。")
+            return
+        frame = load_master(upload.getvalue(), upload.name, mode, prefecture, sheet)
+        preview = preview_kouseikyoku_import(frame)
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.caption("新規・更新・重複の内訳は未実装です（Postgres対応の照合プレビューは別途実装予定）。")
+        st.dataframe(preview["preview"], hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key="cloud_kouseikyoku_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key="cloud_kouseikyoku_submit",
+        ):
+            try:
+                writer_repositories = kouseikyoku_import_writer_repositories()
+            except KouseikyokuImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            with st.spinner("厚生局データを統合しています…"):
+                result = writer_repositories.clinics.import_master(frame)
+            st.session_state["cloud_kouseikyoku_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_kouseikyoku_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            report_import(result)
 
 def render_comdesk_sync_export(store, demo):
     try:
@@ -1909,16 +2576,23 @@ def main():
         st.session_state["advanced_section"] = "HP Human Review"
 
     read_only = read_only_ui_mode()
+    # Review fix (Issue #130 PR #131 follow-up): lock the NAV down whenever
+    # EITHER read_only is True OR this process is a Cloud Run deployment at
+    # all (is_cloud_run_deployment(), regardless of CLINIC_READ_ONLY_UI) --
+    # see the write_disabled comment in simple_workflow_ui for the full
+    # reasoning. nav_locked, not read_only alone, decides nav visibility.
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    nav_locked = read_only or is_cloud_run_deployment()
     with st.sidebar:
-        nav_options = NAV[:2] if read_only else NAV
+        nav_options = NAV[:2] if nav_locked else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
-        if read_only:
+        if nav_locked:
             demo = False
             with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
-                st.caption("ローカル版は以下の5メニューを順に使います。READ ONLY版では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
+                st.caption("ローカル版は以下の5メニューを順に使います。この画面では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
                 for name in NAV:
                     if name in nav_options:
-                        st.caption(f"✅ {name}：READ ONLYで利用可能")
+                        st.caption(f"✅ {name}：利用可能")
                     else:
                         st.caption(f"🔒 {name}：未有効・別権限が必要（データ更新/送信を含むため非表示）")
         else:
@@ -1927,6 +2601,8 @@ def main():
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
+    elif nav_locked:
+        st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
@@ -1945,18 +2621,25 @@ def main():
             _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
     try:
         store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
-        if not read_only and not is_cloud_run_executor():
+        from src.cloud_run.deployment_context import is_cloud_run_deployment
+        if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():
             # refresh_age_model() is a general write unrelated to HP Job control.
             # CLINIC_HP_EXECUTOR=cloud_run is meant to run with a least-privilege
             # job-control-only DB role (see src.cloud_run.job_control); it must
             # never also need this broader write capability on every page load.
+            # is_cloud_run_deployment() is also required: a Cloud Run Web
+            # deployment with CLINIC_READ_ONLY_UI=false but no CLINIC_HP_EXECUTOR
+            # set must still never auto-write on every page load.
             write_repositories_for(store).clinics.refresh_age_model()
     except Exception as exc:
         if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
             _show_supabase_startup_error(exc)
         raise
 
-    if not read_only:
+    if not read_only and not is_cloud_run_deployment():
+        # Same write-trigger concern as the simple_workflow_ui human-review
+        # cards above: these sidebar/dialog widgets write via their own
+        # write_repositories_for(store) calls with no Cloud Run awareness.
         hp_human_review_sidebar(store)
         email_research_sidebar_status(store)
         email_human_review_sidebar(store)

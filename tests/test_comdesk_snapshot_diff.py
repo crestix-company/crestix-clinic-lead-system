@@ -225,7 +225,7 @@ def test_ui_and_runtime_adapter_keep_snapshot_import_opt_in_and_separate():
     app = Path("app_v2.py").read_text()
     adapter = Path("src/repository/supabase_write_adapter.py").read_text()
     service = Path("src/master/comdesk_snapshot_import.py").read_text()
-    assert "render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)" in app
+    assert "render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)" in app
     assert "CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED" in app
     assert "def preview_comdesk_snapshot_pair" in adapter
     assert "def import_comdesk_snapshot_pair" in adapter

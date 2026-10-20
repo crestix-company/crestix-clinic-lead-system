@@ -6,6 +6,8 @@ on:
       - main
       - feat/outreach-gas-sheet-bridge-phase1
       - feat/gmail-history-backfill-dedup-328-20261019
+      - feat/cloudrun-comdesk-import-writer-path-20261020
+      - feat/cloudrun-maps-import-writer-path-20261020
   push:
     branches:
       - main
@@ -34,3 +36,13 @@ jobs:
 
       - name: Run pytest
         run: python -m pytest -q
+
+      - name: Build Cloud Run images
+        run: |
+          docker build --file Dockerfile.cloudrun --tag clinic-cloudrun:ci .
+          if [ -f Dockerfile.cloudrun.worker ]; then
+            docker build --file Dockerfile.cloudrun.worker --tag clinic-hp-worker:ci .
+          fi
+          if [ -f Dockerfile.cloudrun.email-worker ]; then
+            docker build --file Dockerfile.cloudrun.email-worker --tag clinic-email-worker:ci .
+          fi
