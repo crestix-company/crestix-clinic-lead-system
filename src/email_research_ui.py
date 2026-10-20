@@ -323,10 +323,21 @@ def _email_auto_research_controls(store, *, demo=False):
     if cloud_email and run and status == "RUNNING" and controller_health == "RECOVERABLE":
         dispatch_state = (run.get("metrics") or {}).get("cloud_worker_dispatch", {})
         state = dispatch_state.get("status")
-        if state in {"REQUESTED", "UNKNOWN"}:
-            st.error("Worker起動結果が未確定です。重複防止のため再ディスパッチを停止しました。Cloud Run Executionを運用担当者が照合してください。")
+        if state in {None, "REQUESTED", "UNKNOWN"}:
+            st.error("Worker起動結果が未確定です。Cloud Run JobsでこのRun IDのExecutionを照合してください。")
+            verified_absent = st.checkbox(
+                "Cloud Run Jobsで、このRun IDのExecutionが存在しないことを確認しました",
+                key="email_cloud_execution_absent_confirmed",
+            )
+            if st.button(
+                "照合結果を記録して再開可能にする", key="email_cloud_execution_reconcile",
+                disabled=not verified_absent,
+            ):
+                from src.cloud_run.email_executor import reconcile_email_worker_no_execution
+                reconcile_email_worker_no_execution(run["run_id"], reviewer=operator_email)
+                st.rerun(scope="fragment")
         else:
-            st.warning("controller leaseが期限切れです。既存Executionを照合するまで再ディスパッチはできません。")
+            st.warning("controller leaseが期限切れです。前回のExecution状態を照合するまで再ディスパッチはできません。")
     if not enabled:
         st.caption("開始操作は環境側で許可された場合のみ有効になります。")
 

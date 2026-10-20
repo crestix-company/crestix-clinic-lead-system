@@ -1269,6 +1269,46 @@ class SupabaseEmailResearchRepository:
             self._safe_rollback()
             raise
 
+    def reconcile_worker_dispatch_no_execution(self, run_id: str, *, reviewer: str) -> bool:
+        """Unlock an ambiguous dispatch only after an authorized human checks GCP.
+
+        The caller must require operator authorization and an explicit
+        confirmation that the Cloud Run Jobs console shows no Execution for
+        this run. The attestation and reviewer are retained in run metrics.
+        """
+        reviewer = str(reviewer or "").strip()
+        if not reviewer:
+            raise ValueError("照合したOperatorを記録してください。")
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status,metrics FROM email_research.email_auto_runs WHERE run_id=%s FOR UPDATE",
+                    (str(run_id),),
+                )
+                row = cur.fetchone()
+                if not row or row[0] != "RUNNING":
+                    raise ValueError("照合対象のEmail Runが実行中ではありません。")
+                metrics = _json_dict(row[1])
+                dispatch = metrics.get("cloud_worker_dispatch") or {}
+                if dispatch.get("status") not in {"REQUESTED", "UNKNOWN"}:
+                    raise ValueError("未確定のWorker起動記録がありません。")
+                dispatch.update({
+                    "status": "RECONCILED_NO_EXECUTION",
+                    "reconciled_by": reviewer,
+                    "reconciled_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                })
+                metrics["cloud_worker_dispatch"] = dispatch
+                cur.execute(
+                    "UPDATE email_research.email_auto_runs SET status='PAUSED',stop_requested=false,"
+                    "metrics=%s,updated_at=now() WHERE run_id=%s",
+                    (Jsonb(metrics), str(run_id)),
+                )
+            self._conn.commit()
+            return True
+        except Exception:
+            self._safe_rollback()
+            raise
+
     def acquire_controller(self, run_id: str, controller_id: str,
                            lease_seconds: int = EMAIL_CONTROLLER_LEASE_SECONDS) -> dict | None:
         """Atomically acquire an empty/expired persisted controller lease for one run."""

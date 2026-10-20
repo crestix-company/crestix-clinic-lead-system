@@ -35,7 +35,9 @@
   Job task retries and parallel tasks are rejected. An ambiguous Jobs API
   response is recorded as `UNKNOWN` in the existing run metrics JSON under a
   row lock; the UI blocks every further dispatch for that run until an operator
-  reconciles the Cloud Run Execution. No schema migration is required. A
+  checks Cloud Run Jobs and explicitly records that no Execution exists. That
+  attestation, operator email, and timestamp are retained in the run metrics;
+  only then can the existing Run be resumed. No schema migration is required. A
   confirmed dispatch is also recorded with its Execution name, and an active
   confirmed dispatch cannot be started a second time.
 

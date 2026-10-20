@@ -166,6 +166,18 @@ def update_run(run_id, status, *, repositories_factory=None):
             bundle.email_research.close()
 
 
+def reconcile_email_worker_no_execution(run_id, *, reviewer, repositories_factory=None):
+    """Persist an operator's explicit GCP-console check before allowing retry."""
+    bundle = (repositories_factory or _repositories)()
+    try:
+        return bundle.email_research.reconcile_worker_dispatch_no_execution(
+            str(run_id), reviewer=reviewer,
+        )
+    finally:
+        if hasattr(bundle.email_research, "close"):
+            bundle.email_research.close()
+
+
 def build_worker_runner(*, repositories_factory=None, research_one=None, config=None,
                         env=None):
     """Construct a worker with a fixed, already-synced cohort (no continual target refresh)."""

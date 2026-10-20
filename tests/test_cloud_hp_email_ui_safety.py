@@ -68,6 +68,25 @@ def test_email_dispatch_intent_is_locked_and_ambiguous_attempts_block_retry():
     assert 'status="CONFIRMED"' in dispatch
 
 
+def test_ambiguous_email_dispatch_can_only_be_unlocked_by_operator_attestation():
+    repository = _source("src/repository/email_research_repository.py")
+    start = repository.index("def reconcile_worker_dispatch_no_execution(")
+    end = repository.index("def acquire_controller(", start)
+    reconcile = repository[start:end]
+    assert "WHERE run_id=%s FOR UPDATE" in reconcile
+    assert 'dispatch.get("status") not in {"REQUESTED", "UNKNOWN"}' in reconcile
+    assert '"RECONCILED_NO_EXECUTION"' in reconcile
+    assert '"reconciled_by": reviewer' in reconcile
+
+    ui = _source("src/email_research_ui.py")
+    marker = ui.index('key="email_cloud_execution_reconcile"')
+    block_start = ui.rfind('if cloud_email and run and status == "RUNNING"', 0, marker)
+    block = ui[block_start:marker]
+    assert "verified_absent" in block
+    assert "disabled=not verified_absent" in ui[marker:marker + 200]
+    assert "reconcile_email_worker_no_execution(run[\"run_id\"], reviewer=operator_email)" in ui
+
+
 def test_cloud_run_page_exposes_only_dedicated_hp_and_email_controls():
     source = _source("app_v2.py")
     start = source.index("def simple_workflow_ui(")
