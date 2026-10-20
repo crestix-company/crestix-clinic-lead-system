@@ -59,11 +59,24 @@ def test_feature_flag_checked_before_any_file_uploader_or_write_call():
     assert flag_pos < uploader_pos < write_pos
 
 
-def test_demo_mode_blocked_before_file_uploader():
+def test_does_not_take_a_demo_or_write_disabled_parameter():
+    """Review fix: an earlier draft received the caller's write_disabled --
+    always True on Cloud Run once the blanket legacy-surface lock was added --
+    through a parameter literally named `demo`, then gated on `if demo:
+    return`. That permanently blocked this panel regardless of flag/operator/
+    writer configuration, since is_cloud_run_deployment() (checked just above,
+    at this panel's own entry) being True is exactly what makes write_disabled
+    True too. This panel's own is_cloud_run_deployment()/flag/operator checks
+    are its complete, independent gate -- it must not take that parameter at
+    all, so the bug cannot silently come back under a different name."""
+    source = _app_source()
+    start = source.index("def cloud_comdesk_import_ui(")
+    signature_end = source.index(")", start)
+    signature = source[start:signature_end]
+    assert "demo" not in signature
+    assert "write_disabled" not in signature
     block = _cloud_comdesk_import_ui_source()
-    demo_pos = block.index("if demo:")
-    uploader_pos = block.index("st.file_uploader(")
-    assert demo_pos < uploader_pos
+    assert "if demo:" not in block
 
 
 def test_operator_identity_required_before_file_uploader():
@@ -124,8 +137,8 @@ def test_wired_into_the_existing_step1_comdesk_import_panel():
     step_start = source.index("def import_ui_comdesk_step(")
     step_end = source.index("\ndef ", step_start + 10)
     step_body = source[step_start:step_end]
-    assert "render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)" in step_body
-    assert "cloud_comdesk_import_ui(store, demo, key_prefix=key_prefix)" in step_body
+    assert "render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)" in step_body
+    assert "cloud_comdesk_import_ui(store, key_prefix=key_prefix)" in step_body
     # Added as a sibling panel after the existing one, not replacing it.
     assert step_body.index("render_comdesk_snapshot_diff_import(") < step_body.index("cloud_comdesk_import_ui(")
 
@@ -145,8 +158,8 @@ def test_sibling_panels_render_even_when_legacy_uploader_has_no_file():
     assert "if upload:" in step_body  # legacy path now wrapped in `if`, not early-return
     assert "if not upload:\n        return" not in step_body
 
-    snapshot_call = '    render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)\n'
-    cloud_call = '    cloud_comdesk_import_ui(store, demo, key_prefix=key_prefix)\n'
+    snapshot_call = '    render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)\n'
+    cloud_call = '    cloud_comdesk_import_ui(store, key_prefix=key_prefix)\n'
     assert snapshot_call in step_body
     assert cloud_call in step_body
     # 4-space indent == function body top level, i.e. NOT nested inside the

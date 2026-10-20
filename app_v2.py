@@ -1103,10 +1103,15 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
     auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
-    if not read_only and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running() and not cloud_run_executor:
+    if (not read_only and not is_cloud_run_deployment() and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"}
+            and not auto_runner.running() and not cloud_run_executor):
         # Any PC may offer an executor, but the persisted lease allows only one controller.
         # Cloud Run Web never self-elects as that executor: it must stay request-driven
         # (min 0 / max 1), not an always-on background crawler charged to this service.
+        # is_cloud_run_deployment() is required here (not just not_cloud_run_executor,
+        # which only excludes the dedicated CLINIC_HP_EXECUTOR=cloud_run deployment):
+        # this call has no disable button, so it must also stay off for a Cloud Run
+        # Web deployment with CLINIC_READ_ONLY_UI=false and no CLINIC_HP_EXECUTOR set.
         auto_runner.start(store)
 
     hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
@@ -1202,6 +1207,13 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
     if read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
+    elif is_cloud_run_deployment():
+        # hp_human_review_card/email_human_review_card call write_repositories_for(store)
+        # directly from their own button handlers with no is_cloud_run_deployment()
+        # awareness at all -- they predate the Cloud Run write-path work entirely.
+        # Gating them here (rather than inside each card) keeps this blanket lock
+        # in one place, consistent with nav_locked/write_disabled above.
+        st.info("Cloud Run環境のため、HP・Email JobおよびHuman Review操作は既定で無効です。")
     else:
         hp_human_review_card(store)
         email_human_review_card(store)
@@ -1283,8 +1295,8 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     )
 
 
-def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
-    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=demo)
+def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled)
     if upload:
         table = upload_table(upload, key_prefix)
         inferred = infer_comdesk_columns(table)
@@ -1302,7 +1314,7 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview, hide_index=True)
-        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
+        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=write_disabled, use_container_width=True):
             with st.spinner("Comdeskデータを照合・登録しています…"):
                 result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
             report_import(result)
@@ -1310,8 +1322,17 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
     # regardless of whether the legacy uploader above has a file selected.
     # (Review fix: previously the `if not upload: return` above exited the
     # whole function before either panel was ever reached.)
-    render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)
-    cloud_comdesk_import_ui(store, demo, key_prefix=key_prefix)
+    #
+    # write_disabled (demo or read_only or is_cloud_run_deployment()) is the
+    # correct gate for the legacy-backend snapshot-diff panel below, which
+    # writes through the general write backend and was never built with
+    # Cloud Run Writer semantics. It must NOT gate cloud_comdesk_import_ui:
+    # that panel only ever renders when is_cloud_run_deployment() is True
+    # (checked at its own entry), so gating it on write_disabled as well
+    # would make it dead code -- its own flag/operator/writer-connection
+    # checks are the real, independent gate for that path.
+    render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
+    cloud_comdesk_import_ui(store, key_prefix=key_prefix)
 
 
 def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
@@ -1386,7 +1407,7 @@ def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
                 st.error(f"取込をロールバックしました: {exc}")
 
 
-def cloud_comdesk_import_ui(store, demo, *, key_prefix):
+def cloud_comdesk_import_ui(store, *, key_prefix):
     """Issue #130 P2-(1): Cloud Run Writer-deployment path for the existing
     single-file Comdesk import above (import_ui_comdesk_step/import_comdesk).
 
@@ -1396,6 +1417,15 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
     its own default-OFF flag AND is_cloud_run_deployment() (so a non-Cloud,
     non-Mac process, e.g. a test runner, is also excluded). On Mac/local this
     is a no-op, same behavior as before this panel existed.
+
+    Deliberately takes no demo/write_disabled parameter: this panel's own
+    is_cloud_run_deployment() + feature-flag + operator-authorization checks
+    below are its complete, independent gate. (Review fix: an earlier draft
+    received the caller's write_disabled -- always True on Cloud Run once the
+    blanket legacy-surface lock was added -- through a parameter literally
+    named `demo`, and returned early whenever that parameter was truthy,
+    permanently blocking this panel regardless of flag/operator/writer
+    configuration.)
 
     Reuses import_comdesk() business logic as-is (same UUID matching,
     provenance, and import-batch idempotency as the local path), but NOT the
@@ -1438,9 +1468,6 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
                 "CLINIC_CLOUD_COMDESK_IMPORT_ENABLED=1 が未設定のため無効です。"
                 "Mac通常モードでは上のStep1取込をそのままご利用ください。"
             )
-            return
-        if demo:
-            st.info("デモ・読み取り専用では利用できません。")
             return
         operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
         if not operator_authorized_for_cloud_write(operator_email):
@@ -1969,18 +1996,25 @@ def main():
             _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
     try:
         store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
-        if not read_only and not is_cloud_run_executor():
+        from src.cloud_run.deployment_context import is_cloud_run_deployment
+        if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():
             # refresh_age_model() is a general write unrelated to HP Job control.
             # CLINIC_HP_EXECUTOR=cloud_run is meant to run with a least-privilege
             # job-control-only DB role (see src.cloud_run.job_control); it must
             # never also need this broader write capability on every page load.
+            # is_cloud_run_deployment() is also required: a Cloud Run Web
+            # deployment with CLINIC_READ_ONLY_UI=false but no CLINIC_HP_EXECUTOR
+            # set must still never auto-write on every page load.
             write_repositories_for(store).clinics.refresh_age_model()
     except Exception as exc:
         if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
             _show_supabase_startup_error(exc)
         raise
 
-    if not read_only:
+    if not read_only and not is_cloud_run_deployment():
+        # Same write-trigger concern as the simple_workflow_ui human-review
+        # cards above: these sidebar/dialog widgets write via their own
+        # write_repositories_for(store) calls with no Cloud Run awareness.
         hp_human_review_sidebar(store)
         email_research_sidebar_status(store)
         email_human_review_sidebar(store)

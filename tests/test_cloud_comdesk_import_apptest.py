@@ -46,16 +46,15 @@ _operator_identity.operator_authorized_for_cloud_write = (
 class _StubStore:
     pass
 
-app_v2.cloud_comdesk_import_ui(_StubStore(), demo=__DEMO__, key_prefix="apptest")
+app_v2.cloud_comdesk_import_ui(_StubStore(), key_prefix="apptest")
 """
 
 
-def _script(*, operator_email, authorized, demo):
+def _script(*, operator_email, authorized):
     return (
         _SCRIPT
         .replace("__OPERATOR_EMAIL__", repr(operator_email))
         .replace("__AUTHORIZED__", repr(authorized))
-        .replace("__DEMO__", repr(demo))
     )
 
 
@@ -71,11 +70,11 @@ def _real_operator_identity():
     module.operator_authorized_for_cloud_write = original_authorize
 
 
-def _run(monkeypatch, *, k_service, read_only_ui, flag_enabled, demo, operator_email, authorized):
+def _run(monkeypatch, *, k_service, read_only_ui, flag_enabled, operator_email, authorized):
     monkeypatch.setenv("K_SERVICE", k_service)
     monkeypatch.setenv("CLINIC_READ_ONLY_UI", read_only_ui)
     monkeypatch.setenv("CLINIC_CLOUD_COMDESK_IMPORT_ENABLED", flag_enabled)
-    at = AppTest.from_string(_script(operator_email=operator_email, authorized=authorized, demo=demo))
+    at = AppTest.from_string(_script(operator_email=operator_email, authorized=authorized))
     at.run(timeout=30)
     return at
 
@@ -83,7 +82,7 @@ def _run(monkeypatch, *, k_service, read_only_ui, flag_enabled, demo, operator_e
 def test_panel_entirely_absent_under_read_only_even_on_cloud_run(monkeypatch, _real_operator_identity):
     at = _run(
         monkeypatch, k_service="test-service", read_only_ui="true", flag_enabled="1",
-        demo=False, operator_email="ops@crestix-inc.com", authorized=True,
+        operator_email="ops@crestix-inc.com", authorized=True,
     )
     assert not at.exception
     assert len(at.expander) == 0  # the whole "Comdesk取込（Cloud Run Writer用...）" panel never renders
@@ -92,7 +91,7 @@ def test_panel_entirely_absent_under_read_only_even_on_cloud_run(monkeypatch, _r
 def test_panel_entirely_absent_when_not_a_cloud_run_process(monkeypatch, _real_operator_identity):
     at = _run(
         monkeypatch, k_service="", read_only_ui="false", flag_enabled="1",
-        demo=False, operator_email="ops@crestix-inc.com", authorized=True,
+        operator_email="ops@crestix-inc.com", authorized=True,
     )
     assert not at.exception
     assert len(at.expander) == 0
@@ -101,27 +100,34 @@ def test_panel_entirely_absent_when_not_a_cloud_run_process(monkeypatch, _real_o
 def test_panel_renders_but_shows_flag_disabled_caption_when_flag_unset(monkeypatch, _real_operator_identity):
     at = _run(
         monkeypatch, k_service="test-service", read_only_ui="false", flag_enabled="0",
-        demo=False, operator_email="ops@crestix-inc.com", authorized=True,
+        operator_email="ops@crestix-inc.com", authorized=True,
     )
     assert not at.exception
     assert len(at.expander) == 1
     assert "CLINIC_CLOUD_COMDESK_IMPORT_ENABLED" in at.expander[0].caption[0].value
 
 
-def test_demo_mode_blocks_with_an_info_message(monkeypatch, _real_operator_identity):
+def test_cloud_run_deployment_with_flag_on_is_not_blocked_by_a_demo_argument(monkeypatch, _real_operator_identity):
+    """Review fix: an earlier draft received the caller's write_disabled --
+    always True on Cloud Run -- through a parameter literally named `demo`,
+    gated on `if demo: return`. That permanently blocked this panel even with
+    the flag on, is_cloud_run_deployment() True, and an authorized operator.
+    With that parameter removed, a properly-configured Cloud Run deployment
+    must reach the real gates (operator identity, then the file uploader),
+    not bail out immediately after the flag check."""
     at = _run(
         monkeypatch, k_service="test-service", read_only_ui="false", flag_enabled="1",
-        demo=True, operator_email="ops@crestix-inc.com", authorized=True,
+        operator_email="ops@crestix-inc.com", authorized=True,
     )
     assert not at.exception
-    assert len(at.info) == 1
-    assert "デモ" in at.info[0].value
+    assert len(at.expander) == 1
+    assert len(at.file_uploader) == 1
 
 
 def test_unauthorized_operator_is_rejected_with_a_real_rendered_error(monkeypatch, _real_operator_identity):
     at = _run(
         monkeypatch, k_service="test-service", read_only_ui="false", flag_enabled="1",
-        demo=False, operator_email="stranger@example.com", authorized=False,
+        operator_email="stranger@example.com", authorized=False,
     )
     assert not at.exception
     assert len(at.error) == 1
@@ -132,7 +138,7 @@ def test_unauthorized_operator_is_rejected_with_a_real_rendered_error(monkeypatc
 def test_authorized_operator_reaches_the_file_uploader(monkeypatch, _real_operator_identity):
     at = _run(
         monkeypatch, k_service="test-service", read_only_ui="false", flag_enabled="1",
-        demo=False, operator_email="ops@crestix-inc.com", authorized=True,
+        operator_email="ops@crestix-inc.com", authorized=True,
     )
     assert not at.exception
     assert len(at.error) == 0
