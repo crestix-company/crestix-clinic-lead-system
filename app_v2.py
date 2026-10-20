@@ -4,6 +4,7 @@ from dataclasses import asdict, replace
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import sqlite3
@@ -1294,6 +1295,7 @@ def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", b
             result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
         report_import(result)
     render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)
+    cloud_comdesk_import_ui(store, demo, key_prefix=key_prefix)
 
 
 def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
@@ -1366,6 +1368,76 @@ def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
                 st.success(f"取込完了: 新規 {result['insert']}件、更新 {result['update']}件、変更なし {result['unchanged']}件、HOLD {result['hold']}件")
             except Exception as exc:
                 st.error(f"取込をロールバックしました: {exc}")
+
+
+def cloud_comdesk_import_ui(store, demo, *, key_prefix):
+    """Issue #130 P2-(1): Cloud Run Writer-deployment path for the existing
+    single-file Comdesk import above (import_ui_comdesk_step/import_comdesk).
+
+    Never renders under the current READ ONLY Canary (read_only_ui_mode() is
+    True there) -- this only activates in a hypothetical future, separately-
+    provisioned Cloud Run deployment with CLINIC_READ_ONLY_UI=false, gated by
+    its own default-OFF flag. On Mac/local (CLINIC_READ_ONLY_UI unset, flag
+    unset) this is a no-op, same behavior as before this panel existed.
+
+    Reuses import_comdesk() as-is (same UUID matching, provenance, and
+    import-batch idempotency as the local path) and adds only what a
+    multi-operator Cloud deployment needs beyond that: an identified IAP
+    operator, a read-only preview before any write, and a same-session
+    double-submit guard (src.master.comdesk_cloud_import).
+    """
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.operator_identity import operator_email_from_headers
+    from src.master.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
+
+    if read_only_ui_mode():
+        return
+    with st.expander("Comdesk取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_COMDESK_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_COMDESK_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは上のStep1取込をそのままご利用ください。"
+            )
+            return
+        if demo:
+            st.info("デモ・読み取り専用では利用できません。")
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_email:
+            st.error("IAP認可済みの操作者を確認できないため、取込を無効にしています。")
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption("本番データは書込みません（別承認まで無効）。プレビュー確認後、同一内容の二重送信は1セッション内でブロックします。")
+        upload = st.file_uploader(
+            "Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix + "_cloud_upload",
+        )
+        if not upload:
+            return
+        table = upload_table(upload, key_prefix + "_cloud")
+        mapping = infer_comdesk_columns(table)
+        idempotency_key = comdesk_import_idempotency_key(upload.getvalue(), mapping)
+        applied_key = st.session_state.get(key_prefix + "_cloud_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+            return
+        preview = preview_comdesk_import(table, mapping)
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        display_preview = preview["preview"].copy()
+        display_preview.columns = [f"{i+1}｜{v}" for i, v in enumerate(table.headers)]
+        st.dataframe(display_preview, hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key=key_prefix + "_cloud_submit",
+        ):
+            with st.spinner("Comdeskデータを照合・登録しています…"):
+                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+            st.session_state[key_prefix + "_cloud_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_comdesk_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            report_import(result)
 
 
 def render_comdesk_sync_export(store, demo):
