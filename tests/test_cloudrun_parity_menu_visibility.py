@@ -6,9 +6,14 @@ tests/test_simple_workflow_cleanup.py の
 test_read_only_ui_skips_startup_writes_and_auto_resume と
 tests/test_outreach_read_only_isolation.py の
 test_nav_hides_outreach_pages_when_read_only は、
-"nav_options = NAV[:2] if read_only else NAV" を意図的にピン留めしている
-（Gmail下書き系ボタンを含むページをREAD ONLYでnav自体から隠す、二重ゲートの
-一枚）。本PRはそのピン留めを変更しない。メニュー構成の可視化は、新しい
+"nav_options = NAV[:2] if nav_locked else NAV" を意図的にピン留めしている
+（Gmail下書き系ボタンを含むページをnav自体から隠す、二重ゲートの一枚）。
+元々はread_onlyのみで判定していたが、Issue #130 PR #131のレビューで
+「CLINIC_READ_ONLY_UI=falseのCloud Runデプロイが既存の取込・HP Job・Email・
+設定画面を意図せず全開放してしまう」という指摘を受け、
+nav_locked = read_only or is_cloud_run_deployment() に拡張した
+（app_v2.pyのwrite_disabledコメント参照）。read_only単体がNAV[:2]を
+保証する性質そのものは変わらない。メニュー構成の可視化は、新しい
 st.radio/st.button等の操作可能ウィジェットではなく、静的なst.caption/
 st.expanderのテキストのみで行う。
 """
@@ -39,7 +44,8 @@ def _simple_workflow_read_only_block():
 
 def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
-    assert "nav_options = NAV[:2] if read_only else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
+    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 

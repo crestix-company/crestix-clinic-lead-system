@@ -26,8 +26,15 @@ def _auto_draft_ui_source():
 
 
 def test_nav_hides_outreach_pages_when_read_only():
+    """Issue #130 PR #131 follow-up: nav_locked now also includes
+    is_cloud_run_deployment() (any Cloud Run deployment is nav-locked
+    regardless of CLINIC_READ_ONLY_UI -- see app_v2.py's write_disabled
+    comment), but read_only must still be one of the ORed conditions, so
+    CLINIC_READ_ONLY_UI=true alone still guarantees NAV[:2] exactly as
+    before this change."""
     text = _app_source()
-    assert "nav_options = NAV[:2] if read_only else NAV" in text
+    assert "nav_locked = read_only or is_cloud_run_deployment()" in text
+    assert "nav_options = NAV[:2] if nav_locked else NAV" in text
     nav_start = text.index("NAV = [")
     nav_line = text[nav_start:text.index("]", nav_start) + 1]
     assert "メール送付文章" in nav_line

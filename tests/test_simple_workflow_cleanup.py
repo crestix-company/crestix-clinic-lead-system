@@ -224,9 +224,48 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple_end = source.index("def import_ui_comdesk_step", simple_start)
     simple = source[simple_start:simple_end]
 
-    assert "nav_options = NAV[:2] if read_only else NAV" in main
-    assert "if not read_only and not is_cloud_run_executor():" in main
+    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
+    assert "if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main
-    assert "if not read_only and auto_state.get" in simple
+    assert "not read_only and not is_cloud_run_deployment() and auto_state.get" in simple
     assert "write_disabled = demo or read_only" in simple
     assert "READ ONLY画面確認中" in simple
+
+
+def test_cloud_run_deployment_blocks_human_review_cards_and_email_auto_card():
+    """Issue #130 review point 2: hp_human_review_card/email_human_review_card
+    write via their own write_repositories_for(store) calls from internal
+    button handlers with no is_cloud_run_deployment() awareness at all (they
+    predate the Cloud Run write-path work). A CLINIC_READ_ONLY_UI=false Cloud
+    Run Web deployment must not render them at all -- gated at this one call
+    site, consistent with nav_locked/write_disabled elsewhere in this file."""
+    source = _app_source()
+    simple_start = source.index("def simple_workflow_ui")
+    simple_end = source.index("def import_ui_comdesk_step", simple_start)
+    simple = source[simple_start:simple_end]
+
+    assert "elif is_cloud_run_deployment():" in simple
+    cloud_block_pos = simple.index("elif is_cloud_run_deployment():")
+    cards_pos = simple.index("hp_human_review_card(store)")
+    assert cloud_block_pos < cards_pos
+    # The is_cloud_run_deployment() branch must render instead of the cards,
+    # not alongside them (else/elif, not two independent ifs).
+    between = simple[cloud_block_pos:cards_pos]
+    assert "else:" in between
+    assert "hp_human_review_card(store)" not in between
+
+
+def test_cloud_run_deployment_blocks_human_review_sidebar_and_dialogs_in_main():
+    """Same concern as the card gating above, for main()'s sidebar/dialog
+    equivalents (hp_human_review_sidebar, email_human_review_sidebar,
+    hp_human_review_dialog, email_human_review_dialog) -- these also write
+    via write_repositories_for(store) from their own button handlers."""
+    source = _app_source()
+    main_start = source.index("def main():")
+    main_body = source[main_start:source.index("\ndef ", main_start + 10)]
+    assert "if not read_only and not is_cloud_run_deployment():" in main_body
+    guard_pos = main_body.index("if not read_only and not is_cloud_run_deployment():")
+    sidebar_pos = main_body.index("hp_human_review_sidebar(store)")
+    dialog_pos = main_body.index("hp_human_review_dialog(store)")
+    assert guard_pos < sidebar_pos < dialog_pos
