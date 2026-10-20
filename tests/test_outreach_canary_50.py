@@ -43,7 +43,7 @@ def test_synthetic_canary_50_passes_all_checks():
     emails = {r["id"]: f"clinic{r['id']}@example.jp" for r in recs if r["id"] % 7}
     sel = select_targets(recs, email_lookup=lambda ids: emails, links=links)
     assert len(sel.targets) == 50 and sel.skipped_no_uuid == 0
-    settings = GenerationSettings(staff="前田", dates=five_weekdays(date(2026, 10, 19)),
+    settings = GenerationSettings(as_of=date(2026, 10, 19), staff="前田", dates=five_weekdays(date(2026, 10, 19)),
                                   called_uuids=frozenset(t.clinic_uuid for t in sel.targets[::4]))
     results = generate_batch(sel.targets, ARTICLES, settings)
     report = audit(results, master_urls={a.url for a in ARTICLES},
@@ -58,7 +58,7 @@ def test_canary_audit_detects_fabricated_url_and_false_phone_claim():
     recs = records()[:1]
     sel = select_targets(recs, email_lookup=lambda ids: {1: "a@example.jp"},
                          links=[ArticleLink(recs[0]["uuid"], "NOT_LISTED", "", "", "", "1", "", True)])
-    settings = GenerationSettings(staff="前田", dates=five_weekdays(date(2026, 10, 19)))
+    settings = GenerationSettings(as_of=date(2026, 10, 19), staff="前田", dates=five_weekdays(date(2026, 10, 19)))
     good = generate_batch(sel.targets, ARTICLES, settings)[0]
     forged = OutreachResult(**{**good.__dict__, "body": good.body.replace(
         good.first.article.url, "https://clinic.mynavi.jp/article/fake/") + "\n本日お電話しました"})
