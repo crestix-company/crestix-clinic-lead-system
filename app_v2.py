@@ -1057,6 +1057,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
                 f"エラー {result.get('ERROR',0):,}件"
             )
             st.rerun()
+    # Independent, separately-gated Cloud Run Writer panel -- see
+    # cloud_maps_import_ui()'s own docstring. Must render regardless of
+    # whether the legacy uploader above has a file selected, same lesson as
+    # cloud_comdesk_import_ui() (Issue #130 PR #131 review fix).
+    cloud_maps_import_ui(store, key_prefix="simple_maps")
 
     st.subheader("Step5：HP・Email自動調査")
     if getattr(store, "is_supabase_runtime", False):
@@ -1520,6 +1525,126 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
                 operator_email, idempotency_key, result,
             )
             report_import(result)
+
+
+def cloud_maps_import_ui(store, *, key_prefix):
+    """Issue #130: Cloud Run Writer-deployment path for the existing Google
+    Maps collection-result import above (import_maps_results()). Mirrors
+    cloud_comdesk_import_ui() exactly for every gate (read_only/is_cloud_run_
+    deployment entry guard, default-OFF flag, IAP-identified AND separately-
+    authorized operator, dedicated fail-closed Writer connection, same-
+    session double-submit guard, audit logging) -- see that function's
+    docstring for the full reasoning, not repeated here. Takes no demo/
+    write_disabled parameter for the same reason: this panel's own gates
+    below are its complete, independent gate (Issue #130 PR #131 follow-up
+    review lesson, applied here from the start).
+
+    Reuses import_maps_results() business logic as-is on the dedicated
+    Google Maps import writer connection (src.cloud_run.maps_import_writer),
+    never the general write backend. Preview goes one step further than the
+    Comdesk/厚生局 cloud panels' KNOWN GAP: the Google Maps matcher
+    (SupabaseProvenanceWriteRepository._prefetch_maps_targets /
+    _find_target_prefetched) is already Postgres-native, so
+    src.master.maps_cloud_import.preview_maps_import() runs the exact same
+    matching logic read-only (SELECT-only, always rolled back) to classify
+    rows into NEW/MATCHED/AMBIGUOUS/EXCLUDED/ERROR before any write -- a
+    real matching-outcome preview, not just row/column counts. It is still
+    labeled an estimate, not the confirmed result, because a concurrent
+    write between preview and apply can change which clinics match; only
+    import_maps_results()'s own return value after the real write is final.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.maps_import_writer import (
+        MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("Google Maps結果取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_MAPS_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_MAPS_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは上のStep4取込をそのままご利用ください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Google Maps取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビューは照合ロジックによる推定であり確定結果ではありません。"
+            "確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします（詳細はコード内コメント参照）。"
+        )
+        upload = st.file_uploader(
+            "Google Maps収集結果CSV", type=["csv"], key=key_prefix + "_cloud_maps_upload",
+        )
+        if not upload:
+            return
+        file_bytes = upload.getvalue()
+        idempotency_key = maps_import_idempotency_key(file_bytes)
+        applied_key = st.session_state.get(key_prefix + "_cloud_maps_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
+            return
+        maps_table = load_table(file_bytes, upload.name)
+        maps_frame = maps_table.data.copy()
+        maps_frame.columns = maps_table.headers
+        try:
+            writer_repositories = maps_import_writer_repositories()
+        except MapsImportWriterNotConfiguredError as exc:
+            st.error(str(exc))
+            return
+        try:
+            with st.spinner("既存データと照合してプレビューを作成しています…"):
+                preview = preview_maps_import(writer_repositories.provenance, maps_frame)
+        except ValueError as exc:
+            st.error(f"CSVの形式を確認してください: {exc}")
+            return
+        counts = preview["counts"]
+        st.caption("以下は照合ロジックによる推定です。確定結果は取込実行後に表示されます。")
+        metrics = st.columns(5)
+        metrics[0].metric("新規（推定）", f"{counts['NEW']:,}件")
+        metrics[1].metric("既存一致（推定）", f"{counts['MATCHED']:,}件")
+        metrics[2].metric("曖昧一致（推定・HOLD）", f"{counts['AMBIGUOUS']:,}件")
+        metrics[3].metric("除外（推定）", f"{counts['EXCLUDED']:,}件")
+        metrics[4].metric("エラー（推定）", f"{counts['ERROR']:,}件")
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.dataframe(preview["preview"], hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_maps_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key=key_prefix + "_cloud_maps_submit",
+        ):
+            try:
+                writer_repositories = maps_import_writer_repositories()
+            except MapsImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            with st.spinner("Google Maps結果を取り込んでいます…"):
+                result = writer_repositories.provenance.import_maps_results(maps_frame)
+            st.session_state[key_prefix + "_cloud_maps_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_maps_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            if result.get("already_imported"):
+                st.info("このGoogle Maps結果は取込済みです。重複登録していません。")
+            st.success(
+                f"取込 {result.get('TOTAL',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／"
+                f"HPなし {result.get('NO_WEBSITE',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／"
+                f"エラー {result.get('ERROR',0):,}件"
+            )
 
 
 def render_comdesk_sync_export(store, demo):
