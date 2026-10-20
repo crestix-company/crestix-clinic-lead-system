@@ -36,3 +36,13 @@ jobs:
 
       - name: Run pytest
         run: python -m pytest -q
+
+      - name: Build Cloud Run images
+        run: |
+          docker build --file Dockerfile.cloudrun --tag clinic-cloudrun:ci .
+          if [ -f Dockerfile.cloudrun.worker ]; then
+            docker build --file Dockerfile.cloudrun.worker --tag clinic-hp-worker:ci .
+          fi
+          if [ -f Dockerfile.cloudrun.email-worker ]; then
+            docker build --file Dockerfile.cloudrun.email-worker --tag clinic-email-worker:ci .
+          fi

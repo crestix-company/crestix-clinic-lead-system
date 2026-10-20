@@ -91,9 +91,13 @@ def test_never_calls_any_browser_automation_or_external_maps_api():
 
 def test_task_completion_requires_clinic_overlap_before_import_is_even_attempted():
     block = _admin_ui_source()
-    overlap_pos = block.index("overlap = uploaded_clinic_ids & set(selected_task[\"clinic_ids\"])")
+    task_ids_pos = block.index("task_clinic_ids = set(selected_task[\"clinic_ids\"])")
+    overlap_pos = block.index("overlap = uploaded_clinic_ids & task_clinic_ids")
+    membership_guard_pos = block.index("if not uploaded_clinic_ids or not uploaded_clinic_ids <= task_clinic_ids:")
     writer_pos = block.index("import_writer_repositories = maps_import_writer_repositories()")
-    assert overlap_pos < writer_pos
+    assert task_ids_pos < overlap_pos < membership_guard_pos < writer_pos
+    assert "not uploaded_clinic_ids" in block[membership_guard_pos:writer_pos]
+    assert "not uploaded_clinic_ids <= task_clinic_ids" in block[membership_guard_pos:writer_pos]
 
 
 def test_wired_into_step3_of_simple_workflow_ui():

@@ -32,12 +32,12 @@ FAILED = "FAILED"
 COMPLETED = "COMPLETED"
 
 TASK_STATUSES = (PENDING, ASSIGNED, ON_HOLD, FAILED, COMPLETED)
-# Tasks whose clinic_ids are still "claimed" -- a new task must not be
-# created covering any of these, since either collection work is still
-# outstanding (PENDING/ASSIGNED/ON_HOLD) or already succeeded (COMPLETED).
-# FAILED is deliberately excluded: a task that was explicitly given up on
-# frees its clinics so a fresh task can cover them again later.
-COVERING_STATUSES = frozenset({PENDING, ASSIGNED, ON_HOLD, COMPLETED})
+# All task states retain their clinic IDs. FAILED tasks can be retried only by
+# releasing and reassigning that same task; creating a second task for those
+# clinics before that transition would permit simultaneous collection if the
+# failed task were later resumed. COMPLETED remains covered to prevent a
+# second collection of the same clinics.
+COVERING_STATUSES = frozenset(TASK_STATUSES)
 # Tasks that occupy a PC slot -- a PC can only have one of these at a time.
 PC_SLOT_ACTIVE_STATUSES = frozenset({ASSIGNED, ON_HOLD})
 PC_SLOTS = ("PC1", "PC2", "PC3")
@@ -75,10 +75,9 @@ def pc_slot_active_task(tasks, pc_slot):
 
 def create_task(tasks, prefecture, clinic_ids, *, timestamp):
     """Returns a new task dict (PENDING, unassigned). Raises TaskTransitionError
-    if any clinic_id is already covered by an active or completed task --
-    this is the primary double-collection guard (Issue #130 point 8): a
-    clinic can never be part of two simultaneously-live (or one live and one
-    already-completed) collection tasks."""
+    if any clinic_id is already covered by another task (including FAILED,
+    which must be resumed through release_task()) -- this is the primary
+    double-collection guard (Issue #130 point 8)."""
     clinic_ids = sorted({int(cid) for cid in clinic_ids})
     if not clinic_ids:
         raise TaskTransitionError("対象医院が0件のタスクは作成できません。")
@@ -147,8 +146,9 @@ def resume_task(tasks, task_id):
 
 def fail_task(tasks, task_id, note, *, timestamp):
     """ASSIGNED/ON_HOLD -> FAILED. Marks the attempt given up on; the task's
-    clinic_ids are NOT freed by this alone -- call release_task afterward to
-    let a new task cover them again."""
+    clinic_ids remain covered by this task. Use release_task() to return this
+    same task to PENDING for a controlled reassignment; never create a second
+    task to retry these clinics."""
     task = _find(tasks, task_id)
     if task["status"] not in (ASSIGNED, ON_HOLD):
         raise TaskTransitionError(f"ASSIGNED/ON_HOLD状態のタスクのみ失敗にできます（現在: {task['status']}）。")
@@ -163,7 +163,9 @@ def release_task(tasks, task_id, *, timestamp):
     timestamp. This is the reassignment/interrupted-processing path (Issue
     #130 point 3/8): the same clinic_ids remain on the same task (so the
     clinics are NOT double-counted as "new" work), but the task becomes
-    assignable to any PC slot again, including a different one than before."""
+    assignable to any PC slot again, including a different one than before.
+    A failed task keeps its clinics covered until this explicit transition;
+    callers must never create a fresh task to retry those clinics."""
     task = _find(tasks, task_id)
     if task["status"] not in (ON_HOLD, FAILED):
         raise TaskTransitionError(f"ON_HOLD/FAILED状態のタスクのみ再割当てのため解放できます（現在: {task['status']}）。")

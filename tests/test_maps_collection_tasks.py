@@ -47,15 +47,14 @@ def test_create_task_rejects_overlap_with_completed_task():
         create_task([completed], "東京都", [2, 5], timestamp="t1")
 
 
-def test_create_task_allows_reusing_clinics_from_a_failed_task():
-    """Issue #130 point 8: a FAILED attempt frees its clinics for a new task --
-    this is the intended re-attempt path, not a double-collection bug."""
+def test_create_task_rejects_overlap_with_failed_task():
+    """Failed clinics stay covered; retry must reuse the failed task."""
     failed = _make_task(status=FAILED, clinic_ids=[1, 2])
-    task = create_task([failed], "東京都", [1, 2], timestamp="t1")
-    assert task["clinic_ids"] == [1, 2]
+    with pytest.raises(TaskTransitionError):
+        create_task([failed], "東京都", [1, 2], timestamp="t1")
 
 
-def test_covered_clinic_ids_excludes_failed_by_default():
+def test_covered_clinic_ids_includes_failed_by_default():
     tasks = [
         _make_task(status=PENDING, clinic_ids=[1]),
         _make_task(status=ASSIGNED, clinic_ids=[2]),
@@ -63,7 +62,19 @@ def test_covered_clinic_ids_excludes_failed_by_default():
         _make_task(status=COMPLETED, clinic_ids=[4]),
         _make_task(status=FAILED, clinic_ids=[5]),
     ]
-    assert covered_clinic_ids(tasks) == {1, 2, 3, 4}
+    assert covered_clinic_ids(tasks) == {1, 2, 3, 4, 5}
+
+
+def test_failed_task_retry_reuses_same_covered_clinic_ids_after_release():
+    failed = _make_task(status=FAILED, clinic_ids=[1, 2])
+    with pytest.raises(TaskTransitionError):
+        create_task([failed], "東京都", [1, 2], timestamp="t1")
+    released = release_task([failed], failed["id"], timestamp="t2")
+    assert covered_clinic_ids(released) == {1, 2}
+    assert released[0]["id"] == failed["id"]
+    assert released[0]["status"] == PENDING
+    with pytest.raises(TaskTransitionError):
+        create_task(released, "東京都", [1, 2], timestamp="t3")
 
 
 def test_assign_task_moves_pending_to_assigned_with_pc_slot():

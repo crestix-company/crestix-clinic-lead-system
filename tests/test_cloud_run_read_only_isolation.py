@@ -22,6 +22,13 @@ def _simple_workflow_ui_source():
     return source[start:end]
 
 
+def _single_hp_job_recovery_source():
+    source = _app_source()
+    start = source.index("def single_hp_job_recovery_ui")
+    end = source.index("def advanced_ui", start)
+    return source[start:end]
+
+
 def test_hp_start_button_disabled_includes_write_disabled():
     simple = _simple_workflow_ui_source()
     start_button = simple.index('key="simple_start"')
@@ -44,24 +51,24 @@ def test_cloud_run_dispatch_branch_is_nested_inside_the_start_button_block():
 
 
 def test_pause_button_disabled_includes_write_disabled_and_routes_cloud_run_pause():
-    simple = _simple_workflow_ui_source()
-    pause_button = simple.index('key="simple_pause"')
-    can_pause_start = simple.rindex("can_pause = ", 0, pause_button)
-    can_pause_block = simple[can_pause_start:pause_button]
+    admin = _single_hp_job_recovery_source()
+    pause_button = admin.index('key="advanced_single_hp_pause"')
+    can_pause_start = admin.rindex("can_pause = ", 0, pause_button)
+    can_pause_block = admin[can_pause_start:pause_button]
     assert "write_disabled" in can_pause_block
-    next_button = simple.index("controls[1].button(", pause_button)
-    block = simple[pause_button:next_button]
+    next_button = admin.index("controls[1].button(", pause_button)
+    block = admin[pause_button:next_button]
     assert "_pause_cloud_hp_job(" in block
 
 
 def test_resume_button_disabled_includes_write_disabled_and_routes_cloud_run_dispatch():
-    simple = _simple_workflow_ui_source()
-    resume_button = simple.index('key="simple_resume"')
-    can_resume_start = simple.rindex("can_resume = (", 0, resume_button)
-    can_resume_block = simple[can_resume_start:resume_button]
+    admin = _single_hp_job_recovery_source()
+    resume_button = admin.index('key="advanced_single_hp_resume"')
+    can_resume_start = admin.rindex("can_resume = (", 0, resume_button)
+    can_resume_block = admin[can_resume_start:resume_button]
     assert "write_disabled" in can_resume_block
-    next_section = simple.index("can_reset = ", resume_button)
-    block = simple[resume_button:next_section]
+    next_section = admin.index("can_reset = ", resume_button)
+    block = admin[resume_button:next_section]
     assert "_dispatch_cloud_hp_job(" in block
 
 
