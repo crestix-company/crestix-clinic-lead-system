@@ -1067,6 +1067,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             st.rerun()
 
     st.subheader("Step2：厚生局データを取り込む")
+    cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
 
@@ -1495,6 +1496,110 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
             st.session_state[key_prefix + "_cloud_applied_key"] = idempotency_key
             logging.info(
                 "cloud_comdesk_import operator=%s idempotency_key=%s result=%s",
+                operator_email, idempotency_key, result,
+            )
+            report_import(result)
+
+
+def cloud_kouseikyoku_import_ui(store):
+    """Issue #130 P2-(1-c): Cloud Run Writer-deployment path for 厚生局 master
+    import. Mirrors cloud_comdesk_import_ui() exactly -- see that function's
+    docstring for the full reasoning behind every gate here, not repeated.
+
+    The LOCAL "①-c 厚生局CSV取込" capability actually lives in two places:
+    the bundled-file one-click import ("東京都マスターを取り込む", reads
+    data/master/tokyo_current.csv -- NOT shipped into the Cloud Run image
+    per Dockerfile.cloudrun's COPY list, so that specific bundled-file path
+    has no Cloud equivalent and none is built here) and the general
+    user-upload path inside import_ui() (詳細設定 -> マスター管理, "2. 厚生局
+    データを統合する", load_master()+import_master()). This panel reuses the
+    LATTER's business logic. import_ui() itself is now structurally
+    unreachable on Cloud Run anyway (詳細設定 is nav-locked out), so this is
+    the only way to reach that capability on a future Writer deployment.
+
+    Deliberately takes no demo/write_disabled parameter, for the same reason
+    as cloud_comdesk_import_ui() (Issue #130 PR #131 follow-up review):
+    this panel's own is_cloud_run_deployment()/flag/operator checks below are
+    its complete, independent gate. An earlier draft of the sibling Comdesk
+    panel received the caller's write_disabled -- always True on Cloud Run --
+    through a parameter named `demo` and returned early whenever it was
+    truthy, permanently blocking that panel. This function originally
+    received the caller's real demo flag correctly (its call site never
+    passed write_disabled), so it was not actually broken the same way, but
+    the parameter is removed anyway to keep both panels structurally
+    identical and immune to the same mistake if the call site ever changes.
+    """
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    from src.cloud_run.feature_flags import cloud_write_feature_enabled
+    from src.cloud_run.kouseikyoku_import_writer import (
+        KouseikyokuImportWriterNotConfiguredError, kouseikyoku_import_writer_repositories,
+    )
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
+    from src.master.kouseikyoku_cloud_import import kouseikyoku_import_idempotency_key, preview_kouseikyoku_import
+
+    if read_only_ui_mode() or not is_cloud_run_deployment():
+        return
+    with st.expander("厚生局データ取込（Cloud Run Writer用・既定無効）", expanded=False):
+        if not cloud_write_feature_enabled("CLINIC_CLOUD_KOUSEIKYOKU_IMPORT_ENABLED"):
+            st.caption(
+                "CLINIC_CLOUD_KOUSEIKYOKU_IMPORT_ENABLED=1 が未設定のため無効です。"
+                "Mac通常モードでは詳細設定のマスター管理をそのままご利用ください。"
+            )
+            return
+        operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、厚生局取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
+            return
+        st.caption(f"操作者：{operator_email}")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビュー確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします。"
+        )
+        upload = st.file_uploader(
+            "厚生局CSV・Excel", type=["csv", "xlsx", "xls"], key="cloud_kouseikyoku_upload",
+        )
+        if not upload:
+            return
+        mode_label = st.selectbox(
+            "データ形式", ["標準CSV/Excel", "関東信越厚生局の帳票Excel"], key="cloud_kouseikyoku_mode",
+        )
+        mode = "kanto_excel" if "帳票" in mode_label else "standard"
+        prefecture = st.text_input("都道府県（帳票Excel用）", "東京都", key="cloud_kouseikyoku_pref")
+        names = sheet_names(upload.getvalue(), upload.name)
+        sheet = st.selectbox("厚生局シート", names, key="cloud_kouseikyoku_sheet") if names else None
+        idempotency_key = kouseikyoku_import_idempotency_key(
+            upload.getvalue(), mode=mode, prefecture=prefecture, sheet=sheet,
+        )
+        applied_key = st.session_state.get("cloud_kouseikyoku_applied_key")
+        if applied_key == idempotency_key:
+            st.success("この内容は既にこのセッションで取り込み済みです。別のファイル・設定を選択してください。")
+            return
+        frame = load_master(upload.getvalue(), upload.name, mode, prefecture, sheet)
+        preview = preview_kouseikyoku_import(frame)
+        st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.caption("新規・更新・重複の内訳は未実装です（Postgres対応の照合プレビューは別途実装予定）。")
+        st.dataframe(preview["preview"], hide_index=True)
+        confirmed = st.checkbox("内容を確認しました", key="cloud_kouseikyoku_confirm_" + idempotency_key)
+        if st.button(
+            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            key="cloud_kouseikyoku_submit",
+        ):
+            try:
+                writer_repositories = kouseikyoku_import_writer_repositories()
+            except KouseikyokuImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
+            with st.spinner("厚生局データを統合しています…"):
+                result = writer_repositories.clinics.import_master(frame)
+            st.session_state["cloud_kouseikyoku_applied_key"] = idempotency_key
+            logging.info(
+                "cloud_kouseikyoku_import operator=%s idempotency_key=%s result=%s",
                 operator_email, idempotency_key, result,
             )
             report_import(result)
