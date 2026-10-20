@@ -212,6 +212,50 @@ with st.expander("Phase J｜隔離ローカルDB 営業履歴", expanded=True):
         st.markdown("**HOLD原票（元タブ・元行保持）**")
         st.dataframe(pd.DataFrame(local_db["holds"]).fillna("").astype(str), width="stretch", hide_index=True)
 
+with st.expander("GAS連携｜10件ローカルテスト（LOCAL MOCK ONLY）", expanded=True):
+    st.warning("テストモードです。GAS・Sheets・Gmail・Supabase・Cloud Runには接続せず、Gmail送信や実下書き作成もしません。")
+    st.caption("Phase Jのローカルスナップショットを最大6件読み、キャンペーンID不足はHOLDします。残りは合成fixtureとして明示し、ローカルMockで照合します。")
+    if st.button("10件テストを実行（GAS/Gmail Mock）", key="local_gas_validation_run"):
+        try:
+            from src.outreach.local_gas_validation import run_local_gas_validation
+            st.session_state["local_gas_validation_result"] = run_local_gas_validation()
+        except Exception as exc:
+            st.session_state["local_gas_validation_error"] = type(exc).__name__
+            st.session_state.pop("local_gas_validation_result", None)
+    validation = st.session_state.get("local_gas_validation_result")
+    if validation:
+        st.caption(f"Run ID: {validation['run_id']} / 対象 {validation['count']}件 / 2回実行してDB upsert・Mock重複を確認")
+        result_cols = st.columns(3)
+        result_cols[0].metric("MATCHED", validation["matched"])
+        result_cols[1].metric("HOLD", validation["hold"])
+        result_cols[2].metric("ERROR", validation["error"])
+        st.write(f"再実行時のID・判定一致: {'PASS' if validation['repeat_idempotent'] else 'FAIL'} / GAS Mock ALREADY_REGISTERED {validation['already_registered']}件")
+        validation_rows = validation["rows"]
+    elif st.session_state.get("local_gas_validation_error"):
+        st.error(f"ローカルテストを完了できませんでした（{st.session_state['local_gas_validation_error']}）。既存DB・外部接続は変更していません。")
+        validation_rows = []
+    else:
+        try:
+            from src.outreach.local_gas_validation import load_local_gas_validation_results
+            validation_rows = load_local_gas_validation_results()
+        except Exception:
+            validation_rows = []
+    if validation_rows:
+        st.dataframe(pd.DataFrame([{
+            "データ種別": "実スナップショット" if row["source_kind"] == "LOCAL_SNAPSHOT" else "合成fixture",
+            "GAS案件ID": row["gas_case_id"], "Clinic ID": row["clinic_id"],
+            "Clinic UUID": row["clinic_uuid"], "Campaign ID": row["campaign_id"],
+            "判定": row["result_status"], "GAS Mock": row.get("gas_result_status", ""),
+            "Mock Draft ID": row.get("mock_draft_id", ""), "HOLD/ERROR理由": row["reason"],
+        } for row in validation_rows]).fillna("").astype(str), width="stretch", hide_index=True)
+        previews = [row["draft_preview"] for row in validation_rows if row.get("draft_preview")]
+        if previews:
+            st.markdown("**Gmail下書きプレビュー（合成fixture / 未送信）**")
+            for preview in previews:
+                st.caption(preview["mode"])
+                st.write(f"宛先: {preview['to']} / 件名: {preview['subject']}")
+                st.code(preview["body"], language="text")
+
 # Phase H: classify review rows without merging separate campaign histories.
 case_review_source = []
 for idx, row in enumerate(main_rows):
