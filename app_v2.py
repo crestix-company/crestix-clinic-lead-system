@@ -977,9 +977,18 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         with_uuid = store.count_read_only_ui(replace(filters, uuid_mode="あり"))
         st.subheader("現在の医院データ")
         columns = st.columns(2)
-        columns[0].metric("医院マスター（営業対象外施設を除く）", f"{total:,}件")
-        columns[1].metric("既存UUIDあり", f"{with_uuid:,}件")
+        columns[0].metric(
+            "医院マスター（営業対象外施設を除く）", f"{total:,}件",
+            help="病院・センター等の営業対象外施設を除いた、現在の絞り込み条件（フィルタなし）での母集団です。DB全体の行数とは分母が異なります。",
+        )
+        columns[1].metric(
+            "既存UUIDあり", f"{with_uuid:,}件",
+            help="左の母集団のうちUUIDが紐付いている件数です。「既存営業リスト」（全国展開前のレガシーコホート）とは別の定義・別の件数です。",
+        )
         show_web_research_metrics(store, read_only=True)
+        with st.expander("ローカル版の処理順序（参考・READ ONLYでは操作不可）", expanded=False):
+            st.caption("①データ準備（Comdesk・厚生局取込） → ②Google Maps収集・取込 → ③HP・Email自動調査 → ④営業対象検索・Comdesk出力")
+            st.caption("①〜③はデータ更新を伴うため、READ ONLY版では状態の表示のみで操作ボタンは提供していません。④は「営業対象・出力」メニューから閲覧・検索・CSV/Excel出力のみ利用できます。")
         st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
         return
 
@@ -1793,6 +1802,13 @@ def main():
         nav = st.radio("メニュー", nav_options, key="navigation")
         if read_only:
             demo = False
+            with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
+                st.caption("ローカル版は以下の5メニューを順に使います。READ ONLY版では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
+                for name in NAV:
+                    if name in nav_options:
+                        st.caption(f"✅ {name}：READ ONLYで利用可能")
+                    else:
+                        st.caption(f"🔒 {name}：未有効・別権限が必要（データ更新/送信を含むため非表示）")
         else:
             with st.expander("開発・確認用", expanded=False):
                 demo = st.toggle("サンプルモード", key="sample_mode")
