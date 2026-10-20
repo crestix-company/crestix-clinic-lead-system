@@ -126,7 +126,7 @@ def store_for(path=None, runtime_config_key=None):
     return store
 
 
-def show_web_research_metrics(store, *, read_only=False):
+def show_web_research_metrics(store, *, read_only=False, compact=False):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
         if hasattr(store, "web_research_metrics"):
@@ -141,18 +141,56 @@ def show_web_research_metrics(store, *, read_only=False):
     if counts is None:
         st.warning("HP research batch sidecarがないため、Webサイト調査状況を表示できません。")
         return
-    definitions = [
-        ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
-        ("Webサイト調査完了", "researched", "公式HPの内容確認まで完了したクリニック数です。"),
-        ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
-        ("Webサイト未調査", "not_researched", "非アクティブ医院も含む、WebサイトURL登録済み・自動調査未完了の参考件数です。Step 4の「HP調査可能・未調査」とは分母が異なります。"),
-        ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
-        ("治療カテゴリ検出なし", "treatment_not_detected", "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
+    if not compact:
+        definitions = [
+            ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
+            ("Webサイト調査完了", "researched", "公式HPの内容確認まで完了したクリニック数です。"),
+            ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
+            ("Webサイト未調査", "not_researched", "非アクティブ医院も含む、WebサイトURL登録済み・自動調査未完了の参考件数です。Step 4の「HP調査可能・未調査」とは分母が異なります。"),
+            ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
+            ("治療カテゴリ検出なし", "treatment_not_detected", "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
+        ]
+        for start in range(0, len(definitions), 3):
+            columns = st.columns(3)
+            for column, (label, key, help_text) in zip(columns, definitions[start:start + 3]):
+                column.metric(label, f"{counts[key]:,}件", help=help_text)
+        return
+    primary = [
+        ("WebサイトURL取得済み", "url_acquired", "医院データにHP URLまたはMaps WebサイトURLが登録されています。"),
+        ("Webサイト調査完了", "researched", "fetch_status=OK。取得と公式HPの検証が完了した件数です。"),
+        ("厚生局全件", None, "厚生局から取り込んだ元レコード数です。ユニーク医院数とは限りません。"),
+        ("既存UUIDあり", None, "現在の医院マスターでComdesk UUIDが登録されている医院数です。"),
     ]
-    for start in range(0, len(definitions), 3):
-        columns = st.columns(3)
-        for column, (label, key, help_text) in zip(columns, definitions[start:start + 3]):
-            column.metric(label, f"{counts[key]:,}件", help=help_text)
+    metrics = store.metrics() if compact else {}
+    columns = st.columns(4)
+    for column, (label, key, help_text) in zip(columns, primary):
+        value = counts[key] if key else metrics.get("厚生局取込レコード" if label == "厚生局全件" else "既存UUIDあり", 0)
+        with column.container(border=True):
+            st.metric(label, f"{value:,}件", help=help_text)
+    details = [
+        ("URL取得済み", "url_acquired"), ("調査完了", "researched"),
+        ("取得・解析失敗", "failed"), ("URLあり・未調査", "not_researched"),
+        ("治療カテゴリ検出あり", "treatment_detected"),
+        ("治療カテゴリ検出なし", "treatment_not_detected"),
+    ]
+    if compact:
+        with st.expander("現在のデータ状況：集計定義と補助指標", expanded=False):
+            st.caption("HP指標の母集団はHP URLまたはMaps URL登録済みの医院です。厚生局全件は取込元レコード数、UUIDは医院マスター数で、それぞれ別の母集団です。")
+            columns = st.columns(3)
+            for column, (label, key) in zip(columns, details):
+                column.metric(label, f"{counts[key]:,}件")
+            quality_done = treatment_quality_completed_count(counts)
+            st.metric(
+                "治療カテゴリ判定完了", f"{quality_done:,}件",
+                help="fetch_status=OKのうち、検出あり・検出なしのどちらかに分類できた医院数です。",
+            )
+            st.caption("治療カテゴリの判定完了は検出あり＋検出なしで算出します。診療科目そのものの品質確認状態は既存集計に独立した状態列がなく、別件数にはできません。")
+            show_email_research_metrics(store)
+    else:
+        for start in range(0, len(details), 3):
+            columns = st.columns(3)
+            for column, (label, key) in zip(columns, details[start:start + 3]):
+                column.metric(label, f"{counts[key]:,}件")
 
 
 def show_email_research_metrics(store):
@@ -189,6 +227,11 @@ def show_email_research_metrics(store):
 
 AUTO_HP_PROGRESS_REFRESH_SECONDS = 5
 AUTO_HP_ACTIVE_STATUSES = {"RUNNING", "WAITING_NETWORK"}
+
+
+def treatment_quality_completed_count(web_counts):
+    """Count existing treatment-category classifications, including no-match results."""
+    return int(web_counts["treatment_detected"]) + int(web_counts["treatment_not_detected"])
 
 
 def _auto_hp_progress_snapshot(store, auto_repo):
@@ -286,31 +329,27 @@ def _render_auto_hp_progress(snapshot, *, live=False):
         min(1.0, max(0.0, processed / current_scope_total)) if current_scope_total else 0.0
     )
     overall_pct = overall_ratio * 100
-    st.progress(
-        overall_ratio,
-        text=f"全体進捗：{processed:,} / {current_scope_total:,}件（{overall_pct:.1f}%）",
-    )
-
     current_total = snapshot["current_total"]
     current_done = snapshot["current_done"]
     if current_total:
         batch_ratio = min(1.0, max(0.0, current_done / current_total))
         batch_pct = batch_ratio * 100
-        st.progress(
-            batch_ratio,
-            text=(
-                f"現在Batch：{current_done:,} / {current_total:,}件（{batch_pct:.1f}%）"
-                f"／処理中 {snapshot['current_running']:,}件"
-            ),
-        )
-
-    metrics_cols = st.columns(4)
-    metrics_cols[0].metric("開始時対象", f"{initial_count:,}件")
-    metrics_cols[1].metric("処理済み", f"{processed:,}件")
-    metrics_cols[2].metric("現在残り候補", f"{total_remaining:,}件")
-    metrics_cols[3].metric(
-        "Batch",
-        f"{int(state.get('current_batch', 0) or 0)} / 現在推定{snapshot['estimated_total']}",
+    result = snapshot["cumulative"]
+    metrics_cols = st.columns(6)
+    headline_metrics = [
+        ("開始時対象", f"{initial_count:,}件"),
+        ("処理済み", f"{processed:,}件"),
+        ("現在残り候補", f"{total_remaining:,}件"),
+        ("HP取得成功", f"{result.get('SUCCESS', 0):,}件"),
+        ("要確認", f"{result.get('REVIEW', 0):,}件"),
+        ("エラー", f"{result.get('ERROR', 0):,}件"),
+    ]
+    for column, (label, value) in zip(metrics_cols, headline_metrics):
+        with column.container(border=True):
+            st.metric(label, value)
+    st.caption(
+        f"全体進捗 {processed:,}/{current_scope_total:,}件（{overall_pct:.1f}%）"
+        + (f"／現在Batch {current_done:,}/{current_total:,}件（{batch_pct:.1f}%、処理中 {snapshot['current_running']:,}件）" if current_total else "")
     )
 
     current = snapshot["current"]
@@ -323,14 +362,14 @@ def _render_auto_hp_progress(snapshot, *, live=False):
         )
 
     cumulative = snapshot["cumulative"]
-    result_cols = st.columns(4)
-    result_cols[0].metric("成功", f"{cumulative.get('SUCCESS', 0):,}件")
-    result_cols[1].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件")
-    result_cols[2].metric("要確認", f"{cumulative.get('REVIEW', 0):,}件")
-    result_cols[3].metric("エラー", f"{cumulative.get('ERROR', 0):,}件")
-
     future_remaining = snapshot.get("future_remaining", 0)
-    st.caption(f"参考：次Batch以降の現在候補 {future_remaining:,}件")
+    with st.expander("進捗の補足（未発見・Batch・Runの定義）", expanded=False):
+        detail_cols = st.columns(4)
+        detail_cols[0].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件", help="候補URLを発見できなかった結果です。エラーには含めません。")
+        detail_cols[1].metric("現在Batch", f"{current_done:,}/{current_total:,}件")
+        detail_cols[2].metric("Batch番号", f"{int(state.get('current_batch', 0) or 0)} / 推定{snapshot['estimated_total']}")
+        detail_cols[3].metric("次Batch以降の候補", f"{future_remaining:,}件")
+        st.caption("HP取得成功はこのRunのDONE結果のうち公式HP URL取得・検証が通った件数です。診療科目・治療カテゴリの品質判定数とは区別し、治療カテゴリ判定完了は現在の全体集計に表示します。")
 
     network = "WAITING" if state.get("status") == "WAITING_NETWORK" else "ONLINE"
     updated = snapshot.get("last_updated") or "未取得"
@@ -1002,11 +1041,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     import_ui_comdesk_step(store, write_disabled)
 
     st.subheader("現在のデータ状況")
-    cols = st.columns(2)
-    cols[0].metric("厚生局データ", f"{metrics.get('厚生局取込レコード',0):,}件")
-    cols[1].metric("既存UUIDあり", f"{metrics.get('既存UUIDあり',0):,}件", help="既存Comdeskデータと紐付いている医院数です。")
-    show_web_research_metrics(store)
-    show_email_research_metrics(store)
+    show_web_research_metrics(store, compact=True)
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
@@ -1107,15 +1142,6 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     single_jobs = [job for job in hp_jobs if not is_auto_child(job)]
     current = job_status(store, single_jobs[0]["id"]) if single_jobs else None
     unfinished = bool(current and current["status"] in {"RUNNING", "PAUSED", "BUDGET"})
-    remaining = 0
-    if unfinished:
-        remaining = current["counts"].get("PENDING", 0) + current["counts"].get("RUNNING", 0)
-        st.info(
-            f"未完了のHP調査があります：{current['total']:,}件中 "
-            f"{current['counts'].get('DONE', 0):,}件完了／残り{remaining:,}件。"
-            "上の「ウェブサイト調査対象」は新しいジョブ用の件数で、"
-            "この未完了ジョブの残り件数とは別です。"
-        )
 
     if mode == "指定件数だけ調査":
         count_cap = max_single_job_count(hp_mode)
@@ -1194,65 +1220,17 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         email_auto_research_card(store, demo=demo)
 
     st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
-    st.caption("HP調査成功済み・UUID未付与の医院から、Comdesk取込済み・照合保留・merge holdを除いて同期します。営業用HPランクでは絞り込みません。")
+    st.caption("件数ごとに母集団を明記しています。URL・調査完了は全HP URL登録済み母集団、UUID・除外・同期対象は最新のHP成功医院母集団です。各除外件数は優先順で重複を除いています。")
+    try:
+        breakdown = comdesk_sync_breakdown(store, metrics)
+        st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
+    except Exception as exc:
+        st.warning(f"Step6の内訳を確認できません：{exc}")
     render_comdesk_sync_export(store, demo)
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
     import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
-
-    if current:
-        st.write("現在の調査")
-        st.caption(f"この調査は開始時点で {current['total']:,}件に固定されています。")
-        controls = st.columns(3)
-
-        can_pause = not write_disabled and (runner.running() or current["status"] == "RUNNING")
-        if controls[0].button("一時停止", disabled=not can_pause, key="simple_pause", use_container_width=True):
-            if cloud_run_executor:
-                _pause_cloud_hp_job(current["id"])
-            else:
-                write_repositories_for(store).jobs.pause_job(current["id"])
-            st.rerun()
-
-        can_resume = (
-            not write_disabled
-            and not runner.running()
-            and current["status"] in {"PAUSED", "BUDGET"}
-            and current["counts"].get("PENDING", 0) > 0
-        )
-        if controls[1].button("この調査を再開", disabled=not can_resume, key="simple_resume", use_container_width=True):
-            st.session_state["active_job"] = current["id"]
-            if cloud_run_executor:
-                # Resuming does not add new clinics to the monthly budget -- only a
-                # fresh Execution attempt, which dispatch_hp_job's own
-                # may_dispatch()/check_budget() guards still gate.
-                _dispatch_cloud_hp_job(current["id"], clinic_count=0)
-            else:
-                runner.start(store, current["id"], TavilySearchProvider(""))
-            st.rerun()
-
-        if cloud_run_executor:
-            from src.cloud_run.hp_executor import get_dispatch_state
-            from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN
-            try:
-                dispatch_state = get_dispatch_state(current["id"])
-            except Exception:
-                dispatch_state = None
-            if dispatch_state and dispatch_state.get("status") == STATUS_DISPATCH_UNKNOWN:
-                st.warning("このJobは前回の起動結果が未確認です。再開の前に照合してください。")
-                if st.button("起動結果を照合", key="simple_reconcile_dispatch", use_container_width=True):
-                    _reconcile_cloud_hp_job(current["id"])
-                    st.rerun()
-
-        can_reset = not write_disabled and not runner.running() and current["status"] != "RUNNING"
-        if controls[2].button("この調査をリセット", disabled=not can_reset, key="simple_reset", use_container_width=True):
-            try:
-                write_repositories_for(store).jobs.reset_job(current["id"])
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
-        show_job_progress(store, current["id"])
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1414,6 +1392,53 @@ def comdesk_sync_csv(store, candidates, *, project_key="default"):
             for clinic, row in zip(clinics, rows)
         ]
     return csv_bytes(COMDESK_EXPORT_HEADERS, rows)
+
+
+def comdesk_sync_breakdown(store, master_metrics):
+    """Return display-only Step6 counts with explicit, non-overlapping exclusions."""
+    if getattr(store, "is_supabase_runtime", False):
+        job = store.latest_completed_hp_job()
+        successful_ids = store.hp_job_export_summary(job["id"])["export_ids"] if job else []
+        clinics = store.records_by_ids(successful_ids)
+    else:
+        filters = Filters(active_only=True, hp_only=True)
+        total = store.count(filters)
+        clinics = []
+        for offset in range(0, total, 50000):
+            clinics.extend(store.query(filters, limit=50000, offset=offset))
+
+    linkage = store.comdesk_linkage_state()
+    imported = set(linkage["imported_clinic_ids"])
+    held = set(linkage["held_clinic_ids"])
+    unassigned = [row for row in clinics if not str(row.get("uuid") or "").strip()]
+    imported_rows = [row for row in unassigned if int(row["id"]) in imported]
+    after_import = [row for row in unassigned if int(row["id"]) not in imported]
+    held_rows = [row for row in after_import if int(row["id"]) in held]
+    after_held = [row for row in after_import if int(row["id"]) not in held]
+    merge_rows = [row for row in after_held if row.get("merge_hold")]
+    candidates = len(after_held) - len(merge_rows)
+    try:
+        if hasattr(store, "web_research_metrics"):
+            hp_counts = (store.web_research_metrics(read_only_ui=True)
+                         if getattr(store, "is_supabase_runtime", False)
+                         else store.web_research_metrics())
+        else:
+            hp_counts = web_research_metrics(store.path)
+    except TypeError:
+        hp_counts = store.web_research_metrics()
+    if hp_counts is None:
+        raise ValueError("HP URL母集団の集計を取得できません。")
+    return [
+        {"項目": "厚生局全件", "件数": f"{int(master_metrics.get('厚生局取込レコード', 0)):,}件", "母集団・条件": "厚生局 source_records の取込元レコード数（医院数ではありません）"},
+        {"項目": "HP URL取得済み", "件数": f"{int(hp_counts.get('url_acquired', 0)):,}件", "母集団・条件": "hp_url または Maps WebサイトURL 登録済み医院"},
+        {"項目": "HP調査完了", "件数": f"{int(hp_counts.get('researched', 0)):,}件", "母集団・条件": "上記URL母集団のうち fetch_status=OK（取得・公式HP検証完了）"},
+        {"項目": "HP成功医院（同期候補の母集団）", "件数": f"{len(clinics):,}件", "母集団・条件": "現行同期処理と同じ最新完了HP Job（SQLiteはhp_status=VERIFIEDかつURLあり）"},
+        {"項目": "UUID未付与", "件数": f"{len(unassigned):,}件", "母集団・条件": "HP成功医院のうちUUIDが空欄"},
+        {"項目": "除外：Comdesk取込済み", "件数": f"{len(imported_rows):,}件", "母集団・条件": "UUID未付与の医院から除外（最初に判定）"},
+        {"項目": "除外：照合保留", "件数": f"{len(held_rows):,}件", "母集団・条件": "Comdesk取込済み除外後の未解決照合・候補医院"},
+        {"項目": "除外：merge hold", "件数": f"{len(merge_rows):,}件", "母集団・条件": "取込済み・照合保留除外後にmerge holdがある医院"},
+        {"項目": "最終Comdesk同期対象", "件数": f"{candidates:,}件", "母集団・条件": "HP成功・UUID未付与から上記3条件を優先順に除外。営業用HPランクは不使用"},
+    ]
 
 
 def comdesk_sync_candidates(store, page_size=50000):
@@ -1614,12 +1639,96 @@ def simple_sales_ui(store, demo=False, *, read_only=False):
 
 
 
+def single_hp_job_recovery_ui(store, demo):
+    """Administrator-facing controls for saved, standalone HP jobs."""
+    st.caption("単発HP調査Jobの進捗と復旧操作です。Auto Runとは別のJobで、Step1〜7には操作パネルを表示しません。")
+    jobs = []
+    for job in recent_jobs(store):
+        if job.get("kind") != "hp":
+            continue
+        options = job.get("options_json") or {}
+        if isinstance(options, str):
+            try:
+                options = json.loads(options)
+            except (TypeError, ValueError):
+                options = {}
+        if isinstance(options, dict) and options.get("auto_run_id"):
+            continue
+        jobs.append(job)
+
+    if not jobs:
+        st.info("管理対象の単発HP調査Jobはありません。")
+        return
+
+    labels = {"RUNNING": "実行中", "PAUSED": "一時停止", "BUDGET": "予算待ち", "COMPLETED": "完了", "ERROR": "エラー"}
+    selected = st.selectbox(
+        "単発HP Job履歴",
+        [job["id"] for job in jobs],
+        format_func=lambda jid: next(
+            f"{job.get('created_at', '')[:16]}｜{labels.get(job.get('status'), job.get('status', '不明'))}｜{jid}"
+            for job in jobs if job["id"] == jid
+        ),
+        key="advanced_single_hp_job",
+    )
+    current = job_status(store, selected)
+    runner = runner_for(str(store.path))
+    cloud_run_executor = hp_executor_mode() == "cloud_run"
+    write_disabled = demo
+    st.caption(f"Job ID：{selected}／開始時対象 {current['total']:,}件／状態 {labels.get(current['status'], current['status'])}")
+    controls = st.columns(3)
+
+    can_pause = not write_disabled and (runner.running() or current["status"] == "RUNNING")
+    if controls[0].button("一時停止", disabled=not can_pause, key="advanced_single_hp_pause", use_container_width=True):
+        if cloud_run_executor:
+            _pause_cloud_hp_job(current["id"])
+        else:
+            write_repositories_for(store).jobs.pause_job(current["id"])
+        st.rerun()
+
+    can_resume = (
+        not write_disabled
+        and not runner.running()
+        and current["status"] in {"PAUSED", "BUDGET"}
+        and current["counts"].get("PENDING", 0) > 0
+    )
+    if controls[1].button("この調査を再開", disabled=not can_resume, key="advanced_single_hp_resume", use_container_width=True):
+        st.session_state["active_job"] = current["id"]
+        if cloud_run_executor:
+            _dispatch_cloud_hp_job(current["id"], clinic_count=0)
+        else:
+            runner.start(store, current["id"], TavilySearchProvider(""))
+        st.rerun()
+
+    if cloud_run_executor:
+        from src.cloud_run.hp_executor import get_dispatch_state
+        from src.cloud_run.dispatch_state import STATUS_DISPATCH_UNKNOWN
+        try:
+            dispatch_state = get_dispatch_state(current["id"])
+        except Exception:
+            dispatch_state = None
+        if dispatch_state and dispatch_state.get("status") == STATUS_DISPATCH_UNKNOWN:
+            st.warning("このJobは前回の起動結果が未確認です。再開の前に照合してください。")
+            if st.button("起動結果を照合", key="advanced_single_hp_reconcile", use_container_width=True):
+                _reconcile_cloud_hp_job(current["id"])
+                st.rerun()
+
+    can_reset = not write_disabled and not runner.running() and current["status"] != "RUNNING"
+    if controls[2].button("この調査をリセット", disabled=not can_reset, key="advanced_single_hp_reset", use_container_width=True):
+        try:
+            write_repositories_for(store).jobs.reset_job(current["id"])
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    show_job_progress(store, current["id"])
+
+
 def advanced_ui(store, demo):
     st.header("詳細設定")
     st.caption("普段は使わない設定・確認機能です。")
     section = st.selectbox(
         "開く画面",
-        ["マスター管理", "自動情報収集（詳細）", "メール調査", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "Email Human Review", "歯科営業タグ", "ダッシュボード"],
+        ["マスター管理", "自動情報収集（詳細）", "HP単発Job管理・復旧", "メール調査", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "Email Human Review", "歯科営業タグ", "ダッシュボード"],
         key="advanced_section",
     )
 
@@ -1627,6 +1736,8 @@ def advanced_ui(store, demo):
         import_ui(store, demo)
     elif section == "自動情報収集（詳細）":
         research_ui(store, demo)
+    elif section == "HP単発Job管理・復旧":
+        single_hp_job_recovery_ui(store, demo)
     elif section == "メール調査":
         email_research_page(store)
     elif section == "営業対象フィルター（詳細）":

@@ -5,6 +5,8 @@ advance()が新たにeligibleになった医院も同じRunの次Batchへ取り�
 この数値はRun開始時母集団の残数ではなく、今後処理する可能性のある件数を表す。
 """
 from streamlit.testing.v1 import AppTest
+import app_v2
+import pytest
 
 
 _SCRIPT = """
@@ -55,17 +57,17 @@ def test_render_shows_dynamic_scope_labels_and_values():
     assert metrics["処理済み"] == "2,711件"
     assert metrics["現在残り候補"] == "7,826件"
     assert "残り" not in metrics  # 旧ラベルは残っていない
-    assert metrics["Batch"] == "6 / 現在推定22"
-    assert metrics["成功"] == "2,212件"
+    assert metrics["HP取得成功"] == "2,212件"
     assert metrics["未発見"] == "54件"
     assert metrics["要確認"] == "283件"
     assert metrics["エラー"] == "162件"
 
-    progress_texts = [p.proto.text for p in app.get("progress")]
-    assert any("全体進捗：2,711 / 10,537件" in t for t in progress_texts)
-
     captions = [c.value for c in app.caption]
-    assert any("次Batch以降の現在候補 7,537件" in c for c in captions)
+    assert any("全体進捗 2,711/10,537件" in c for c in captions)
+
+    assert metrics["現在Batch"] == "211/500件"
+    assert metrics["Batch番号"] == "6 / 推定22"
+    assert metrics["次Batch以降の候補"] == "7,537件"
     # 「開始時対象には含まれず、残りにも混ぜていません」という旧説明は事実と異なるため削除済み。
     assert not any("残りにも混ぜていません" in c for c in captions)
 
@@ -79,5 +81,27 @@ def test_render_does_not_break_when_processed_exceeds_initial_count():
     assert metrics["処理済み"] == "6,000件"
     assert metrics["現在残り候補"] == "0件"
 
-    progress_texts = [p.proto.text for p in app.get("progress")]
-    assert any("100.0%" in t for t in progress_texts if "全体進捗" in t)
+    captions = [c.value for c in app.caption]
+    assert any("100.0%" in c for c in captions if "全体進捗" in c)
+
+
+def test_treatment_quality_count_uses_the_complete_detected_and_not_detected_cohort():
+    assert app_v2.treatment_quality_completed_count({
+        "treatment_detected": 31,
+        "treatment_not_detected": 19,
+    }) == 50
+
+
+@pytest.mark.parametrize(
+    ("status", "status_label"),
+    [("WAITING_NETWORK", "通信回復待ち"), ("PAUSED", "一時停止"), ("COMPLETED", "完了")],
+)
+def test_progress_layout_renders_network_paused_and_completed_states(status, status_label):
+    script = _SCRIPT.replace('"status": "RUNNING"', f'"status": "{status}"')
+    script = script.replace('"current_total": 500,', '"current_total": 0,')
+    app = AppTest.from_string(script).run()
+    assert not app.exception
+    assert {metric.label for metric in app.metric} >= {
+        "開始時対象", "処理済み", "現在残り候補", "HP取得成功", "要確認", "エラー",
+    }
+    assert any(status_label in item.value for item in app.markdown)

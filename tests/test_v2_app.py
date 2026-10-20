@@ -39,11 +39,16 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     app.toggle[0].set_value(True).run()
     assert not app.exception and not app.error
     assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
+    assert not any(s.label == "単発HP Job履歴" for s in app.selectbox)
+    assert not any(b.key in {"simple_pause", "simple_resume", "simple_reset"} for b in app.button)
     next(r for r in app.radio if r.label == "メニュー").set_value("営業対象・出力").run()
     assert not app.exception and not app.error
     assert not any(m.label == "Comdesk出力対象" for m in app.metric)
     assert any(b.label.startswith("営業対象 ") and b.label.endswith("件をComdesk形式で出力") for b in app.button)
     next(r for r in app.radio if r.label == "メニュー").set_value("詳細設定").run()
+    next(s for s in app.selectbox if s.label == "開く画面").set_value("HP単発Job管理・復旧").run()
+    assert not app.exception and not app.error
+    assert any("管理対象の単発HP調査Jobはありません" in m.value for m in app.info)
     next(s for s in app.selectbox if s.label == "開く画面").set_value("営業対象フィルター（詳細）").run()
     next(s for s in app.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
     next(b for b in app.button if b.label=="この条件でExcel・CSVを作成").click().run()
@@ -71,9 +76,12 @@ def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
     import app_v2
 
     source = inspect.getsource(app_v2.simple_workflow_ui)
-    assert '"この調査を再開"' in source
-    assert 'current["status"] in {"PAUSED", "BUDGET"}' in source
     assert "unfinished" in source
     assert "disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
     assert 'j.get("kind") == "hp"' in source
-    assert "上の「ウェブサイト調査対象」は新しいジョブ用の件数" in source
+
+    admin_source = inspect.getsource(app_v2.single_hp_job_recovery_ui)
+    assert '"この調査を再開"' in admin_source
+    assert 'current["status"] in {"PAUSED", "BUDGET"}' in admin_source
+    assert "job_status(store, selected)" in admin_source
+    assert "write_repositories_for(store).jobs.reset_job" in admin_source
