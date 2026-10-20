@@ -45,6 +45,7 @@ def target(uuid="uuid-001", article=ArticleState(ARTICLE_LISTED, LISTED_URL, LIS
 
 def settings(called=(), *, calendar_confirmed=True, provisional_approved=True):
     return GenerationSettings(
+        as_of=date(2026, 10, 19),
         staff="前田", dates=DATES, called_uuids=frozenset(called),
         calendar_confirmed=calendar_confirmed,
         provisional_template_approved=provisional_approved,
@@ -157,6 +158,7 @@ def test_missing_email_and_director_need_review():
 def test_approved_general_addressee_can_replace_missing_director():
     clinic = target(email="info@example.jp", director_name="", director_name_confirmed=False)
     configured = GenerationSettings(
+        as_of=date(2026, 10, 19),
         staff="前田", dates=DATES, calendar_confirmed=True,
         approved_general_addressee_uuids=frozenset({clinic.clinic_uuid}),
     )
@@ -167,7 +169,7 @@ def test_approved_general_addressee_can_replace_missing_director():
 
 
 def test_missing_schedule_is_review_not_inferred_availability():
-    configured = GenerationSettings(staff="前田", dates=(), calendar_confirmed=False)
+    configured = GenerationSettings(as_of=date(2026, 10, 19), staff="前田", dates=(), calendar_confirmed=False)
     result = generate_batch([target(article=ArticleState(ARTICLE_UNCONFIRMED))], ARTICLES, configured)[0]
     assert result.status == NEEDS_REVIEW
     assert result.candidate_schedule == SCHEDULE_UNSET
@@ -178,6 +180,7 @@ def test_missing_schedule_is_review_not_inferred_availability():
 def test_gmail_preflight_requires_exact_account_duplicate_check_and_final_approval():
     clinic = target(article=ArticleState(ARTICLE_NOT_LISTED))
     wrong = GenerationSettings(
+        as_of=date(2026, 10, 19),
         staff="前田", dates=DATES, calendar_confirmed=True, provisional_template_approved=True,
         authenticated_gmail_account="other@example.jp", duplicate_check_complete=True,
     )
@@ -186,6 +189,7 @@ def test_gmail_preflight_requires_exact_account_duplicate_check_and_final_approv
     assert "指定GmailアカウントのOAuth一致確認が未完了" in wrong_result.gmail_blockers
 
     correct = GenerationSettings(
+        as_of=date(2026, 10, 19),
         staff="前田", dates=DATES, calendar_confirmed=True, provisional_template_approved=True,
         authenticated_gmail_account=EXPECTED_GMAIL_ACCOUNT, duplicate_check_complete=True,
     )
@@ -218,7 +222,7 @@ def test_schedule_inserted_and_validated():
     with pytest.raises(DraftValidationError, match="過去"):
         format_schedule((date(2026, 10, 19),), "9:00", "21:00", not_before=date(2026, 10, 20))
     assert run(target(), called=("uuid-001",)).status == READY
-    assert generate_batch([target()], ARTICLES, GenerationSettings(staff="", dates=DATES))[0].status == FAILED
+    assert generate_batch([target()], ARTICLES, GenerationSettings(as_of=date(2026, 10, 19), staff="", dates=DATES))[0].status == FAILED
 
 
 def test_recipient_newline_rejected():
