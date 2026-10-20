@@ -67,7 +67,10 @@ def test_manual_draft_save_button_disabled_when_read_only():
     assert "read_only=False" in block[: block.index(":")]
     button_idx = block.index('key=K + "create_drafts"')
     window = block[button_idx:button_idx + 400]
-    assert "disabled=(read_only or not draft_enabled" in window
+    # Shared API mode is a second permitted draft boundary; read_only remains
+    # the first unconditional blocker for both API and legacy Gmail paths.
+    assert "disabled=(read_only or" in window
+    assert "not draft_enabled and not shared_api_mode" in window
 
 
 def test_auto_draft_batch_can_save_excludes_read_only():
