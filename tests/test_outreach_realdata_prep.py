@@ -19,7 +19,7 @@ def test_without_join_all_unconfirmed_and_safe_text_generated():
     records = [record(i) for i in range(1, 6)]
     sel = select_targets(records, email_lookup=lambda ids: {i: f"c{i}@example.jp" for i in ids}, links=[])
     assert {t.article.status for t in sel.targets} == {ARTICLE_UNCONFIRMED}
-    results = generate_batch(sel.targets, ARTICLES, GenerationSettings("前田", five_weekdays(date(2026, 10, 19))))
+    results = generate_batch(sel.targets, ARTICLES, GenerationSettings("前田", five_weekdays(date(2026, 10, 19)), as_of=date(2026, 10, 19)))
     for r in results:
         assert r.status == NEEDS_REVIEW and r.template == TEMPLATE_RECOMMEND
         assert r.first.article.url in r.body
