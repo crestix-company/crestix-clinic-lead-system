@@ -21,6 +21,7 @@ CREATE TABLE public.clinics (
   uuid text NOT NULL DEFAULT '',
   clinic_name text NOT NULL DEFAULT '',
   phone text NOT NULL DEFAULT '',
+  phone_norm text NOT NULL DEFAULT '',
   address text NOT NULL DEFAULT '',
   prefecture text NOT NULL DEFAULT '',
   medical_type text NOT NULL DEFAULT '',
@@ -61,10 +62,10 @@ INSERT INTO public.clinics (id, clinic_name, phone, address, prefecture, medical
 VALUES
  (1, 'Projection Clinic', '03-0000-0001', '東京都千代田区1-1', '東京都', '医科',
   '["内科"]', '["胃カメラ"]', '["Web予約"]',
-  $json${"facility_type":"診療所","hp_production_companies":["Alpha",1,{"x":1},null],"epark_url":"A\u0000B","owner_name":"PRIVATE_OWNER"}$json$),
+  $json${"facility_type":"診療所","hp_production_companies":["Alpha",1,{"x":1},null],"epark_url":"A\u0000B","epark_contract":"PAID","owner_name":"PRIVATE_OWNER"}$json$),
  (2, 'Second Clinic', '06-0000-0002', '大阪府大阪市1-1', '大阪府', '歯科',
   '["歯科"]', '["矯正歯科"]', '[]',
-  $json${"facility_type":"診療所","hp_production_companies":["Beta"],"epark_url":"A\\u0000B","owner_name":"PRIVATE_OWNER"}$json$),
+  $json${"facility_type":"診療所","hp_production_companies":["Beta"],"epark_url":"A\\u0000B","epark_contract":"FREE","owner_name":"PRIVATE_OWNER"}$json$),
  (3, 'Null JSON Clinic', '', '', '北海道', '医科', '[]', '[]', '[]', NULL),
  (4, 'Malformed JSON Clinic', '', '', '沖縄県', '医科', '[]', '[]', '[]', '{"facility_type":'),
  (5, 'Missing Key Clinic', '', '', '福岡県', '医科', '[]', '[]', '[]', '{}'),
@@ -79,6 +80,13 @@ VALUES
   '{"facility_type":"病院"}'),
  (1001, 'Out Of Range Number Clinic', '', '', '東京都', '医科', '[]', '[]', '[]',
   '{"facility_type":"診療所","large":1e1000000}');
+
+UPDATE public.clinics SET uuid='uuid-1', phone_norm='0300000001' WHERE id=1;
+UPDATE public.clinics SET phone_norm='0600000002' WHERE id=2;
+UPDATE public.clinics SET signals_json='["EPARK課金済み確認","Doctors File掲載","Instagram公式運用","Doctors File掲載"]',
+  signal_count=4, hot_status='かなりアツい' WHERE id=1;
+UPDATE public.clinics SET signals_json='["EPARK課金済み確認"]',
+  signal_count=1, hot_status='集客投資シグナルあり' WHERE id=2;
 
 CREATE SCHEMA hp_research;
 CREATE TABLE hp_research.clinic_hp_research (
@@ -165,6 +173,12 @@ BEGIN
   IF has_column_privilege(current_user, 'public.clinics', 'effective_json', 'SELECT') THEN
     RAISE EXCEPTION 'Reader retains effective_json SELECT';
   END IF;
+  IF has_column_privilege('clinic_cloudrun_projection_owner', 'public.clinics', 'tel_match_key', 'SELECT')
+     OR EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                  AND column_name='tel_match_key') THEN
+    RAISE EXCEPTION 'Internal tel_match_key is exposed to the projection owner or Reader';
+  END IF;
   IF has_column_privilege(current_user, 'provenance.comdesk_original_rows', 'row_json', 'SELECT')
      OR EXISTS (
        SELECT 1 FROM pg_proc p,
@@ -176,8 +190,12 @@ BEGIN
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.columns
              WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
-               AND column_name IN ('effective_json','base_json','treatment_evidence')) THEN
+               AND column_name IN ('effective_json','base_json','treatment_evidence','effective_facility_type')) THEN
     RAISE EXCEPTION 'Raw or evidence JSON leaked into the view';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.clinic_cloudrun_readonly
+             WHERE effective_projection ? 'facility_type') THEN
+    RAISE EXCEPTION 'Raw facility type leaked through effective_projection';
   END IF;
   SELECT count(*) INTO visible_rows FROM public.clinic_cloudrun_readonly;
   IF visible_rows <> 10 THEN
@@ -195,8 +213,7 @@ BEGIN
     RAISE EXCEPTION 'Comdesk projection lost approved values or exposed pending values';
   END IF;
   SELECT effective_projection INTO projection FROM public.clinic_cloudrun_readonly WHERE id=1;
-  IF projection->>'facility_type' <> '診療所'
-     OR projection->'hp_production_companies' <> '["Alpha"]'::jsonb
+  IF projection->'hp_production_companies' <> '["Alpha"]'::jsonb
      OR projection->>'epark_url' NOT LIKE '%__CLINIC_NUL_1_%' THEN
     RAISE EXCEPTION 'Allowlisted projection or mixed-array filtering failed: %', projection;
   END IF;
@@ -211,9 +228,7 @@ BEGIN
      OR (SELECT projection_valid FROM public.clinic_cloudrun_readonly WHERE id=1001) IS DISTINCT FROM false THEN
     RAISE EXCEPTION 'Invalid JSON was not caught and marked invalid';
   END IF;
-  IF (SELECT effective_projection->>'facility_type' FROM public.clinic_cloudrun_readonly WHERE id=5) <> ''
-     OR (SELECT effective_projection->'hp_production_companies' FROM public.clinic_cloudrun_readonly WHERE id=5) <> '[]'::jsonb
-     OR (SELECT effective_projection->>'facility_type' FROM public.clinic_cloudrun_readonly WHERE id=6) <> ''
+  IF (SELECT effective_projection->'hp_production_companies' FROM public.clinic_cloudrun_readonly WHERE id=5) <> '[]'::jsonb
      OR (SELECT effective_projection->'hp_production_companies' FROM public.clinic_cloudrun_readonly WHERE id=6) <> '[]'::jsonb THEN
     RAISE EXCEPTION 'Missing/type-mismatched projection values were not defaulted safely';
   END IF;
@@ -252,6 +267,24 @@ DO $$ BEGIN
   EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
   BEGIN EXECUTE 'DELETE FROM public.clinics WHERE id=1';
     RAISE EXCEPTION 'Reader DELETE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'TRUNCATE public.clinics';
+    RAISE EXCEPTION 'Reader TRUNCATE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'SELECT row_json FROM provenance.comdesk_original_rows LIMIT 1';
+    RAISE EXCEPTION 'Reader raw Comdesk SELECT succeeded';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN EXECUTE 'INSERT INTO provenance.comdesk_original_rows(id) VALUES (2000)';
+    RAISE EXCEPTION 'Reader Comdesk INSERT succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'UPDATE provenance.comdesk_original_rows SET uuid=uuid WHERE id=1';
+    RAISE EXCEPTION 'Reader Comdesk UPDATE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'DELETE FROM provenance.comdesk_original_rows WHERE id=1';
+    RAISE EXCEPTION 'Reader Comdesk DELETE succeeded';
+  EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
+  BEGIN EXECUTE 'TRUNCATE provenance.comdesk_original_rows';
+    RAISE EXCEPTION 'Reader Comdesk TRUNCATE succeeded';
   EXCEPTION WHEN insufficient_privilege OR read_only_sql_transaction THEN NULL; END;
 END $$;
 

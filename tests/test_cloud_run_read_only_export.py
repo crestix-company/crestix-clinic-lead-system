@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from src.io.input_loader import load_table
 from src.master.comdesk import COMDESK_EXPORT_HEADERS, COMDESK_HEADERS
@@ -199,6 +200,16 @@ def test_read_only_treatment_pair_filter_uses_only_confirmed_treatment_sidecar()
     assert "research_status='CONFIRMED'" in readonly_sql
 
 
+def test_read_only_keyword_search_uses_clinic_name_normalized_phone_and_uuid():
+    sql, args = supabase_where(Filters(keyword="03-0000-0001"), excluded_ids=[], read_only_ui=True)
+    assert "clinic_name" in sql
+    assert "phone_norm" in sql
+    assert "uuid=%s" in sql
+    assert args[-3:] == ["%03-0000-0001%", "%0300000001%", "03-0000-0001"]
+    assert "phone_norm" in SupabaseClinicRepository._READ_ONLY_COLUMNS
+    assert "tel_match_key" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
+
+
 def test_inferred_age_is_excluded_from_read_only_projection_ui_and_filter():
     assert "age_probability" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
     assert "age_probability_under_59" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
@@ -223,6 +234,45 @@ def test_inferred_age_is_excluded_from_read_only_projection_ui_and_filter():
 
     migration = Path("supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql")
     assert "age_probability" not in migration.read_text(encoding="utf-8").casefold()
+
+
+def test_epark_charge_contract_is_excluded_only_from_read_only_projection_and_ui():
+    import app_v2
+
+    record = {
+        "id": 1, "epark_contract": "PAID", "epark_url": "https://epark.example/clinic",
+        "marketing_signals": [
+            {"name": "EPARK課金済み確認"}, {"name": "Googleスポンサー広告確認済み"}
+        ],
+    }
+    normal = app_v2.display_rows([record])
+    readonly = app_v2.display_rows([record], read_only=True, include_email_status=False,
+                                   include_age_probability=False)
+    assert "EPARK契約" in normal.columns
+    assert "課金済み" in str(normal.iloc[0]["EPARK契約"])
+    assert "EPARK契約" not in readonly.columns
+    assert readonly.iloc[0]["EPARK URL"] == record["epark_url"]
+    assert "EPARK課金済み確認" not in readonly.iloc[0]["シグナル一覧"]
+    assert "Googleスポンサー広告確認済み" in readonly.iloc[0]["シグナル一覧"]
+
+    filters = Filters(signals=["EPARK課金済み確認"])
+    with pytest.raises(BackendNotSupportedError, match="検索対象外"):
+        supabase_where(filters, excluded_ids=[], read_only_ui=True)
+    normal_sql, _ = supabase_where(filters, excluded_ids=[])
+    assert "signals_json" in normal_sql
+
+    readonly_count_sql, _ = supabase_where(Filters(ad_min=2), excluded_ids=[], read_only_ui=True)
+    normal_count_sql, _ = supabase_where(Filters(ad_min=2), excluded_ids=[])
+    assert "EPARK課金済み確認" not in readonly_count_sql
+    assert "EPARK課金済み確認" in normal_count_sql
+
+    migration = Path("supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql")
+    migration_text = migration.read_text(encoding="utf-8")
+    projection_function = migration_text.split("CREATE FUNCTION public.clinic_cloudrun_effective_projection", 1)[1].split("$function$;", 1)[0]
+    assert "epark_contract" not in projection_function
+    assert "epark_url" in projection_function
+    assert "EPARK課金済み確認" in migration_text
+    assert "readonly_signal_count AS signal_count" in migration_text
 
 
 def test_read_only_main_cannot_enter_demo_loader_or_write_side_effects():

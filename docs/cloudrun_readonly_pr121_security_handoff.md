@@ -1,4 +1,4 @@
-# PR #121 READ ONLY projection and PR #118 DB handoff
+# PR #121/#122 READ ONLY projection and PR #118 DB handoff
 
 This is a proposed DB contract. It has only been applied to a disposable loopback PostgreSQL
 fixture. Production DB, Secret Manager, IAM/IAP and Cloud Run remain unchanged.
@@ -15,8 +15,11 @@ normal-mode SQL paths retain their current grants and behavior.
 
 `public.clinic_cloudrun_readonly` contains the named clinic columns in `_READ_ONLY_COLUMNS`,
 `effective_projection jsonb`, `projection_marker text`, `projection_valid boolean`, and
-`effective_facility_is_hospital boolean`. The JSON projection contains only `facility_type`,
-`hp_production_companies`, `epark_url`, and `epark_contract`. It excludes raw/evidence JSON,
+`is_hospital_or_center boolean`. It also exposes `phone_norm text`, the existing normalized
+phone-search value, to the Reader through the VIEW. The projection owner receives source-column
+SELECT on `public.clinics.phone_norm`; the app does not add it to displayed or exported fields.
+The JSON projection contains only
+`hp_production_companies`, `epark_url`, and `epark_contract`. It excludes raw facility type and evidence JSON,
 inferred age, names, schedules, and `treatment_status`. The marker depends only on the already
 visible Clinic ID. The hospital boolean uses the same literal `LIKE` predicate as normal mode.
 
@@ -43,7 +46,7 @@ The data owner must approve this remaining contact-field list before production 
   and no ownership of either source table. Grant it only the source columns needed by the two
   views; the Reader receives neither raw source table.
 - The helper's `USING (true)` policy intentionally permits the approved national row scope.
-  The migration aborts if `public.clinics` has a PUBLIC policy or a helper/view/function name
+  The migration aborts if `public.clinics` or the Comdesk sources have a PUBLIC policy or a helper/view/function name
   collision. B must inspect the live policy composition and confirm that no effective scope
   widens for other roles before applying. Existing restrictive policies continue to apply.
 - The function is create-only; its default PUBLIC EXECUTE is revoked in the same transaction.

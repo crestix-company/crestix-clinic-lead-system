@@ -83,10 +83,12 @@ def main():
                         "has_table_privilege(current_user,'provenance.comdesk_original_rows','INSERT'), "
                         "has_table_privilege(current_user,'provenance.comdesk_original_rows','UPDATE'), "
                         "has_table_privilege(current_user,'provenance.comdesk_original_rows','DELETE'), "
+                        "has_table_privilege(current_user,'provenance.comdesk_original_rows','TRUNCATE'), "
                         "has_table_privilege(current_user,'public.clinics','INSERT'), "
                         "has_table_privilege(current_user,'public.clinics','UPDATE'), "
-                        "has_table_privilege(current_user,'public.clinics','DELETE')")
-            _assert(cur.fetchone() == (False,)*7, "Reader retains raw Comdesk or DML privileges")
+                        "has_table_privilege(current_user,'public.clinics','DELETE'), "
+                        "has_table_privilege(current_user,'public.clinics','TRUNCATE')")
+            _assert(cur.fetchone() == (False,)*9, "Reader retains raw Comdesk or DML privileges")
             for relation in ALLOWED_READS:
                 for privilege in ("INSERT", "UPDATE", "DELETE", "TRUNCATE"):
                     cur.execute("SELECT has_table_privilege(current_user,%s,%s)",
@@ -101,6 +103,23 @@ def main():
                 )
             """)
             _assert(not cur.fetchone()[0], "Inferred age projection is present in the READ ONLY view")
+            cur.execute("""
+                SELECT EXISTS (
+                  SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                    AND column_name='tel_match_key'
+                ), has_column_privilege(
+                  'clinic_cloudrun_projection_owner','public.clinics','tel_match_key','SELECT'
+                )
+            """)
+            _assert(cur.fetchone() == (False, False),
+                    "tel_match_key must remain internal to CRM identity matching")
+            cur.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                  AND column_name='phone_norm'
+            """)
+            _assert(cur.fetchone() == ("text",), "phone_norm must be projected as text")
 
         CaptureCursor.statements = []
         hp = SupabaseHpResearchRepository(conn)
@@ -121,6 +140,12 @@ def main():
 
         department_rows = store.query_read_only_ui(Filters(departments=["内科"]))
         _assert([r["id"] for r in department_rows] == [1], "Department filter differs")
+        name_rows = store.query_read_only_ui(Filters(keyword="Projection Clinic"))
+        _assert([r["id"] for r in name_rows] == [1], "Clinic-name keyword search differs")
+        phone_rows = store.query_read_only_ui(Filters(keyword="03-0000-0001"))
+        _assert([r["id"] for r in phone_rows] == [1], "Normalized-phone keyword search differs")
+        uuid_rows = store.query_read_only_ui(Filters(keyword="uuid-1"))
+        _assert([r["id"] for r in uuid_rows] == [1], "UUID keyword search differs")
         hp_rank_rows = store.query_read_only_ui(Filters(effective_ranks=["A"]))
         _assert([r["id"] for r in hp_rank_rows] == [1], "Effective HP rank filter differs")
         treatment_rows = store.query_read_only_ui(Filters(hp_treatment_categories=["胃カメラ"]))
@@ -135,6 +160,23 @@ def main():
         by_id = {row["id"]: row for row in rows}
         _assert(by_id[1]["epark_url"] == "A\x00B", "Escaped NUL was not restored in projected value")
         _assert(by_id[2]["epark_url"] == "A\\u0000B", "Literal backslash-u0000 changed")
+        _assert("epark_contract" not in by_id[1],
+                "EPARK contract leaked through the projection")
+        _assert(by_id[1]["marketing_signal_count"] == 2 and by_id[1]["hot_status"] == "アツい",
+                "READ ONLY signal count/hot status did not exclude the charge signal or duplicates")
+        _assert(by_id[2]["marketing_signal_count"] == 0 and by_id[2]["hot_status"] == "通常",
+                "Charge-only clinic retained a READ ONLY signal score")
+        _assert([item["name"] for item in by_id[1]["marketing_signals"]] ==
+                ["Doctors File掲載", "Instagram公式運用"],
+                "Non-charge marketing signals changed or charge signal remained visible")
+        try:
+            store.query_read_only_ui(Filters(signals=["EPARK課金済み確認"]))
+        except Exception as exc:
+            _assert("検索対象外" in str(exc), "Charge signal filter failed for an unexpected reason")
+        else:
+            raise AssertionError("READ ONLY accepted the excluded EPARK charge signal filter")
+        _assert([r["id"] for r in store.query_read_only_ui(Filters(signals=["Doctors File掲載"]))] == [1],
+                "An allowed marketing signal filter stopped working")
         _assert(by_id[4]["clinic_name"] == "Malformed JSON Clinic", "Invalid JSON row crashed or disappeared")
         _assert(by_id[3]["clinic_name"] == "Null JSON Clinic", "NULL JSON row crashed or disappeared")
         _assert("owner_name" not in by_id[1], "Unapproved owner name was exposed")
@@ -171,6 +213,8 @@ def main():
                 "XLSX exposed pending fields")
         nonblank_uuids = [value for value in csv_frame["UUID"] if value]
         _assert(nonblank_uuids == ["uuid-1"], "Export fixture contains duplicate or unexpected UUIDs")
+        _assert("EPARK" not in " ".join(str(value) for value in csv_frame.iloc[0].tolist()),
+                "EPARK contract data unexpectedly appeared in standard Comdesk export")
 
         sql = "\n".join(CaptureCursor.statements).casefold()
         statements = [statement.lstrip().split(None, 1)[0].rstrip(";").upper()
