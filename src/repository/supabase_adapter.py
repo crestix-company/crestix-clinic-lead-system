@@ -135,7 +135,7 @@ class SupabaseClinicRepository:
     _READ_ONLY_VIEW = "public.clinic_cloudrun_readonly"
     _READ_ONLY_COLUMNS = (
         "id", "uuid", "merged_into", "effective_projection", "projection_marker",
-        "projection_valid", "tel_match_key", "first_seen_at", "last_seen_at",
+        "projection_valid", "first_seen_at", "last_seen_at",
         "source_as_of_date", "is_new", "departments_json", "hp_status", "hp_url",
         "hp_rank", "maps_website_url", "clinic_name", "phone", "phone_norm", "address", "prefecture",
         "medical_type", "owner_equal", "designation_date",
@@ -281,7 +281,7 @@ class SupabaseClinicRepository:
         """
         data = {
             **self._effective_payload(d),
-            "id": d["id"], "uuid": d["uuid"], "tel_match_key": d["tel_match_key"],
+            "id": d["id"], "uuid": d["uuid"], "tel_match_key": d.get("tel_match_key", ""),
             "first_seen_at": d["first_seen_at"], "last_seen_at": d["last_seen_at"],
             "source_as_of_date": d["source_as_of_date"],
             "is_new_since_last_update": bool(d["is_new"]),

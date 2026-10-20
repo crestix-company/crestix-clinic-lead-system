@@ -104,6 +104,17 @@ def main():
             """)
             _assert(not cur.fetchone()[0], "Inferred age projection is present in the READ ONLY view")
             cur.execute("""
+                SELECT EXISTS (
+                  SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                    AND column_name='tel_match_key'
+                ), has_column_privilege(
+                  'clinic_cloudrun_projection_owner','public.clinics','tel_match_key','SELECT'
+                )
+            """)
+            _assert(cur.fetchone() == (False, False),
+                    "tel_match_key must remain internal to CRM identity matching")
+            cur.execute("""
                 SELECT data_type FROM information_schema.columns
                 WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
                   AND column_name='phone_norm'

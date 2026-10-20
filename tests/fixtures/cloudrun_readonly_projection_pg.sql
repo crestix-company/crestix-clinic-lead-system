@@ -169,6 +169,12 @@ BEGIN
   IF has_column_privilege(current_user, 'public.clinics', 'effective_json', 'SELECT') THEN
     RAISE EXCEPTION 'Reader retains effective_json SELECT';
   END IF;
+  IF has_column_privilege('clinic_cloudrun_projection_owner', 'public.clinics', 'tel_match_key', 'SELECT')
+     OR EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                  AND column_name='tel_match_key') THEN
+    RAISE EXCEPTION 'Internal tel_match_key is exposed to the projection owner or Reader';
+  END IF;
   IF has_column_privilege(current_user, 'provenance.comdesk_original_rows', 'row_json', 'SELECT')
      OR EXISTS (
        SELECT 1 FROM pg_proc p,

@@ -81,7 +81,7 @@ GRANT SELECT (
   designation_date, recent_until, registration_reason, owner_equal,
   hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json,
   treatments_json, signals_json, first_seen_at, last_seen_at, source_as_of_date,
-  is_new, merged_into, tel_match_key, merge_hold, maps_presence_status,
+  is_new, merged_into, merge_hold, maps_presence_status,
   maps_profile_url, maps_website_url,
   exclude_reason, effective_json
 ) ON TABLE public.clinics TO clinic_cloudrun_projection_owner;
@@ -180,7 +180,7 @@ GRANT CREATE ON SCHEMA public TO clinic_cloudrun_projection_owner;
 
 CREATE VIEW public.clinic_cloudrun_readonly WITH (security_barrier = true) AS
 WITH projected AS (
-  SELECT c.id, c.uuid, c.merged_into, c.tel_match_key, c.first_seen_at, c.last_seen_at,
+  SELECT c.id, c.uuid, c.merged_into, c.first_seen_at, c.last_seen_at,
          c.source_as_of_date, c.is_new, c.departments_json, c.hp_status, c.hp_url,
          c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.phone_norm, c.address, c.prefecture,
          c.medical_type, c.active, c.designation_date, c.recent_until,
@@ -194,7 +194,7 @@ WITH projected AS (
   FROM public.clinics c
 )
 SELECT
-  id, uuid, merged_into, tel_match_key, first_seen_at, last_seen_at, source_as_of_date,
+  id, uuid, merged_into, first_seen_at, last_seen_at, source_as_of_date,
   is_new, departments_json, hp_status, hp_url, hp_rank, maps_website_url,
   clinic_name, phone, phone_norm, address, prefecture, medical_type, active, designation_date,
   recent_until, registration_reason, owner_equal, signal_count,

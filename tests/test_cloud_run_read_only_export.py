@@ -206,6 +206,7 @@ def test_read_only_keyword_search_uses_clinic_name_normalized_phone_and_uuid():
     assert "uuid=%s" in sql
     assert args[-3:] == ["%03-0000-0001%", "%0300000001%", "03-0000-0001"]
     assert "phone_norm" in SupabaseClinicRepository._READ_ONLY_COLUMNS
+    assert "tel_match_key" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
 
 
 def test_inferred_age_is_excluded_from_read_only_projection_ui_and_filter():
