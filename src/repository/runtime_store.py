@@ -20,6 +20,14 @@ from src.repository.hp_targets import maps_hp_target_predicate as _maps_hp_targe
 from src.repository.connection_diagnostics import retryable_read_connection_error
 
 
+# These person/schedule fields remain outside the Cloud Run READ ONLY projection until their
+# data-use approval is recorded. Blank only the READ ONLY export; ordinary Mac exports retain the
+# existing Comdesk behavior and source values.
+READ_ONLY_PENDING_EXPORT_HEADERS = frozenset({
+    "院長名", "休診日", "診療日", "午前始", "午前終", "午後始", "午後終",
+})
+
+
 def _verified_email_map(rows):
     """Build deterministic, de-duplicated Step 5 email values by clinic_id."""
     buckets = {}
@@ -146,7 +154,8 @@ class SupabaseRuntimeStore:
             )
             return [r[0] for r in cur.fetchall()]
     @_retry_closed_read_connection
-    def web_research_metrics(self): return self.repositories.hp_research.batch_metrics()
+    def web_research_metrics(self, *, read_only_ui=False):
+        return self.repositories.hp_research.batch_metrics(read_only_ui=read_only_ui)
     @_retry_closed_read_connection
     def history(self, clinic_id, limit=30):
         return self.repositories.provenance.history_for_clinic(clinic_id, limit)
@@ -191,9 +200,10 @@ class SupabaseRuntimeStore:
     def setting(self, key, default=None): return self.repositories.settings.get(key, default)
 
     @_retry_closed_read_connection
-    def prefectures(self):
+    def prefectures(self, *, read_only_ui=False):
+        source = "public.clinic_cloudrun_readonly" if read_only_ui else "public.clinics"
         with self._conn.cursor() as cur:
-            cur.execute("SELECT DISTINCT prefecture FROM public.clinics WHERE prefecture<>'' ORDER BY prefecture")
+            cur.execute(f"SELECT DISTINCT prefecture FROM {source} WHERE prefecture<>'' ORDER BY prefecture")
             return [r[0] for r in cur.fetchall()]
 
     @_retry_closed_read_connection
@@ -206,13 +216,14 @@ class SupabaseRuntimeStore:
         return sorted(v for v in values if v)
 
     @_retry_closed_read_connection
-    def ad_count_max(self):
+    def ad_count_max(self, *, read_only_ui=False):
         from src.scoring.research_scoring import AD_SIGNAL_NAMES
+        source = "public.clinic_cloudrun_readonly" if read_only_ui else "public.clinics"
         with self._conn.cursor() as cur:
             cur.execute(
                 "SELECT COALESCE(MAX((SELECT count(DISTINCT v) FROM "
                 "jsonb_array_elements_text(signals_json) v WHERE v=ANY(%s))),0) "
-                "FROM public.clinics", (list(AD_SIGNAL_NAMES),),
+                f"FROM {source}", (list(AD_SIGNAL_NAMES),),
             )
             return cur.fetchone()[0]
 
@@ -269,16 +280,22 @@ class SupabaseRuntimeStore:
         records = self.query(filters, limit=100000, as_of=as_of)
         return self._export_records(records)
 
-    def _export_records(self, records):
+    def _export_records(self, records, *, read_only=False):
         ids = [r["id"] for r in records]
         originals, templates = {}, {}
         if ids:
             with self._conn.cursor() as cur:
+                source = ("provenance.clinic_cloudrun_comdesk_rows" if read_only
+                          else "provenance.comdesk_original_rows")
+                projection_column = ",projection_valid" if read_only else ""
                 cur.execute(
-                    "SELECT clinic_id,template_id,row_json,uuid FROM provenance.comdesk_original_rows "
+                    f"SELECT clinic_id,template_id,row_json,uuid{projection_column} FROM {source} "
                     "WHERE clinic_id=ANY(%s) ORDER BY clinic_id,(uuid<>'') DESC,id", (ids,),
                 )
-                for cid, template_id, row_json, uuid in cur.fetchall():
+                for row in cur.fetchall():
+                    if read_only and row[4] is not True:
+                        raise ValueError("Comdesk元行の投影列を確認できないためREAD ONLY出力を中止しました。")
+                    cid, template_id, row_json, uuid = row[:4]
                     originals.setdefault(cid, []).append((template_id, row_json, uuid))
                 cur.execute("SELECT id,headers_json,mapping_json FROM provenance.templates")
                 for tid, headers, mapping in cur.fetchall():
@@ -466,8 +483,21 @@ class SupabaseRuntimeStore:
         token reads provenance.change_history, which is outside the Cloud Run reader scope.
         This method performs no writes and does not inspect job, audit, or delivery state.
         """
+        count_before = self.count_read_only_ui(filters, as_of=as_of)
+        if count_before > 100000:
+            raise ValueError(
+                f"READ ONLY出力は100,000件までです（現在 {count_before:,}件）。条件を絞ってください。"
+            )
         records = self.query_read_only_ui(filters, limit=100000, as_of=as_of)
-        rows = self._attach_export_metadata(records, self._export_records(records))
+        count_after = self.count_read_only_ui(filters, as_of=as_of)
+        if count_after != len(records):
+            raise ValueError(
+                "出力中に対象件数が変わったため、欠落の可能性を避けてCSV/Excel出力を中止しました。"
+            )
+        rows = self._attach_export_metadata(records, self._export_records(records, read_only=True))
+        for row in rows:
+            for header in READ_ONLY_PENDING_EXPORT_HEADERS:
+                row[COMDESK_EXPORT_HEADERS.index(header)] = ""
         import pandas as pd
         frame = pd.DataFrame(rows, columns=COMDESK_EXPORT_HEADERS)
         return {
