@@ -993,7 +993,20 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.info("取込・Email状況・Job状態・Human Review・Step 6 Comdesk同期はREAD ONLY初回公開では表示しません。")
         return
 
-    write_disabled = demo or read_only
+    # Review fix (Issue #130 PR #131 follow-up): CLINIC_READ_ONLY_UI=false on a
+    # Cloud Run deployment previously meant "identical write access to Mac" for
+    # every surface below (legacy Comdesk/厚生局/Maps import, HP Job dispatch,
+    # Step6/7 Comdesk sync/reimport) -- none of which were ever individually
+    # reviewed for multi-operator IAP-authenticated Cloud access (no operator
+    # identity, no preview/confirm, no dedicated writer connection, unlike
+    # cloud_comdesk_import_ui() or src.cloud_run.job_control.py's own HP Job
+    # role separation). is_cloud_run_deployment() locks this whole legacy
+    # surface on ANY Cloud Run deployment regardless of CLINIC_READ_ONLY_UI --
+    # only a deliberately-built, individually-flagged Cloud path (like
+    # cloud_comdesk_import_ui, which does NOT use write_disabled) can run
+    # there. On Mac (no K_SERVICE) this changes nothing.
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    write_disabled = demo or read_only or is_cloud_run_deployment()
     metrics = store.metrics()
 
     st.header("上から順に進めるだけ")
@@ -1272,28 +1285,31 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
 def import_ui_comdesk_step(store, demo, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
     upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=demo)
-    if not upload:
-        return
-    table = upload_table(upload, key_prefix)
-    inferred = infer_comdesk_columns(table)
-    labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
-              "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
-              "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
-    mapping = {}
-    with st.expander("列の対応を確認", expanded=False):
-        st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
-        for field, label in labels.items():
-            choices = [None]+list(range(len(table.headers)))
-            selected = inferred.get(field)
-            mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
-                format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
-        preview = table.data.head(5).copy()
-        preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
-        st.dataframe(preview, hide_index=True)
-    if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
-        with st.spinner("Comdeskデータを照合・登録しています…"):
-            result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
-        report_import(result)
+    if upload:
+        table = upload_table(upload, key_prefix)
+        inferred = infer_comdesk_columns(table)
+        labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+                  "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
+                  "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
+        mapping = {}
+        with st.expander("列の対応を確認", expanded=False):
+            st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+            for field, label in labels.items():
+                choices = [None]+list(range(len(table.headers)))
+                selected = inferred.get(field)
+                mapping[field] = st.selectbox(label+"の列", choices, index=choices.index(selected),
+                    format_func=lambda i: "未設定" if i is None else f"{i+1}列目：{table.headers[i]}", key=key_prefix+"_map_"+field)
+            preview = table.data.head(5).copy()
+            preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
+            st.dataframe(preview, hide_index=True)
+        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=demo, use_container_width=True):
+            with st.spinner("Comdeskデータを照合・登録しています…"):
+                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+            report_import(result)
+    # These are independent, separately-gated panels -- they must render
+    # regardless of whether the legacy uploader above has a file selected.
+    # (Review fix: previously the `if not upload: return` above exited the
+    # whole function before either panel was ever reached.)
     render_comdesk_snapshot_diff_import(store, demo, key_prefix=key_prefix)
     cloud_comdesk_import_ui(store, demo, key_prefix=key_prefix)
 
@@ -1377,20 +1393,44 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
     Never renders under the current READ ONLY Canary (read_only_ui_mode() is
     True there) -- this only activates in a hypothetical future, separately-
     provisioned Cloud Run deployment with CLINIC_READ_ONLY_UI=false, gated by
-    its own default-OFF flag. On Mac/local (CLINIC_READ_ONLY_UI unset, flag
-    unset) this is a no-op, same behavior as before this panel existed.
+    its own default-OFF flag AND is_cloud_run_deployment() (so a non-Cloud,
+    non-Mac process, e.g. a test runner, is also excluded). On Mac/local this
+    is a no-op, same behavior as before this panel existed.
 
-    Reuses import_comdesk() as-is (same UUID matching, provenance, and
-    import-batch idempotency as the local path) and adds only what a
-    multi-operator Cloud deployment needs beyond that: an identified IAP
-    operator, a read-only preview before any write, and a same-session
-    double-submit guard (src.master.comdesk_cloud_import).
+    Reuses import_comdesk() business logic as-is (same UUID matching,
+    provenance, and import-batch idempotency as the local path), but NOT the
+    same connection: writes go through a dedicated, fail-closed Comdesk
+    import writer role (src.cloud_run.comdesk_import_writer), never the
+    general write backend every other local write path shares. Also adds
+    what a multi-operator Cloud deployment needs beyond local Mac usage: an
+    IAP-identified AND separately-authorized operator (allowlist-checked,
+    not "any IAP login"), a read-only preview before any write, and a
+      same-session double-submit guard (src.master.comdesk_cloud_import) --
+    defense in depth on top of import_comdesk()'s own data-level UUID
+    idempotency, which is what actually prevents duplication across
+    sessions/restarts/multiple users (the session guard only avoids an
+    unnecessary re-submit within one browser tab; it is not the safety
+    boundary).
+
+    KNOWN GAP, deliberately not built in this round: the preview below shows
+    row/column counts and raw file content only, not a NEW/UPDATE/HOLD
+    matching-outcome breakdown like src.master.comdesk_snapshot_import's
+    preview_comdesk_snapshot_pair() provides. src.master.matching.match_record()
+    is SQLite-specific (uses `?` placeholders against a sqlite3 connection)
+    and is not safe to call against the Postgres/Supabase connection this
+    path actually uses -- building a correct Postgres-compatible dry-run
+    classifier is real new logic, not something to guess at under time
+    pressure. Tracked as a follow-up, not silently skipped.
     """
+    from src.cloud_run.comdesk_import_writer import (
+        ComdeskImportWriterNotConfiguredError, comdesk_import_writer_repositories,
+    )
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
     from src.cloud_run.feature_flags import cloud_write_feature_enabled
-    from src.cloud_run.operator_identity import operator_email_from_headers
+    from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
     from src.master.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
 
-    if read_only_ui_mode():
+    if read_only_ui_mode() or not is_cloud_run_deployment():
         return
     with st.expander("Comdesk取込（Cloud Run Writer用・既定無効）", expanded=False):
         if not cloud_write_feature_enabled("CLINIC_CLOUD_COMDESK_IMPORT_ENABLED"):
@@ -1403,11 +1443,20 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
             st.info("デモ・読み取り専用では利用できません。")
             return
         operator_email = operator_email_from_headers(getattr(st.context, "headers", None))
-        if not operator_email:
-            st.error("IAP認可済みの操作者を確認できないため、取込を無効にしています。")
+        if not operator_authorized_for_cloud_write(operator_email):
+            st.error(
+                "IAPでログイン済みでも、Comdesk取込の業務権限がある操作者として"
+                "CLINIC_CLOUD_WRITE_OPERATORSに登録されていないため無効です。"
+                "ログイン自体は書込み権限を意味しません。"
+            )
             return
         st.caption(f"操作者：{operator_email}")
-        st.caption("本番データは書込みません（別承認まで無効）。プレビュー確認後、同一内容の二重送信は1セッション内でブロックします。")
+        st.caption(
+            "この操作は、このデプロイが接続しているデータベースへ実際に書き込みます"
+            "（本番Supabaseに接続された状態で実行すれば本番データが更新されます）。"
+            "プレビュー確認・チェック・ボタン押下まで何も書き込みません。"
+            "同一内容の再送信は1セッション内でブロックします（詳細はコード内コメント参照）。"
+        )
         upload = st.file_uploader(
             "Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix + "_cloud_upload",
         )
@@ -1422,6 +1471,7 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
             return
         preview = preview_comdesk_import(table, mapping)
         st.write(f"対象：{preview['row_count']:,}行 / {preview['column_count']}列")
+        st.caption("新規・更新・重複・HOLDの内訳は未実装です（Postgres対応の照合プレビューは別途実装予定）。")
         display_preview = preview["preview"].copy()
         display_preview.columns = [f"{i+1}｜{v}" for i, v in enumerate(table.headers)]
         st.dataframe(display_preview, hide_index=True)
@@ -1430,8 +1480,13 @@ def cloud_comdesk_import_ui(store, demo, *, key_prefix):
             "確認のうえ取り込む", type="primary", disabled=not confirmed,
             key=key_prefix + "_cloud_submit",
         ):
+            try:
+                writer_repositories = comdesk_import_writer_repositories()
+            except ComdeskImportWriterNotConfiguredError as exc:
+                st.error(str(exc))
+                return
             with st.spinner("Comdeskデータを照合・登録しています…"):
-                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+                result = writer_repositories.clinics.import_comdesk(table, mapping)
             st.session_state[key_prefix + "_cloud_applied_key"] = idempotency_key
             logging.info(
                 "cloud_comdesk_import operator=%s idempotency_key=%s result=%s",
@@ -1869,16 +1924,23 @@ def main():
         st.session_state["advanced_section"] = "HP Human Review"
 
     read_only = read_only_ui_mode()
+    # Review fix (Issue #130 PR #131 follow-up): lock the NAV down whenever
+    # EITHER read_only is True OR this process is a Cloud Run deployment at
+    # all (is_cloud_run_deployment(), regardless of CLINIC_READ_ONLY_UI) --
+    # see the write_disabled comment in simple_workflow_ui for the full
+    # reasoning. nav_locked, not read_only alone, decides nav visibility.
+    from src.cloud_run.deployment_context import is_cloud_run_deployment
+    nav_locked = read_only or is_cloud_run_deployment()
     with st.sidebar:
-        nav_options = NAV[:2] if read_only else NAV
+        nav_options = NAV[:2] if nav_locked else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
-        if read_only:
+        if nav_locked:
             demo = False
             with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
-                st.caption("ローカル版は以下の5メニューを順に使います。READ ONLY版では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
+                st.caption("ローカル版は以下の5メニューを順に使います。この画面では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
                 for name in NAV:
                     if name in nav_options:
-                        st.caption(f"✅ {name}：READ ONLYで利用可能")
+                        st.caption(f"✅ {name}：利用可能")
                     else:
                         st.caption(f"🔒 {name}：未有効・別権限が必要（データ更新/送信を含むため非表示）")
         else:
@@ -1887,6 +1949,8 @@ def main():
         st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
+    elif nav_locked:
+        st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE

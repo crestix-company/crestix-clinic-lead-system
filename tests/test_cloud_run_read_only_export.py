@@ -280,7 +280,7 @@ def test_read_only_main_cannot_enter_demo_loader_or_write_side_effects():
     main = source[source.index("def main():"):source.index("def user_error_text")]
     sidebar_start = main.index("with st.sidebar:")
     readonly_sidebar = main[sidebar_start:main.index("    if read_only:\n        st.warning", sidebar_start)]
-    assert "if read_only:" in readonly_sidebar
+    assert "if nav_locked:" in readonly_sidebar
     assert "demo = False" in readonly_sidebar
     assert "st.toggle(\"サンプルモード\"" in readonly_sidebar
 

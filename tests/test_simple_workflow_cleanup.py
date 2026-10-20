@@ -93,7 +93,8 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple_end = source.index("def import_ui_comdesk_step", simple_start)
     simple = source[simple_start:simple_end]
 
-    assert "nav_options = NAV[:2] if read_only else NAV" in main
+    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
     assert "if not read_only and not is_cloud_run_executor():" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main
     assert "if not read_only and auto_state.get" in simple
