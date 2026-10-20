@@ -77,7 +77,7 @@ CREATE ROLE clinic_cloudrun_projection_owner
 -- the READ ONLY adapter anywhere (src/repository/supabase_adapter.py); omitted here rather than
 -- granted-but-unused, per the data-minimization review of this view's column set.
 GRANT SELECT (
-  id, uuid, clinic_name, phone, address, prefecture, medical_type, active,
+  id, uuid, clinic_name, phone, phone_norm, address, prefecture, medical_type, active,
   designation_date, recent_until, registration_reason, owner_equal,
   hp_status, hp_url, hp_rank, signal_count, hot_status, departments_json,
   treatments_json, signals_json, first_seen_at, last_seen_at, source_as_of_date,
@@ -182,7 +182,7 @@ CREATE VIEW public.clinic_cloudrun_readonly WITH (security_barrier = true) AS
 WITH projected AS (
   SELECT c.id, c.uuid, c.merged_into, c.tel_match_key, c.first_seen_at, c.last_seen_at,
          c.source_as_of_date, c.is_new, c.departments_json, c.hp_status, c.hp_url,
-         c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.address, c.prefecture,
+         c.hp_rank, c.maps_website_url, c.clinic_name, c.phone, c.phone_norm, c.address, c.prefecture,
          c.medical_type, c.active, c.designation_date, c.recent_until,
          c.registration_reason, c.owner_equal, c.signal_count,
          c.hot_status, c.treatments_json, c.signals_json, c.merge_hold,
@@ -196,7 +196,7 @@ WITH projected AS (
 SELECT
   id, uuid, merged_into, tel_match_key, first_seen_at, last_seen_at, source_as_of_date,
   is_new, departments_json, hp_status, hp_url, hp_rank, maps_website_url,
-  clinic_name, phone, address, prefecture, medical_type, active, designation_date,
+  clinic_name, phone, phone_norm, address, prefecture, medical_type, active, designation_date,
   recent_until, registration_reason, owner_equal, signal_count,
   hot_status, treatments_json, signals_json, merge_hold, maps_presence_status,
   maps_profile_url, exclude_reason,

@@ -103,6 +103,12 @@ def main():
                 )
             """)
             _assert(not cur.fetchone()[0], "Inferred age projection is present in the READ ONLY view")
+            cur.execute("""
+                SELECT data_type FROM information_schema.columns
+                WHERE table_schema='public' AND table_name='clinic_cloudrun_readonly'
+                  AND column_name='phone_norm'
+            """)
+            _assert(cur.fetchone() == ("text",), "phone_norm must be projected as text")
 
         CaptureCursor.statements = []
         hp = SupabaseHpResearchRepository(conn)
@@ -123,6 +129,12 @@ def main():
 
         department_rows = store.query_read_only_ui(Filters(departments=["内科"]))
         _assert([r["id"] for r in department_rows] == [1], "Department filter differs")
+        name_rows = store.query_read_only_ui(Filters(keyword="Projection Clinic"))
+        _assert([r["id"] for r in name_rows] == [1], "Clinic-name keyword search differs")
+        phone_rows = store.query_read_only_ui(Filters(keyword="03-0000-0001"))
+        _assert([r["id"] for r in phone_rows] == [1], "Normalized-phone keyword search differs")
+        uuid_rows = store.query_read_only_ui(Filters(keyword="uuid-1"))
+        _assert([r["id"] for r in uuid_rows] == [1], "UUID keyword search differs")
         hp_rank_rows = store.query_read_only_ui(Filters(effective_ranks=["A"]))
         _assert([r["id"] for r in hp_rank_rows] == [1], "Effective HP rank filter differs")
         treatment_rows = store.query_read_only_ui(Filters(hp_treatment_categories=["胃カメラ"]))

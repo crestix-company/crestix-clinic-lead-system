@@ -21,6 +21,7 @@ CREATE TABLE public.clinics (
   uuid text NOT NULL DEFAULT '',
   clinic_name text NOT NULL DEFAULT '',
   phone text NOT NULL DEFAULT '',
+  phone_norm text NOT NULL DEFAULT '',
   address text NOT NULL DEFAULT '',
   prefecture text NOT NULL DEFAULT '',
   medical_type text NOT NULL DEFAULT '',
@@ -79,6 +80,9 @@ VALUES
   '{"facility_type":"病院"}'),
  (1001, 'Out Of Range Number Clinic', '', '', '東京都', '医科', '[]', '[]', '[]',
   '{"facility_type":"診療所","large":1e1000000}');
+
+UPDATE public.clinics SET uuid='uuid-1', phone_norm='0300000001' WHERE id=1;
+UPDATE public.clinics SET phone_norm='0600000002' WHERE id=2;
 
 CREATE SCHEMA hp_research;
 CREATE TABLE hp_research.clinic_hp_research (

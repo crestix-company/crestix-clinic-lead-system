@@ -199,6 +199,15 @@ def test_read_only_treatment_pair_filter_uses_only_confirmed_treatment_sidecar()
     assert "research_status='CONFIRMED'" in readonly_sql
 
 
+def test_read_only_keyword_search_uses_clinic_name_normalized_phone_and_uuid():
+    sql, args = supabase_where(Filters(keyword="03-0000-0001"), excluded_ids=[], read_only_ui=True)
+    assert "clinic_name" in sql
+    assert "phone_norm" in sql
+    assert "uuid=%s" in sql
+    assert args[-3:] == ["%03-0000-0001%", "%0300000001%", "03-0000-0001"]
+    assert "phone_norm" in SupabaseClinicRepository._READ_ONLY_COLUMNS
+
+
 def test_inferred_age_is_excluded_from_read_only_projection_ui_and_filter():
     assert "age_probability" not in SupabaseClinicRepository._READ_ONLY_COLUMNS
     assert "age_probability_under_59" not in SupabaseClinicRepository._READ_ONLY_COLUMNS

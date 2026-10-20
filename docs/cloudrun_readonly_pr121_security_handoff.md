@@ -15,7 +15,10 @@ normal-mode SQL paths retain their current grants and behavior.
 
 `public.clinic_cloudrun_readonly` contains the named clinic columns in `_READ_ONLY_COLUMNS`,
 `effective_projection jsonb`, `projection_marker text`, `projection_valid boolean`, and
-`is_hospital_or_center boolean`. The JSON projection contains only
+`is_hospital_or_center boolean`. It also exposes `phone_norm text`, the existing normalized
+phone-search value, to the Reader through the VIEW. The projection owner receives source-column
+SELECT on `public.clinics.phone_norm`; the app does not add it to displayed or exported fields.
+The JSON projection contains only
 `hp_production_companies`, `epark_url`, and `epark_contract`. It excludes raw facility type and evidence JSON,
 inferred age, names, schedules, and `treatment_status`. The marker depends only on the already
 visible Clinic ID. The hospital boolean uses the same literal `LIKE` predicate as normal mode.

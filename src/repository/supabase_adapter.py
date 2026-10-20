@@ -137,7 +137,7 @@ class SupabaseClinicRepository:
         "id", "uuid", "merged_into", "effective_projection", "projection_marker",
         "projection_valid", "tel_match_key", "first_seen_at", "last_seen_at",
         "source_as_of_date", "is_new", "departments_json", "hp_status", "hp_url",
-        "hp_rank", "maps_website_url", "clinic_name", "phone", "address", "prefecture",
+        "hp_rank", "maps_website_url", "clinic_name", "phone", "phone_norm", "address", "prefecture",
         "medical_type", "owner_equal", "designation_date",
         "signal_count", "hot_status", "treatments_json", "signals_json",
         "maps_presence_status", "maps_profile_url",
