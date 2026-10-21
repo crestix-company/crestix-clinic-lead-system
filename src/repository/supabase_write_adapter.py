@@ -1427,10 +1427,11 @@ class SupabaseClinicWriteRepository:
                 cur.execute(
                     "SELECT i.indisunique AND i.indisvalid AND i.indisready "
                     "AND i.indrelid='provenance.source_records'::regclass "
-                    "AND POSITION('comdesk_project_id' IN pg_get_indexdef(i.indexrelid))>0 "
-                    "AND POSITION('comdesk_case_id' IN pg_get_indexdef(i.indexrelid))>0 "
-                    "AND POSITION('btrim' IN LOWER(pg_get_indexdef(i.indexrelid)))>0 "
+                    "AND i.indnkeyatts=2 "
+                    "AND LOWER(pg_get_expr(i.indexprs,i.indrelid)) "
+                    "LIKE '%btrim%comdesk_project_id%btrim%comdesk_case_id%' "
                     "AND i.indpred IS NOT NULL "
+                    "AND pg_get_expr(i.indpred,i.indrelid) LIKE '%コムデスク%' "
                     "FROM pg_index i WHERE i.indexrelid="
                     "to_regclass('provenance.comdesk_project_case_unique_idx')"
                 )

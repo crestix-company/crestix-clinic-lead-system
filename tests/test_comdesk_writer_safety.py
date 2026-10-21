@@ -167,6 +167,7 @@ def test_writer_requires_db_unique_guard_and_never_updates_clinic_uuid_from_comd
     assert "prepare_comdesk_writer_import" in method
     assert "to_regclass('provenance.comdesk_project_case_unique_idx')" in method
     assert "i.indisunique AND i.indisvalid AND i.indisready" in method
+    assert "pg_get_expr(i.indexprs,i.indrelid)" in method
     assert "pg_advisory_xact_lock" in method
     assert "comdesk_match_record(record)" in method
     assert "strict_identity=True" in method
