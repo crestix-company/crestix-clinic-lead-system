@@ -205,7 +205,10 @@ class _StatefulCursor:
             return
 
         if q == "SELECT to_regclass('provenance.comdesk_project_case_unique_idx')":
-            self._result = [("provenance.comdesk_project_case_unique_idx",)]
+            self._result = [(
+                "provenance.comdesk_project_case_unique_idx"
+                if self.conn.comdesk_unique_index_present else None,
+            )]
             return
 
         if q.startswith("SELECT pg_advisory_xact_lock(hashtextextended"):
@@ -386,6 +389,7 @@ class _StatefulConn:
         self.import_batches = {}
         self.projection_updates = []
         self.repeatable_read = False
+        self.comdesk_unique_index_present = True
         self.mutate_before_lock = None
         self.committed = 0
         self.rolled_back = 0
@@ -438,6 +442,37 @@ def test_fast_import_preserves_matched_history_provenance_originals_and_idempote
     assert second["already_imported"] is True
     assert len(conn.source_records) == 1
     assert len(conn.original_rows) == 1
+
+
+def test_fast_import_fails_closed_when_comdesk_unique_index_is_missing():
+    clinic = _candidate(
+        1_000_000_001,
+        uuid="CLINIC-UUID-1",
+        phone="03-1111-2222",
+        name="既存医院",
+        address="東京都千代田区1-1",
+    )
+    conn = _StatefulConn([clinic])
+    conn.comdesk_unique_index_present = False
+    repo = SupabaseClinicWriteRepository(conn)
+    table = _table([
+        ["COMDESK-UUID-1", "既存医院", "03-1111-2222", "東京都", "千代田区1-1", ""],
+    ])
+
+    with pytest.raises(RuntimeError, match="一意制約が未適用です。HOLD"):
+        repo.import_comdesk(table, WRITER_MAPPING)
+
+    assert conn.clinics[1_000_000_001]["uuid"] == "CLINIC-UUID-1"
+    assert conn.source_records == []
+    assert conn.original_rows == []
+    assert conn.change_history == []
+    assert conn.projection_updates == []
+    assert conn.committed == 0
+    assert conn.rolled_back == 1
+    assert any(
+        query == "SELECT to_regclass('provenance.comdesk_project_case_unique_idx')"
+        for query, _ in conn.executed
+    )
 
 
 def test_fast_import_unmatched_rows_stay_on_hold_without_clinic_creation():
