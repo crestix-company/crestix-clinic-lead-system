@@ -227,10 +227,9 @@ class _StatefulCursor:
             )
             return
 
-        if q == "SELECT to_regclass('provenance.comdesk_project_case_unique_idx')":
+        if "to_regclass('provenance.comdesk_project_case_unique_idx')" in q:
             self._result = [(
-                "provenance.comdesk_project_case_unique_idx"
-                if self.conn.comdesk_unique_index_present else None,
+                self.conn.comdesk_unique_index_present and self.conn.comdesk_unique_index_valid,
             )]
             return
 
@@ -242,8 +241,8 @@ class _StatefulCursor:
             duplicate = any(
                 row[2] == "コムデスク"
                 and (
-                    self._obj(row[3]).get("comdesk_project_id"),
-                    self._obj(row[3]).get("comdesk_case_id"),
+                    str(self._obj(row[3]).get("comdesk_project_id") or "").strip(),
+                    str(self._obj(row[3]).get("comdesk_case_id") or "").strip(),
                 ) in pairs
                 for row in self.conn.source_records
             )
@@ -413,6 +412,7 @@ class _StatefulConn:
         self.projection_updates = []
         self.repeatable_read = False
         self.comdesk_unique_index_present = True
+        self.comdesk_unique_index_valid = True
         self.mutate_before_lock = None
         self.committed = 0
         self.rolled_back = 0
@@ -493,9 +493,46 @@ def test_fast_import_fails_closed_when_comdesk_unique_index_is_missing():
     assert conn.committed == 0
     assert conn.rolled_back == 1
     assert any(
-        query == "SELECT to_regclass('provenance.comdesk_project_case_unique_idx')"
+        "to_regclass('provenance.comdesk_project_case_unique_idx')" in query
         for query, _ in conn.executed
     )
+
+
+def test_fast_import_fails_closed_when_comdesk_unique_index_is_invalid():
+    conn = _StatefulConn([_candidate(
+        1_000_000_001,
+        uuid="CLINIC-UUID-1",
+        phone="03-1111-2222",
+        name="既存医院",
+        address="東京都千代田区1-1",
+    )])
+    conn.comdesk_unique_index_valid = False
+    repo = SupabaseClinicWriteRepository(conn)
+    table = _table([["COMDESK-UUID-1", "既存医院", "03-1111-2222", "東京都", "千代田区1-1", ""]])
+
+    with pytest.raises(RuntimeError, match="一意制約が未適用です。HOLD"):
+        repo.import_comdesk(table, WRITER_MAPPING)
+    assert conn.source_records == []
+    assert conn.committed == 0
+    assert conn.rolled_back == 1
+
+
+def test_fast_import_holds_existing_case_with_whitespace_in_source_ids():
+    conn = _StatefulConn()
+    conn.source_records.append((
+        1, None, "コムデスク",
+        {"comdesk_project_id": " PROJECT-SYNTH ", "comdesk_case_id": " CASE-1 "},
+    ))
+    repo = SupabaseClinicWriteRepository(conn)
+    table = _table([[
+        "CD-1", "合成医院", "03-0000-0000", "東京都", "千代田区1-1", "",
+    ]])
+
+    with pytest.raises(ValueError, match="重複確認"):
+        repo.import_comdesk(table, WRITER_MAPPING)
+    assert len(conn.source_records) == 1
+    assert conn.committed == 0
+    assert conn.rolled_back == 1
 
 
 def test_fast_import_unmatched_rows_stay_on_hold_without_clinic_creation():

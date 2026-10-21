@@ -4,8 +4,8 @@
 -- This migration is a proposal only; review existing duplicates before applying.
 CREATE UNIQUE INDEX IF NOT EXISTS comdesk_project_case_unique_idx
 ON provenance.source_records (
-    (record_json->>'comdesk_project_id'),
-    (record_json->>'comdesk_case_id')
+    (BTRIM(record_json->>'comdesk_project_id')),
+    (BTRIM(record_json->>'comdesk_case_id'))
 )
 WHERE source = 'コムデスク'
   AND NULLIF(BTRIM(record_json->>'comdesk_project_id'), '') IS NOT NULL

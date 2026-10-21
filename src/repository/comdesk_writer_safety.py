@@ -74,6 +74,7 @@ def prepare_comdesk_writer_import(
             raise ValueError(f"{row_number}行目: 同一プロジェクトの案件IDが重複しています。HOLD: 取込を停止しました。")
         seen.add(pair)
         record["comdesk_project_id"] = scope
+        record["comdesk_case_id"] = case_id
         prepared.append((row_number - 2, raw, record))
     return mapping, prepared
 

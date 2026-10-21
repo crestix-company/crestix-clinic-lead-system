@@ -93,6 +93,15 @@ def test_missing_or_duplicate_row_ids_fail_closed_before_db_access():
         repo.import_comdesk(missing, _valid_mapping())
 
 
+def test_scoped_case_ids_are_normalized_before_persistence():
+    table = _table(_valid_headers(), [[
+        "CD-1", " CASE-1 ", " PROJECT-1 ", "合成医院", "03-0000-0000", "東京都千代田区1-1",
+    ]])
+    _, prepared = prepare_comdesk_writer_import(table, _valid_mapping())
+    assert prepared[0][2]["comdesk_case_id"] == "CASE-1"
+    assert prepared[0][2]["comdesk_project_id"] == "PROJECT-1"
+
+
 def test_source_ids_do_not_enter_clinic_master_fields_or_uuid_match():
     source = {
         "uuid": "COMDESK-UUID-1",
@@ -157,6 +166,7 @@ def test_writer_requires_db_unique_guard_and_never_updates_clinic_uuid_from_comd
     method = source[start:end]
     assert "prepare_comdesk_writer_import" in method
     assert "to_regclass('provenance.comdesk_project_case_unique_idx')" in method
+    assert "i.indisunique AND i.indisvalid AND i.indisready" in method
     assert "pg_advisory_xact_lock" in method
     assert "comdesk_match_record(record)" in method
     assert "strict_identity=True" in method
@@ -173,4 +183,6 @@ def test_expression_unique_index_covers_scoped_case_id_pair():
     assert "CREATE UNIQUE INDEX" in migration
     assert "record_json->>'comdesk_project_id'" in migration
     assert "record_json->>'comdesk_case_id'" in migration
+    assert "BTRIM(record_json->>'comdesk_project_id')" in migration
+    assert "BTRIM(record_json->>'comdesk_case_id')" in migration
     assert "source = 'コムデスク'" in migration

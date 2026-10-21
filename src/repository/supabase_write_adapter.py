@@ -1424,7 +1424,16 @@ class SupabaseClinicWriteRepository:
                 # The expression unique index is installed separately. Refuse writes until
                 # it exists, then take a project-scoped transaction lock before checking
                 # keys so concurrent instances cannot race the duplicate preflight.
-                cur.execute("SELECT to_regclass('provenance.comdesk_project_case_unique_idx')")
+                cur.execute(
+                    "SELECT i.indisunique AND i.indisvalid AND i.indisready "
+                    "AND i.indrelid='provenance.source_records'::regclass "
+                    "AND POSITION('comdesk_project_id' IN pg_get_indexdef(i.indexrelid))>0 "
+                    "AND POSITION('comdesk_case_id' IN pg_get_indexdef(i.indexrelid))>0 "
+                    "AND POSITION('btrim' IN LOWER(pg_get_indexdef(i.indexrelid)))>0 "
+                    "AND i.indpred IS NOT NULL "
+                    "FROM pg_index i WHERE i.indexrelid="
+                    "to_regclass('provenance.comdesk_project_case_unique_idx')"
+                )
                 index_row = cur.fetchone()
                 if not index_row or not index_row[0]:
                     raise RuntimeError(
@@ -1440,7 +1449,8 @@ class SupabaseClinicWriteRepository:
                     key_chunk = project_case_keys[offset:offset + 500]
                     cur.execute(
                         "SELECT 1 FROM provenance.source_records WHERE source='コムデスク' "
-                        "AND (record_json->>'comdesk_project_id',record_json->>'comdesk_case_id') "
+                        "AND (BTRIM(record_json->>'comdesk_project_id'),"
+                        "BTRIM(record_json->>'comdesk_case_id')) "
                         "IN (SELECT * FROM unnest(%s::text[],%s::text[])) LIMIT 1",
                         ([key[0] for key in key_chunk], [key[1] for key in key_chunk]),
                     )
