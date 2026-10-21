@@ -865,8 +865,18 @@ class SupabaseClinicWriteRepository:
                 if source == "厚生局" and as_of >= source_as_of_date:
                     base.update(record)
                 else:
-                    base.update({k: v for k, v in record.items() if v and not base.get(k)})
-                uid = uuid_val or record.get("uuid", "")
+                    if source == "コムデスク":
+                        from src.repository.comdesk_writer_safety import (
+                            clinic_master_fields, validate_comdesk_review_resolution,
+                        )
+                        validate_comdesk_review_resolution(
+                            record, target_id=clinic_id, existing_clinic_id=None,
+                        )
+                        allowed = clinic_master_fields(record)
+                    else:
+                        allowed = record
+                    base.update({k: v for k, v in allowed.items() if v and not base.get(k)})
+                uid = uuid_val if source == "コムデスク" else uuid_val or record.get("uuid", "")
                 ts = now()
                 cur.execute(
                     "UPDATE public.clinics SET base_json=%s,uuid=%s,last_seen_at=%s,"
@@ -1346,7 +1356,9 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
-    def import_comdesk(self, table, mapping=None, *, project_scope_id=None):
+    def import_comdesk(
+        self, table, mapping=None, *, project_scope_id=None, project_scope_confirmed=False,
+    ):
         """Import a scoped Comdesk case batch without treating source IDs as Clinic IDs."""
         from src.repository.comdesk_writer_safety import (
             clinic_master_fields, comdesk_match_record, prepare_comdesk_writer_import,
@@ -1358,6 +1370,7 @@ class SupabaseClinicWriteRepository:
         phase = {}
         mapping, prepared = prepare_comdesk_writer_import(
             table, mapping, project_scope_id=project_scope_id,
+            project_scope_confirmed=project_scope_confirmed,
         )
         if mapping.get("clinic_name") is None:
             raise ValueError("医院名の列を指定してください。")

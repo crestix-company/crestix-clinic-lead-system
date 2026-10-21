@@ -40,7 +40,7 @@ def _valid_mapping():
 def test_inferred_case_id_is_never_used_as_comdesk_uuid():
     table = _table(["案件ID", "名前"], [["CASE-1", "合成医院"]])
     mapping, prepared = prepare_comdesk_writer_import(
-        table, project_scope_id="PROJECT-1",
+        table, project_scope_id="PROJECT-1", project_scope_confirmed=True,
     )
     assert mapping["uuid"] is None
     assert mapping["comdesk_case_id"] == 0
@@ -64,6 +64,11 @@ def test_import_requires_independent_case_id_and_project_scope():
     with pytest.raises(ValueError, match="プロジェクトスコープ"):
         prepare_comdesk_writer_import(
             no_project, {"uuid": 0, "comdesk_case_id": 1, "clinic_name": 2},
+        )
+    with pytest.raises(ValueError, match="管理者確認"):
+        prepare_comdesk_writer_import(
+            no_project, {"uuid": 0, "comdesk_case_id": 1, "clinic_name": 2},
+            project_scope_id="P-1",
         )
 
 
@@ -147,7 +152,7 @@ def test_phone_only_match_with_conflicting_clinic_identity_is_held():
 
 def test_writer_requires_db_unique_guard_and_never_updates_clinic_uuid_from_comdesk():
     source = Path("src/repository/supabase_write_adapter.py").read_text(encoding="utf-8")
-    start = source.index("    def import_comdesk(self, table, mapping=None, *, project_scope_id=None):")
+    start = source.index("    def import_comdesk(")
     end = source.index("    def ", start + 8)
     method = source[start:end]
     assert "prepare_comdesk_writer_import" in method

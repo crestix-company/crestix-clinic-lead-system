@@ -15,7 +15,9 @@ PROJECT_HEADERS = {_key(value) for value in (
 )}
 
 
-def prepare_comdesk_writer_import(table, mapping=None, *, project_scope_id=None):
+def prepare_comdesk_writer_import(
+    table, mapping=None, *, project_scope_id=None, project_scope_confirmed=False,
+):
     """Validate distinct source UUID, case ID, and project scope before DB access."""
     supplied_mapping = mapping is not None
     mapping = dict(mapping or infer_comdesk_columns(table))
@@ -48,6 +50,8 @@ def prepare_comdesk_writer_import(table, mapping=None, *, project_scope_id=None)
         mapping["comdesk_project_id"] = project_hits[0] if len(project_hits) == 1 else None
     project_col = mapping["comdesk_project_id"]
     fixed_scope = str(project_scope_id or "").strip()
+    if fixed_scope and not project_scope_confirmed:
+        raise ValueError("プロジェクトスコープの管理者確認がありません。HOLD: 取込を開始できません。")
     if project_col is not None and _key(table.headers[project_col]) not in PROJECT_HEADERS:
         raise ValueError("確認済みプロジェクトスコープ列を指定してください。")
     if project_col is None and not fixed_scope:
