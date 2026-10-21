@@ -24,6 +24,10 @@ MAPPING = {
     "address": 4,
     "address2": 5,
 }
+WRITER_MAPPING = MAPPING | {
+    "comdesk_case_id": 6,
+    "comdesk_project_id": 7,
+}
 
 
 def _record(prefecture, address, *, name="医院", uuid="", phone=""):
@@ -200,6 +204,26 @@ class _StatefulCursor:
             )
             return
 
+        if q == "SELECT to_regclass('provenance.comdesk_project_case_unique_idx')":
+            self._result = [("provenance.comdesk_project_case_unique_idx",)]
+            return
+
+        if q.startswith("SELECT pg_advisory_xact_lock(hashtextextended"):
+            return
+
+        if q.startswith("SELECT 1 FROM provenance.source_records WHERE source='コムデスク'"):
+            pairs = set(zip(params[0], params[1]))
+            duplicate = any(
+                row[2] == "コムデスク"
+                and (
+                    self._obj(row[3]).get("comdesk_project_id"),
+                    self._obj(row[3]).get("comdesk_case_id"),
+                ) in pairs
+                for row in self.conn.source_records
+            )
+            self._result = [(1,)] if duplicate else None
+            return
+
         if q.startswith("INSERT INTO provenance.templates"):
             return
 
@@ -225,16 +249,6 @@ class _StatefulCursor:
                 rows = [
                     row for row in rows
                     if (row.get("name_norm"), row.get("address_norm")) in pairs
-                ]
-            elif "c.name_prefix=p.name_prefix" in q:
-                pairs = set(zip(params[0], params[1]))
-                rows = [
-                    row for row in rows
-                    if any(
-                        row.get("name_prefix") == prefix
-                        and row.get("prefecture") in {prefecture, ""}
-                        for prefix, prefecture in pairs
-                    )
                 ]
             elif "id=ANY" in q and "FOR UPDATE" in q:
                 ids = set(params[0])
@@ -286,13 +300,12 @@ class _StatefulCursor:
             self._result = (cid,)
             return
 
-        if q.startswith("UPDATE public.clinics AS c SET base_json=v.base_json,uuid=v.uuid"):
-            width = 5
+        if q.startswith("UPDATE public.clinics AS c SET base_json=v.base_json,last_seen_at=v.last_seen_at"):
+            width = 4
             for offset in range(0, len(params), width):
-                cid, base, uuid_value, last_seen, source_as_of = params[offset:offset + width]
+                cid, base, last_seen, source_as_of = params[offset:offset + width]
                 row = self.conn.clinics[int(cid)]
                 row["base_json"] = dict(self._obj(base))
-                row["uuid"] = uuid_value
                 row["last_seen_at"] = last_seen
                 row["source_as_of_date"] = str(source_as_of or "")
                 SupabaseClinicWriteRepository._comdesk_refresh_match_fields(row)
@@ -388,15 +401,16 @@ class _StatefulConn:
 
 
 def _table(rows):
-    headers = ["UUID", "名前", "Tel1", "都道府県", "住所１", "住所２"]
-    frame = pd.DataFrame(rows, columns=headers)
+    headers = ["UUID", "名前", "Tel1", "都道府県", "住所１", "住所２", "案件ID", "プロジェクトID"]
+    scoped_rows = [list(row) + [f"CASE-{index + 1}", "PROJECT-SYNTH"] for index, row in enumerate(rows)]
+    frame = pd.DataFrame(scoped_rows, columns=headers)
     return InputTable(headers=headers, data=frame)
 
 
 def test_fast_import_preserves_matched_history_provenance_originals_and_idempotency():
     clinic = _candidate(
         1_000_000_001,
-        uuid="",
+        uuid="CLINIC-UUID-1",
         phone="03-1111-2222",
         name="既存医院",
         address="東京都千代田区1-1",
@@ -407,12 +421,12 @@ def test_fast_import_preserves_matched_history_provenance_originals_and_idempote
         ["UUID-1", "既存医院", "03-1111-2222", "東京都", "千代田区1-1", ""],
     ])
 
-    result = repo.import_comdesk(table, MAPPING)
+    result = repo.import_comdesk(table, WRITER_MAPPING)
 
     assert result["MATCHED"] == 1 and result["NEW"] == 0 and result["AMBIGUOUS"] == 0
     assert conn.repeatable_read is True
-    assert conn.clinics[1_000_000_001]["uuid"] == "UUID-1"
-    assert len(conn.change_history) >= 1
+    assert conn.clinics[1_000_000_001]["uuid"] == "CLINIC-UUID-1"
+    assert conn.change_history == []
     assert len(conn.source_records) == 1
     assert len(conn.original_rows) == 1
     assert conn.match_reviews == []
@@ -420,13 +434,13 @@ def test_fast_import_preserves_matched_history_provenance_originals_and_idempote
     assert conn.committed == 1 and conn.rolled_back == 0
     assert any("FOR UPDATE" in q and "id=ANY" in q for q, _ in conn.executed)
 
-    second = repo.import_comdesk(table, MAPPING)
+    second = repo.import_comdesk(table, WRITER_MAPPING)
     assert second["already_imported"] is True
     assert len(conn.source_records) == 1
     assert len(conn.original_rows) == 1
 
 
-def test_fast_import_new_then_later_uuid_matches_same_new_clinic():
+def test_fast_import_unmatched_rows_stay_on_hold_without_clinic_creation():
     conn = _StatefulConn()
     repo = SupabaseClinicWriteRepository(conn)
     table = _table([
@@ -434,14 +448,14 @@ def test_fast_import_new_then_later_uuid_matches_same_new_clinic():
         ["UUID-NEW", "新規医院", "", "東京都", "港区1-1", ""],
     ])
 
-    result = repo.import_comdesk(table, MAPPING)
+    result = repo.import_comdesk(table, WRITER_MAPPING)
 
-    assert result["NEW"] == 1
-    assert result["MATCHED"] == 1
-    assert len(conn.clinics) == 1
-    created_id = next(iter(conn.clinics))
-    linked_source_ids = [row[1] for row in conn.source_records]
-    assert linked_source_ids == [created_id, created_id]
+    assert result["NEW"] == 0
+    assert result["MATCHED"] == 0
+    assert result["AMBIGUOUS"] == 2
+    assert conn.clinics == {}
+    assert all(row[1] is None for row in conn.source_records)
+    assert len(conn.match_reviews) == 2
     assert len(conn.original_rows) == 2
 
 
@@ -455,13 +469,31 @@ def test_fast_import_ambiguous_persists_review_candidates():
         ["", "不明医院", "03-1111-2222", "東京都", "", ""],
     ])
 
-    result = repo.import_comdesk(table, MAPPING)
+    result = repo.import_comdesk(table, WRITER_MAPPING)
 
     assert result["AMBIGUOUS"] == 1
     assert len(conn.source_records) == 1
     assert conn.source_records[0][1] is None
     assert len(conn.match_reviews) == 1
     assert conn.match_reviews[0][1] == [1_000_000_001, 1_000_000_002]
+
+
+def test_changed_snapshot_with_duplicate_project_case_pair_is_held():
+    conn = _StatefulConn()
+    repo = SupabaseClinicWriteRepository(conn)
+    first = _table([
+        ["CD-1", "合成医院A", "03-9999-0000", "東京都", "港区1-1", ""],
+    ])
+    changed = _table([
+        ["CD-1", "合成医院B", "03-9999-0000", "東京都", "港区1-1", ""],
+    ])
+    repo.import_comdesk(first, WRITER_MAPPING)
+    assert len(conn.source_records) == 1
+
+    with pytest.raises(ValueError, match="重複確認"):
+        repo.import_comdesk(changed, WRITER_MAPPING)
+    assert len(conn.source_records) == 1
+    assert conn.rolled_back == 1
 
 
 def test_fast_import_aborts_if_candidate_changes_between_prefetch_and_lock():
@@ -486,7 +518,7 @@ def test_fast_import_aborts_if_candidate_changes_between_prefetch_and_lock():
     ])
 
     with pytest.raises(RuntimeError, match="安全のため取込を取り消しました"):
-        repo.import_comdesk(table, MAPPING)
+        repo.import_comdesk(table, WRITER_MAPPING)
 
     assert conn.rolled_back == 1
     assert conn.committed == 0
