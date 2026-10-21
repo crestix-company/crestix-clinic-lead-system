@@ -6,8 +6,13 @@ from pathlib import Path
 import streamlit as st
 
 from src.io.input_loader import load_table
-from src.master.comdesk import infer_comdesk_columns, record_from_row, validate_comdesk_mapping
-from src.master.comdesk_reconciliation import input_identity, source_scope
+from src.master.comdesk_reconciliation import (
+    infer_comdesk_columns,
+    input_identity,
+    record_from_row,
+    source_scope,
+    validate_comdesk_mapping,
+)
 from src.master.matching import ClinicMatchingIndex, match_record
 from src.normalizer.address import normalize_address
 from src.normalizer.clinic_name import normalize_clinic_name

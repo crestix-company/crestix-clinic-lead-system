@@ -1,9 +1,8 @@
-import json
-
 import pytest
 
+from src.comdesk_uuid_preview_ui import classify_rows
 from src.io.input_loader import load_table
-from src.master.comdesk import (
+from src.master.comdesk_reconciliation import (
     infer_comdesk_columns,
     record_from_row,
     validate_comdesk_mapping,
@@ -40,30 +39,36 @@ def test_comdesk_uuid_column_cannot_be_manually_mapped_to_case_id():
         validate_comdesk_mapping(["Comdesk UUID", "案件ID"], {"uuid": 0, "comdesk_case_id": 0})
 
 
-def test_two_cases_on_same_clinic_are_preserved_and_reimport_is_idempotent(tmp_path):
-    store = ClinicStore(tmp_path / "clinic.sqlite3")
+def test_preview_keeps_two_cases_for_one_clinic_without_writing():
     clinic = sample_records()[0]
-    store.import_master([clinic])
-    headers = ["案件ID", "名前", "Tel1", "都道府県", "住所１", "住所２"]
-    rows = [
-        ["lead-A", clinic["clinic_name"], clinic["phone"], clinic["prefecture"], clinic["address"], ""],
-        ["lead-B", clinic["clinic_name"], clinic["phone"], clinic["prefecture"], clinic["address"], ""],
+    headers = [
+        "UUID", "種別", "名前", "カナ", "郵便番号", "都道府県", "住所１", "住所２",
+        "住所カナ", "Tel1", "Tel2", "Tel3", "Tel4", "FAX", "URL", "備考", "旧社名",
+        "リードソース", "履歴", "記事名", "休診日", "診療日", "午前始", "午前終",
+        "午後始", "午後終", "院長名", "開業日", "案件ID", "プロジェクト名",
     ]
+    rows = []
+    for case_id in ("lead-A", "lead-B"):
+        row = [""] * len(headers)
+        row[0] = "COMDESK-UUID-1"
+        row[2] = clinic["clinic_name"]
+        row[5] = clinic["prefecture"]
+        row[6] = clinic["address"]
+        row[9] = clinic["phone"]
+        row[28] = case_id
+        row[29] = "PROJECT-A"
+        rows.append(row)
     table = _table(headers, rows)
-    first = store.import_comdesk(table)
-    second = store.import_comdesk(table)
-    assert first["MATCHED"] == 2
-    assert second["already_imported"] is True
-    with store.connect() as conn:
-        assert conn.execute("SELECT count(*) FROM clinics").fetchone()[0] == 1
-        originals = conn.execute("SELECT row_json FROM comdesk_original_rows ORDER BY row_number").fetchall()
-        source_records = conn.execute("SELECT record_json FROM source_records WHERE source='コムデスク'").fetchall()
-        base = json.loads(conn.execute("SELECT base_json FROM clinics").fetchone()[0])
-    assert len(originals) == 2
-    assert [json.loads(row[0])[0] for row in originals] == ["lead-A", "lead-B"]
-    assert {json.loads(row[0])["comdesk_case_id"] for row in source_records} == {"lead-A", "lead-B"}
-    assert "comdesk_case_id" not in base
-    assert store.query()[0]["uuid"] == clinic.get("uuid", "")
+    clinic_input = [{**clinic, "id": 1, "uuid": "CLINIC-UUID-1", "comdesk_uuid": ""}]
+
+    first = classify_rows(table, clinic_input, source_name="project-a.csv")
+    repeated = classify_rows(table, clinic_input, source_name="project-a.csv")
+
+    assert [row["status"] for row in first] == ["MATCHED_UNIQUE", "MATCHED_UNIQUE"]
+    assert [row["clinic_uuid"] for row in first] == ["CLINIC-UUID-1", "CLINIC-UUID-1"]
+    assert [row["comdesk_uuid"] for row in first] == ["COMDESK-UUID-1", "COMDESK-UUID-1"]
+    assert [row["comdesk_case_id"] for row in first] == ["lead-A", "lead-B"]
+    assert [row["raw_row"] for row in first] == [row["raw_row"] for row in repeated]
 
 
 def test_strict_comdesk_match_requires_phone_address_and_name_support(tmp_path):
@@ -235,25 +240,6 @@ def test_in_memory_full_master_index_uses_same_strict_match_rules(tmp_path):
     assert (indexed_result.status, indexed_result.candidates, indexed_result.reason) == (
         sql_result.status, sql_result.candidates, sql_result.reason,
     )
-
-
-def test_comdesk_import_never_creates_clinic_and_never_auto_assigns_uuid_or_hp(tmp_path):
-    store = ClinicStore(tmp_path / "safe-comdesk.sqlite3")
-    clinic = {**sample_records()[0], "uuid": "", "hp_rank": "A", "hp_url": "https://official.example/"}
-    store.import_master([clinic])
-    headers = ["UUID", "名前", "Tel1", "住所１", "URL", "HPランク", "メールアドレス"]
-    row = ["COMDESK-1", clinic["clinic_name"], clinic["phone"], clinic["address"],
-           "https://portal.example/", "C", "lead@example.test"]
-    table = _table(headers, [row])
-    first = store.import_comdesk(table)
-    second = store.import_comdesk(table)
-    assert first["MATCHED"] == 1 and second["already_imported"] is True
-    assert len(store.query(__import__("src.master.filters", fromlist=["Filters"]).Filters(
-        active_only=False, hp_only=False))) == 1
-    saved = store.query(__import__("src.master.filters", fromlist=["Filters"]).Filters(
-        active_only=False, hp_only=False))[0]
-    assert saved["uuid"] == ""
-    assert saved["hp_rank"] == "A" and saved["hp_url"] == "https://official.example/"
 
 
 def test_uuidless_match_is_separate_from_uuid_assignment_candidate():

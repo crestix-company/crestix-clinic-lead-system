@@ -202,9 +202,18 @@ def match_record(conn, record, *, exclude_ids=(), comdesk_only=False, track_iden
                                                                  or strict_exact[0]["id"] not in {r["id"] for r in pool}
                                                              )):
                 return ambiguous(pool, "電話番号候補あり・住所または医院名の裏付け不足")
-            exact = [row for row in pool if name and address and row["name_norm"] == name
-                     and _strict_address_equivalent(address, row.get("address_norm") or "",
-                                                    record.get("prefecture", ""), row.get("prefecture", ""))]
+            exact = [
+                row for row in pool
+                if name and address and row["name_norm"] == name
+                and (
+                    _strict_address_equivalent(
+                        address, row.get("address_norm") or "",
+                        record.get("prefecture", ""), row.get("prefecture", ""),
+                    )
+                    if strict_identity
+                    else row["address_norm"] == address
+                )
+            ]
             selected = exact if len(exact) == 1 else pool
             if len(selected) == 1:
                 candidate = selected[0]

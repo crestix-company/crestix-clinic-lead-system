@@ -10,7 +10,7 @@ import tempfile
 import os
 import uuid as uuidlib
 import pandas as pd
-from src.master.comdesk import infer_comdesk_columns, record_from_row, new_export_row, validate_comdesk_mapping, clinic_master_fields
+from src.master.comdesk import infer_comdesk_columns, record_from_row, new_export_row
 from src.io.output_writer import csv_bytes, xlsx_bytes
 from src.master.matching import match_record, medical_key, MasterMatch
 from src.master.filters import Filters, where, clauses
@@ -365,10 +365,7 @@ class ClinicStore:
         c.execute("UPDATE clinics SET "+",".join(f"{k}=?" for k in values)+" WHERE id=?", (*values.values(),cid))
 
     def _upsert(self, c, record, match, source, source_hash, row_number, original=None, template_id=None, new_flag=False, existing_source_id=None):
-        if source == "コムデスク" and match.status == "NEW":
-            match = MasterMatch("AMBIGUOUS", [], "既存医院候補なし・自動新規登録禁止", match.score)
         timestamp = now()
-        clinic_record = clinic_master_fields(record, source=source)
         if match.status == "MATCHED":
             cid = match.candidates[0]
             row = c.execute("SELECT * FROM clinics WHERE id=?",(cid,)).fetchone()
@@ -376,7 +373,7 @@ class ClinicStore:
             before = dict(base)
             # 厚生局の公式情報は内部のベースを更新。コムデスク元行は別表で不変。
             if source == "厚生局" and record.get("as_of", "") >= row["source_as_of_date"]:
-                base.update(clinic_record)
+                base.update(record)
                 if record.get("manager_name") and normalize_person(before.get("manager_name"))!=normalize_person(record["manager_name"]):
                     old_research = c.execute("SELECT result_json FROM research_results WHERE clinic_id=?",(cid,)).fetchone()
                     if old_research:
@@ -388,20 +385,16 @@ class ClinicStore:
                                         age_estimation_reason="管理者が変更されています。現在の院長の経歴を再確認してください。")
                         c.execute("UPDATE research_results SET result_json=?,updated_at=? WHERE clinic_id=?",(dumps(research),timestamp,cid))
             else:
-                base.update({k:v for k,v in clinic_record.items() if v and not base.get(k)})
-            uid = row["uuid"] if source == "コムデスク" else row["uuid"] or record.get("uuid", "")
+                base.update({k:v for k,v in record.items() if v and not base.get(k)})
+            uid = row["uuid"] or record.get("uuid", "")
             c.execute("UPDATE clinics SET base_json=?,uuid=?,last_seen_at=?,source_as_of_date=CASE WHEN ?<source_as_of_date THEN source_as_of_date ELSE ? END WHERE id=?",
                       (dumps(base),uid,timestamp,record.get("as_of",""),record.get("as_of",""),cid))
             if before != base:
                 self._history(c,cid,"マスター更新",before,base,match.reason)
-        elif match.status == "NEW" and source == "コムデスク":
-            # Comdesk has no authority to create a canonical clinic. Preserve the raw
-            # source row as a review item without inserting a clinic master record.
-            cid = None
         elif match.status == "NEW":
             cid = c.execute("INSERT INTO clinics(uuid,base_json,first_seen_at,last_seen_at,source_as_of_date,is_new) VALUES(?,?,?,?,?,?)",
-                            (record.get("uuid",""),dumps(clinic_record),timestamp,timestamp,record.get("as_of",""),int(new_flag))).lastrowid
-            self._history(c,cid,"医院追加",{},clinic_record,match.reason)
+                            (record.get("uuid",""),dumps(record),timestamp,timestamp,record.get("as_of",""),int(new_flag))).lastrowid
+            self._history(c,cid,"医院追加",{},record,match.reason)
         else:
             cid = None
         if existing_source_id is None:
@@ -429,9 +422,9 @@ class ClinicStore:
 
     def import_comdesk(self, table, mapping=None):
         mapping = dict(mapping or infer_comdesk_columns(table))
-        mapping.setdefault("uuid", None)
-        mapping.setdefault("comdesk_case_id", None)
-        validate_comdesk_mapping(table.headers, mapping)
+        if "uuid" not in mapping:
+            hits = [i for i,h in enumerate(table.headers) if h.strip().casefold() in {"uuid","案件id","管理id","リードid","lead_id","id"}]
+            mapping["uuid"] = hits[0] if len(hits)==1 else None
         if mapping.get("clinic_name") is None:
             raise ValueError("医院名の列を指定してください。")
         if not all(v is None or isinstance(v,int) and 0<=v<len(table.headers) for v in mapping.values()):
@@ -450,9 +443,7 @@ class ClinicStore:
                 record = record_from_row(raw, mapping)
                 if not record.get("clinic_name", "").strip():
                     raise ValueError(f"{i+2}行目の医院名が空白です。取込は取り消しました。")
-                match = match_record(c,record,strict_identity=True)
-                if match.status == "NEW":
-                    match = MasterMatch("AMBIGUOUS", [], "既存医院候補なし・自動新規登録禁止", match.score)
+                match = match_record(c,record)
                 self._upsert(c,record,match,"コムデスク",batch,i,raw,template)
                 counts[match.status] += 1
             c.execute("INSERT INTO import_batches VALUES(?,?,?,?)",(batch,"コムデスク",dumps(counts),now()))

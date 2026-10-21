@@ -9,7 +9,7 @@ from src.master.comdesk_reconciliation import (
     mark_input_conflicts,
     uuid_group_report,
 )
-from src.master.comdesk import infer_comdesk_columns, validate_comdesk_mapping
+from src.master.comdesk_reconciliation import infer_comdesk_columns, validate_comdesk_mapping
 from src.io.input_loader import load_table
 
 

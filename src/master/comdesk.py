@@ -18,10 +18,7 @@ COMDESK_HEADERS = [
 COMDESK_EXPORT_HEADERS = [*COMDESK_HEADERS, "HPランク", "メールアドレス"]
 
 EXTRA_ALIASES = {
-    # `UUID` is the only legacy Comdesk clinic identifier accepted as the
-    # clinics.uuid value. Case/lead IDs are kept in a separate source field.
-    "uuid": ["UUID", "Comdesk UUID", "comdesk_uuid"],
-    "comdesk_case_id": ["案件ID", "管理ID", "リードID", "lead_id", "case_id", "案件番号", "Comdesk ID", "id"],
+    "uuid": ["UUID", "案件ID", "管理ID", "リードID", "lead_id", "id"],
     "clinic_name": ["名前"],
     "phone": ["Tel1", "電話番号1"],
     "address": ["住所1", "address1"],
@@ -29,10 +26,6 @@ EXTRA_ALIASES = {
     "prefecture": ["都道府県", "prefecture"],
     "postal_code": ["郵便番号", "postal_code"],
     "manager_name": ["院長名", "管理者名", "manager_name"],
-}
-COMDESK_UUID_HEADERS = {"uuid", "comdesk uuid", "comdesk_uuid"}
-COMDESK_CASE_ID_HEADERS = {
-    "案件id", "管理id", "リードid", "lead_id", "case_id", "案件番号", "comdesk id", "id"
 }
 PREFECTURES = (
     "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
@@ -62,38 +55,9 @@ def infer_comdesk_columns(table):
     return result
 
 
-def validate_comdesk_mapping(headers, mapping):
-    """Keep Comdesk UUID and case identifiers in their separate source fields."""
-    header_keys = {_key(str(header)) for header in headers}
-    activity_columns = {
-        _key(value) for value in
-        ("進捗", "最終架電日", "最終架電者", "コール数", "フィルタープロジェクト名", "プロジェクト")
-    }
-    if "uuid" in header_keys and len(header_keys & activity_columns) >= 2:
-        raise ValueError("架電・プロジェクト補助CSVは医院マスター取込に使用できません。UUIDで別途対応付けてください。")
-    uuid_col = mapping.get("uuid")
-    case_col = mapping.get("comdesk_case_id")
-    if uuid_col is not None:
-        if not isinstance(uuid_col, int) or not 0 <= uuid_col < len(headers):
-            raise ValueError("Comdesk UUIDの列指定が範囲外です。")
-        header = _key(str(headers[uuid_col])).replace("_", " ")
-        if header not in {_key(value).replace("_", " ") for value in COMDESK_UUID_HEADERS}:
-            raise ValueError("医院UUID欄には明示的なUUID列だけを指定してください。案件ID・管理ID・リードIDは別列です。")
-    if case_col is not None:
-        if not isinstance(case_col, int) or not 0 <= case_col < len(headers):
-            raise ValueError("Comdesk案件IDの列指定が範囲外です。")
-        header = _key(str(headers[case_col])).replace("_", " ")
-        if header in {_key(value).replace("_", " ") for value in COMDESK_UUID_HEADERS}:
-            raise ValueError("Comdesk UUID列を案件ID欄へ割り当てることはできません。")
-    if uuid_col is not None and case_col is not None and uuid_col == case_col:
-        raise ValueError("Comdesk UUID列と案件ID列に同じ列は指定できません。")
-    return mapping
-
-
 def record_from_row(raw, mapping):
     record = {field: raw[col] for field, col in mapping.items() if col is not None}
     record["uuid"] = record.get("uuid", "").strip()
-    record["comdesk_case_id"] = str(record.get("comdesk_case_id", "")).strip()
     if "url" in record:
         record["hp_candidate_url"] = record.pop("url")
 
@@ -111,16 +75,6 @@ def record_from_row(raw, mapping):
         address = f"{address} {address2}".strip()
     record.update(address=address, prefecture=prefecture)
     return record
-
-
-def clinic_master_fields(record, *, source=""):
-    """Keep external identifiers in provenance, not in the clinic attribute payload."""
-    excluded = {"comdesk_case_id"}
-    if source == "コムデスク":
-        # Comdesk identifiers and research/contact hints stay in provenance. They
-        # must not overwrite canonical clinic identity or researched fields.
-        excluded.update({"uuid", "hp_candidate_url", "hp_rank", "email", "email_address"})
-    return {key: value for key, value in record.items() if key not in excluded}
 
 
 def new_export_row(data, headers, mapping):

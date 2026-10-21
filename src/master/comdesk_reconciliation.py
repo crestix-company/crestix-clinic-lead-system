@@ -10,11 +10,69 @@ from collections import defaultdict
 from pathlib import Path
 from rapidfuzz import fuzz
 
-from src.io.input_loader import load_table
-from src.master.comdesk import infer_comdesk_columns, record_from_row, validate_comdesk_mapping
+from src.io.input_loader import ALIASES, infer_columns, load_table
+from src.master.comdesk import _key, record_from_row as legacy_record_from_row
 from src.normalizer.address import normalize_address
 from src.normalizer.clinic_name import normalize_clinic_name
 from src.normalizer.phone import tel_match_key
+
+
+# Preview-only field mapping. Keep the existing ClinicStore importer and its
+# legacy 28-column contract out of the new read-only workflow.
+PREVIEW_EXTRA_ALIASES = {
+    "uuid": ["UUID", "Comdesk UUID", "comdesk_uuid"],
+    "comdesk_case_id": ["案件ID", "管理ID", "リードID", "lead_id", "case_id", "案件番号", "Comdesk ID", "id"],
+    "clinic_name": ["名前"],
+    "phone": ["Tel1", "電話番号1"],
+    "address": ["住所1", "address1"],
+    "address2": ["住所2", "address2", "建物名"],
+    "prefecture": ["都道府県", "prefecture"],
+    "postal_code": ["郵便番号", "postal_code"],
+    "manager_name": ["院長名", "管理者名", "manager_name"],
+}
+PREVIEW_UUID_HEADERS = {"uuid", "comdeskuuid"}
+
+
+def infer_comdesk_columns(table):
+    result = infer_columns(table)
+    for field, aliases in PREVIEW_EXTRA_ALIASES.items():
+        names = {_key(value) for value in ALIASES.get(field, []) + aliases}
+        found = [index for index, header in enumerate(table.headers) if _key(header) in names]
+        if found:
+            result[field] = found[0] if len(found) == 1 else None
+        else:
+            result.setdefault(field, None)
+    return result
+
+
+def validate_comdesk_mapping(headers, mapping):
+    """Validate UUID and case fields for the read-only preview parser only."""
+    header_keys = {_key(str(header)) for header in headers}
+    activity_columns = {_key(value) for value in (
+        "進捗", "最終架電日", "最終架電者", "コール数", "フィルタープロジェクト名", "プロジェクト"
+    )}
+    if "uuid" in header_keys and len(header_keys & activity_columns) >= 2:
+        raise ValueError("架電・プロジェクト補助CSVは医院マスター取込に使用できません。UUIDで別途対応付けてください。")
+    uuid_col, case_col = mapping.get("uuid"), mapping.get("comdesk_case_id")
+    if uuid_col is not None:
+        if not isinstance(uuid_col, int) or not 0 <= uuid_col < len(headers):
+            raise ValueError("Comdesk UUIDの列指定が範囲外です。")
+        if _key(str(headers[uuid_col])) not in PREVIEW_UUID_HEADERS:
+            raise ValueError("医院UUID欄には明示的なUUID列だけを指定してください。案件ID・管理ID・リードIDは別列です。")
+    if case_col is not None:
+        if not isinstance(case_col, int) or not 0 <= case_col < len(headers):
+            raise ValueError("Comdesk案件IDの列指定が範囲外です。")
+        if _key(str(headers[case_col])) in PREVIEW_UUID_HEADERS:
+            raise ValueError("Comdesk UUID列を案件ID欄へ割り当てることはできません。")
+    if uuid_col is not None and case_col is not None and uuid_col == case_col:
+        raise ValueError("Comdesk UUID列と案件ID列に同じ列は指定できません。")
+    return mapping
+
+
+def record_from_row(raw, mapping):
+    record = legacy_record_from_row(raw, mapping)
+    record["comdesk_case_id"] = str(record.get("comdesk_case_id", "")).strip()
+    return record
 
 
 def header_key(value):
