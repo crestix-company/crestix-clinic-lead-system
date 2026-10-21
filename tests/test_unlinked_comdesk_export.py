@@ -100,7 +100,7 @@ def test_sync_csv_row_count_matches_candidate_count_and_keeps_thirty_columns():
     assert len(table.data) == len(candidates) == 2
 
 
-def test_uuid_added_after_initial_comdesk_import_reimport_updates_same_clinic(tmp_path):
+def test_uuid_added_after_unmatched_comdesk_import_stays_pending_without_clinic_creation(tmp_path):
     store = ClinicStore(tmp_path / "comdesk-reimport.db")
     initial = [""] * len(COMDESK_HEADERS)
     initial[COMDESK_HEADERS.index("名前")] = "再取込テスト医院"
@@ -109,8 +109,8 @@ def test_uuid_added_after_initial_comdesk_import_reimport_updates_same_clinic(tm
     initial[COMDESK_HEADERS.index("住所１")] = "千代田区1-1"
     first = load_table(csv_bytes(COMDESK_HEADERS, [initial]), "initial.csv")
 
-    assert store.import_comdesk(first)["NEW"] == 1
-    original_id = store.query(Filters(active_only=False, hp_only=False))[0]["id"]
+    assert store.import_comdesk(first)["AMBIGUOUS"] == 1
+    assert store.query(Filters(active_only=False, hp_only=False)) == []
 
     with_uuid = initial.copy()
     with_uuid[COMDESK_HEADERS.index("UUID")] = "COMDESK-UUID-1"
@@ -119,15 +119,13 @@ def test_uuid_added_after_initial_comdesk_import_reimport_updates_same_clinic(tm
     repeated = store.import_comdesk(second)
 
     clinics = store.query(Filters(active_only=False, hp_only=False))
-    assert result["MATCHED"] == 1
+    assert result["AMBIGUOUS"] == 1
     assert repeated["already_imported"] is True
-    assert len(clinics) == 1
-    assert clinics[0]["id"] == original_id
-    assert clinics[0]["uuid"] == "COMDESK-UUID-1"
+    assert clinics == []
     with store.connect() as connection:
         assert connection.execute("SELECT count(*) FROM source_records WHERE source='コムデスク'").fetchone()[0] == 2
         assert connection.execute("SELECT count(*) FROM comdesk_original_rows").fetchone()[0] == 2
-    assert store.comdesk_linkage_state()["imported_clinic_ids"] == {original_id}
+    assert store.comdesk_linkage_state()["imported_clinic_ids"] == set()
 
 
 def test_comdesk_linkage_state_includes_pending_review_candidates(tmp_path):
