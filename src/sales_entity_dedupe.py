@@ -52,7 +52,11 @@ def plan_sales_entities(rows: Sequence[Mapping]) -> list[GroupDecision]:
             decisions.append(GroupDecision(clinic_ids, int(row["id"]), "SINGLE", "unique", _val(row, "uuid")))
             continue
 
-        phones = {_val(r, "phone_norm") for r in members}\n        types = {_val(r, "medical_type") for r in members}\n        if len(phones) != 1 or "" in phones:\n            decisions.append(GroupDecision(clinic_ids, None, "HOLD", "missing or differing phone numbers", ""))\n            continue
+        phones = {_val(r, "phone_norm") for r in members}
+        types = {_val(r, "medical_type") for r in members}
+        if len(phones) != 1 or "" in phones:
+            decisions.append(GroupDecision(clinic_ids, None, "HOLD", "missing or differing phone numbers", ""))
+            continue
         # Do not collapse multiple medical or multiple dental registrations.
         if len(members) != 2 or types != {"医科", "歯科"}:
             decisions.append(GroupDecision(clinic_ids, None, "HOLD", "ambiguous registration / medical types", ""))
