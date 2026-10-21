@@ -6,7 +6,7 @@ import pytest
 
 from src.io.input_loader import InputTable
 from src.master.comdesk import COMDESK_HEADERS, record_from_row
-from src.master.matching import match_record
+from src.master.matching import ClinicMatchingIndex, match_record
 from src.normalizer.address import normalize_address
 from src.normalizer.clinic_name import normalize_clinic_name
 from src.normalizer.phone import tel_match_key
@@ -107,6 +107,29 @@ def test_prefetched_matcher_keeps_phone_exact_contract():
         "電話番号キー完全一致",
         100,
     )
+
+
+def test_legacy_exact_address_preference_is_separate_from_strict_writer_match():
+    candidates = [
+        _candidate(10, uuid="CLINIC-UUID-10", phone="03-1111-2222", address="新宿区1-1"),
+        _candidate(20, uuid="CLINIC-UUID-20", phone="03-1111-2222", address="東京都新宿区1-1"),
+    ]
+    source = {
+        "clinic_name": "テスト医院",
+        "phone": "03-1111-2222",
+        "address": "新宿区1-1",
+        "prefecture": "東京都",
+        "medical_type": "医科",
+        "uuid": "",
+    }
+
+    legacy = match_record(None, source, candidate_index=ClinicMatchingIndex(candidates))
+    strict = match_record(None, source, strict_identity=True,
+                          candidate_index=ClinicMatchingIndex(candidates))
+
+    assert (legacy.status, legacy.candidates) == ("MATCHED", [10])
+    assert strict.status == "AMBIGUOUS"
+    assert strict.candidates == [10, 20]
 
 
 def test_prefetched_matcher_keeps_duplicate_phone_ambiguous():
