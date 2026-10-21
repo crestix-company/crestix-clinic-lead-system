@@ -828,6 +828,8 @@ class SupabaseClinicWriteRepository:
         self._conn = conn
 
     def insert_new_clinic(self, record, *, is_new=False, is_authoritative_official_source=False):
+        from src.repository.comdesk_writer_safety import reject_comdesk_clinic_creation
+        reject_comdesk_clinic_creation(record)
         key = generate_medical_key_for_new_clinic(record, is_authoritative_official_source=is_authoritative_official_source)
         ts = now()
         try:
@@ -947,10 +949,21 @@ class SupabaseClinicWriteRepository:
                 if source == "厚生局":
                     base.update(record)
                 else:
-                    base.update({k: v for k, v in record.items() if v and not base.get(k)})
+                    if source == "コムデスク":
+                        from src.repository.comdesk_writer_safety import (
+                            clinic_master_fields, validate_comdesk_review_resolution,
+                        )
+                        validate_comdesk_review_resolution(
+                            record, target_id=clinic_id, existing_clinic_id=None,
+                        )
+                        allowed = clinic_master_fields(record)
+                    else:
+                        allowed = record
+                    base.update({k: v for k, v in allowed.items() if v and not base.get(k)})
+                clinic_uuid = uuid_val if source == "コムデスク" else uuid_val or record.get("uuid", "")
                 cur.execute(
                     "UPDATE public.clinics SET uuid=%s,base_json=%s,last_seen_at=%s WHERE id=%s",
-                    (uuid_val or record.get("uuid", ""), Jsonb(base), now(), clinic_id),
+                    (clinic_uuid, Jsonb(base), now(), clinic_id),
                 )
             self._conn.commit()
         except Exception as exc:
@@ -1205,65 +1218,6 @@ class SupabaseClinicWriteRepository:
         ids = sorted({int(row["id"]) for row in linked})
         return MasterMatch("AMBIGUOUS", ids, decision.reason, 100), False
 
-    @classmethod
-    def _ensure_comdesk_common_identities(cls, cur, clinic_ids):
-        """Batch-link imported clinic rows; never copy a canonical UUID to clinics.uuid."""
-        if not cls._common_identity_schema_available(cur):
-            return
-        clinic_ids = sorted({int(cid) for cid in clinic_ids if cid is not None and int(cid) > 0})
-        if not clinic_ids:
-            return
-        cur.execute(
-            "INSERT INTO public.sales_entities"
-            "(seed_clinic_id,canonical_name,canonical_address,canonical_phone) "
-            "SELECT c.id,COALESCE(c.base_json->>'clinic_name',''),COALESCE(c.base_json->>'address',''),"
-            "COALESCE(c.base_json->>'phone','') FROM public.clinics c "
-            "WHERE c.id=ANY(%s::bigint[]) AND NOT EXISTS("
-            "SELECT 1 FROM public.sales_entity_clinics m WHERE m.clinic_id=c.id) "
-            "ON CONFLICT(seed_clinic_id) DO NOTHING",
-            (clinic_ids,),
-        )
-        cur.execute(
-            "INSERT INTO public.sales_entity_clinics(clinic_id,common_clinic_id,match_rule,match_evidence) "
-            "SELECT e.seed_clinic_id,e.common_clinic_id,'COMDESK_IMPORT',"
-            "jsonb_build_object('source','comdesk_import','seed_clinic_id',e.seed_clinic_id) "
-            "FROM public.sales_entities e WHERE e.seed_clinic_id=ANY(%s::bigint[]) "
-            "ON CONFLICT(clinic_id) DO NOTHING",
-            (clinic_ids,),
-        )
-        cur.execute(
-            "INSERT INTO public.sales_entity_identity_audit"
-            "(event_key,common_clinic_id,action,after_state,reason,actor) "
-            "SELECT 'entity-link:'||seed_clinic_id::text,common_clinic_id,'ENTITY_LINKED',"
-            "jsonb_build_object('clinic_id',seed_clinic_id),"
-            "'First Comdesk import linkage','comdesk_import' FROM public.sales_entities "
-            "WHERE seed_clinic_id=ANY(%s::bigint[]) "
-            "ON CONFLICT(event_key) DO NOTHING",
-            (clinic_ids,),
-        )
-        cur.execute(
-            "INSERT INTO public.sales_entity_comdesk_identity"
-            "(common_clinic_id,comdesk_uuid,source,evidence,verified_at) "
-            "SELECT m.common_clinic_id,c.uuid,'comdesk_import',"
-            "jsonb_build_object('clinic_id',c.id,'source','existing_clinic_uuid'),now() "
-            "FROM public.clinics c JOIN public.sales_entity_clinics m ON m.clinic_id=c.id "
-            "WHERE c.id=ANY(%s::bigint[]) AND btrim(c.uuid)<>'' "
-            "ON CONFLICT(common_clinic_id) DO NOTHING",
-            (clinic_ids,),
-        )
-        cur.execute(
-            "SELECT c.id,c.uuid,i.comdesk_uuid FROM public.clinics c "
-            "JOIN public.sales_entity_clinics m ON m.clinic_id=c.id "
-            "JOIN public.sales_entity_comdesk_identity i USING(common_clinic_id) "
-            "WHERE c.id=ANY(%s::bigint[]) AND btrim(c.uuid)<>'' AND c.uuid<>i.comdesk_uuid LIMIT 1",
-            (clinic_ids,),
-        )
-        conflict = cur.fetchone()
-        if conflict:
-            raise ValueError(
-                f"HOLD: clinic {conflict[0]} UUID differs from canonical UUID; no reassignment performed"
-            )
-
     @staticmethod
     def _prefetch_comdesk_candidates(cur, records):
         """Load every DB row that the canonical Comdesk matcher could ask for.
@@ -1319,14 +1273,6 @@ class SupabaseClinicWriteRepository:
                 row["medical_key"] = row.get("medical_key") or ""
                 row["source_as_of_date"] = str(row.get("source_as_of_date") or "")
                 candidates[row["id"]] = row
-
-        if uuids:
-            cur.execute(
-                "SELECT " + columns + " FROM public.clinics "
-                "WHERE merged_into IS NULL AND uuid=ANY(%s::text[])",
-                (sorted(uuids),),
-            )
-            collect(cur.fetchall())
 
         if medical_keys:
             cur.execute(
@@ -1400,28 +1346,19 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
-    def import_comdesk(self, table, mapping=None):
-        """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
-
-        Business semantics intentionally remain the same as the legacy row-by-row path:
-        UUID/base updates, NEW creation, provenance, original rows, histories, Human Review
-        candidates, projections and import-batch idempotency are all preserved. Only the
-        database access pattern changes.
-        """
-        from src.master.comdesk import infer_comdesk_columns, record_from_row
-        from src.master.matching import match_record
+    def import_comdesk(self, table, mapping=None, *, project_scope_id=None):
+        """Import a scoped Comdesk case batch without treating source IDs as Clinic IDs."""
+        from src.repository.comdesk_writer_safety import (
+            clinic_master_fields, comdesk_match_record, prepare_comdesk_writer_import,
+        )
+        from src.master.matching import MasterMatch, match_record
         from src.master.store import digest
 
         total_started = time.perf_counter()
         phase = {}
-        mapping = dict(mapping or infer_comdesk_columns(table))
-        if "uuid" not in mapping:
-            hits = [
-                i for i, header in enumerate(table.headers)
-                if header.strip().casefold()
-                in {"uuid", "案件id", "管理id", "リードid", "lead_id", "id"}
-            ]
-            mapping["uuid"] = hits[0] if len(hits) == 1 else None
+        mapping, prepared = prepare_comdesk_writer_import(
+            table, mapping, project_scope_id=project_scope_id,
+        )
         if mapping.get("clinic_name") is None:
             raise ValueError("医院名の列を指定してください。")
         if not all(
@@ -1431,21 +1368,19 @@ class SupabaseClinicWriteRepository:
             raise ValueError("対応する列番号を確認してください。")
 
         rows = table.data.values.tolist()
-        batch = digest(["comdesk", table.headers, mapping, rows])
+        project_case_keys = sorted({
+            (record["comdesk_project_id"], record["comdesk_case_id"])
+            for _, _, record in prepared
+        })
+        batch = digest(["comdesk", table.headers, mapping, rows, project_case_keys])
         template_id = digest([table.headers, mapping])
 
         # Validate the whole file before beginning any write transaction. The old path could
         # spend tens of minutes writing rows and only then discover a malformed late row,
         # forcing the entire transaction to roll back.
-        prepared = []
-        for index, raw in enumerate(rows):
-            try:
-                record = record_from_row(raw, mapping)
-            except ValueError as exc:
-                raise ValueError(f"{index + 2}行目: {exc}") from exc
+        for index, raw, record in prepared:
             if not record.get("clinic_name", "").strip():
                 raise ValueError(f"{index + 2}行目の医院名が空白です。取込は取り消しました。")
-            prepared.append((index, raw, record))
         phase["preflight_seconds"] = time.perf_counter() - total_started
 
         counts = {"MATCHED": 0, "NEW": 0, "AMBIGUOUS": 0, "template_id": template_id}
@@ -1473,6 +1408,34 @@ class SupabaseClinicWriteRepository:
                     existing = old[0] if isinstance(old[0], dict) else json.loads(old[0])
                     return {**existing, "already_imported": True}
 
+                # The expression unique index is installed separately. Refuse writes until
+                # it exists, then take a project-scoped transaction lock before checking
+                # keys so concurrent instances cannot race the duplicate preflight.
+                cur.execute("SELECT to_regclass('provenance.comdesk_project_case_unique_idx')")
+                index_row = cur.fetchone()
+                if not index_row or not index_row[0]:
+                    raise RuntimeError(
+                        "Comdesk案件IDのDB一意制約が未適用です。HOLD: 書き込みを停止しました。"
+                    )
+                scopes = sorted({scope for scope, _ in project_case_keys})
+                for scope in scopes:
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                        ("comdesk-import-project:" + scope,),
+                    )
+                for offset in range(0, len(project_case_keys), 500):
+                    key_chunk = project_case_keys[offset:offset + 500]
+                    cur.execute(
+                        "SELECT 1 FROM provenance.source_records WHERE source='コムデスク' "
+                        "AND (record_json->>'comdesk_project_id',record_json->>'comdesk_case_id') "
+                        "IN (SELECT * FROM unnest(%s::text[],%s::text[])) LIMIT 1",
+                        ([key[0] for key in key_chunk], [key[1] for key in key_chunk]),
+                    )
+                    if cur.fetchone():
+                        raise ValueError(
+                            "同じプロジェクト・案件IDが既に記録されています。HOLD: 重複確認が必要です。"
+                        )
+
                 cur.execute(
                     "INSERT INTO provenance.templates(id,headers_json,mapping_json,created_at) "
                     "VALUES(%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
@@ -1497,7 +1460,13 @@ class SupabaseClinicWriteRepository:
                 next_temp_id = -1
                 for index, raw, record in prepared:
                     common_match, canonical_uuid_match = self._match_common_identity(record, candidate_rows)
-                    match = common_match or match_record(matcher, record)
+                    match = common_match or match_record(
+                        matcher, comdesk_match_record(record), strict_identity=True,
+                    )
+                    if match.status == "NEW":
+                        match = MasterMatch(
+                            "AMBIGUOUS", [], "未登録医院への自動登録は禁止されています。管理者確認が必要です。", 0
+                        )
                     timestamp = now()
                     resolved_cid = None
 
@@ -1508,12 +1477,10 @@ class SupabaseClinicWriteRepository:
                         base = dict(before)
                         base.update({
                             key: value
-                            for key, value in record.items()
+                            for key, value in clinic_master_fields(record).items()
                             if value and not base.get(key)
                         })
                         state["base_json"] = base
-                        if not canonical_uuid_match:
-                            state["uuid"] = state.get("uuid", "") or record.get("uuid", "")
                         state["last_seen_at"] = timestamp
                         current_as_of = str(state.get("source_as_of_date") or "")
                         incoming_as_of = str(record.get("as_of", "") or "")
@@ -1528,28 +1495,6 @@ class SupabaseClinicWriteRepository:
                                 resolved_cid, "マスター更新", before, dict(base),
                                 match.reason, timestamp,
                             ))
-
-                    elif match.status == "NEW":
-                        resolved_cid = next_temp_id
-                        next_temp_id -= 1
-                        state = {
-                            "id": resolved_cid,
-                            "base_json": dict(record),
-                            "uuid": record.get("uuid", ""),
-                            "medical_key": "",
-                            "merge_hold": False,
-                            "source_as_of_date": str(record.get("as_of", "") or ""),
-                            "first_seen_at": timestamp,
-                            "last_seen_at": timestamp,
-                        }
-                        self._comdesk_refresh_match_fields(state)
-                        matcher.upsert(state)
-                        new_temp_ids.append(resolved_cid)
-                        mutated_ids.add(resolved_cid)
-                        histories.append((
-                            resolved_cid, "医院追加", {}, dict(record),
-                            match.reason, timestamp,
-                        ))
 
                     decisions.append({
                         "row_number": index,
@@ -1627,17 +1572,16 @@ class SupabaseClinicWriteRepository:
                     existing_update_rows.append((
                         cid,
                         Jsonb(state["base_json"]),
-                        state.get("uuid", ""),
                         state.get("last_seen_at", now()),
                         state.get("source_as_of_date", ""),
                     ))
                 SupabaseProvenanceWriteRepository._execute_values(
                     cur,
                     "UPDATE public.clinics AS c SET "
-                    "base_json=v.base_json,uuid=v.uuid,last_seen_at=v.last_seen_at,"
+                    "base_json=v.base_json,last_seen_at=v.last_seen_at,"
                     "source_as_of_date=v.source_as_of_date FROM (VALUES ",
                     existing_update_rows,
-                    ") AS v(id,base_json,uuid,last_seen_at,source_as_of_date) WHERE c.id=v.id",
+                    ") AS v(id,base_json,last_seen_at,source_as_of_date) WHERE c.id=v.id",
                     chunk_size=300,
                 )
                 phase["clinic_write_seconds"] = time.perf_counter() - started
@@ -1646,10 +1590,6 @@ class SupabaseClinicWriteRepository:
                     if clinic_id is None:
                         return None
                     return temp_to_real.get(int(clinic_id), int(clinic_id))
-
-                self._ensure_comdesk_common_identities(
-                    cur, [actual_id(item["clinic_id"]) for item in decisions if item["clinic_id"] is not None]
-                )
 
                 started = time.perf_counter()
                 history_rows = [
@@ -1937,6 +1877,13 @@ class SupabaseClinicWriteRepository:
                 if not review:
                     raise ValueError("この確認事項は処理済みです。")
                 record = dict(review["record_json"])
+                is_comdesk = review["source"] == "コムデスク"
+                if is_comdesk:
+                    from src.repository.comdesk_writer_safety import validate_comdesk_review_resolution
+                    validate_comdesk_review_resolution(
+                        record, target_id=target_id,
+                        existing_clinic_id=review["existing_clinic_id"],
+                    )
                 if review["existing_clinic_id"] is not None:
                     clinic_id = root_id(cur, review["existing_clinic_id"])
                     target_id = clinic_id if target_id is None else merge(cur, clinic_id, target_id, "手動確認: " + note)
@@ -1958,12 +1905,17 @@ class SupabaseClinicWriteRepository:
                     target_id = root_id(cur, target_id)
                     cur.execute("SELECT uuid,base_json FROM public.clinics WHERE id=%s FOR UPDATE", (target_id,))
                     uuid_value, base = cur.fetchone()
-                    if uuid_value and record.get("uuid") and uuid_value != record["uuid"]:
+                    if not is_comdesk and uuid_value and record.get("uuid") and uuid_value != record["uuid"]:
                         raise ValueError("異なる既存UUID同士は統合できません。元のコムデスクで確認してください。")
                     base = dict(base)
-                    base.update(record if review["source"] == "厚生局" else
-                                {key: value for key, value in record.items() if value and not base.get(key)})
-                    cur.execute("UPDATE public.clinics SET uuid=%s,base_json=%s,last_seen_at=%s WHERE id=%s", (uuid_value or record.get("uuid", ""), Jsonb(base), now(), target_id))
+                    if review["source"] == "厚生局":
+                        base.update(record)
+                    else:
+                        from src.repository.comdesk_writer_safety import clinic_master_fields
+                        allowed = clinic_master_fields(record) if is_comdesk else record
+                        base.update({key: value for key, value in allowed.items() if value and not base.get(key)})
+                    clinic_uuid = uuid_value if is_comdesk else uuid_value or record.get("uuid", "")
+                    cur.execute("UPDATE public.clinics SET uuid=%s,base_json=%s,last_seen_at=%s WHERE id=%s", (clinic_uuid, Jsonb(base), now(), target_id))
                 cur.execute("UPDATE provenance.source_records SET clinic_id=%s,match_status='MATCHED',match_reason=%s WHERE id=%s", (target_id, "手動確認: " + note, review["source_record_id"]))
                 cur.execute("UPDATE provenance.comdesk_original_rows SET clinic_id=%s WHERE source_hash=%s AND row_number=%s", (target_id, review["source_hash"], review["row_number"]))
                 cur.execute("UPDATE provenance.match_reviews SET status='RESOLVED',resolved_clinic_id=%s,note=%s,updated_at=%s WHERE id=%s", (target_id, note, now(), review_id))
