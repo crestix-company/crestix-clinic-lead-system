@@ -68,7 +68,7 @@ def validate_preview_connection(conn) -> None:
                     "has_any_column_privilege(current_user,c.oid,'INSERT'), "
                     "has_any_column_privilege(current_user,c.oid,'UPDATE') "
                     "FROM pg_class c WHERE c.oid=%s::regclass",
-                    (relation,),
+                    tuple(relation.split('.', 1)),
                 )
                 privileges = cur.fetchone()
                 if not privileges or privileges != (True, False, False, False, False, False, False, False, False, False):
@@ -82,13 +82,28 @@ def validate_preview_connection(conn) -> None:
                 if granted != expected:
                     raise PreviewReaderConfigurationError(f"{relation}のSELECT列が最小権限設計と一致しません。")
                 cur.execute(
-                    "SELECT count(*) FROM pg_policies "
-                    "WHERE (schemaname||'.'||tablename)=%s AND cmd='SELECT' "
-                    "AND current_user::name=ANY(roles)",
-                    (relation,),
+                    "SELECT count(*) FROM pg_policies WHERE schemaname=%s AND tablename=%s "
+                    "AND policyname='clinic_comdesk_preview_reader_select' "
+                    "AND permissive='PERMISSIVE' AND cmd='SELECT' "
+                    "AND roles=ARRAY[current_user::name] AND qual='true'",
+                    tuple(relation.split('.', 1)),
                 )
-                if cur.fetchone()[0] < 1:
-                    raise PreviewReaderConfigurationError(f"{relation}にPreview Reader用SELECT policyがありません。")
+                if cur.fetchone()[0] != 1:
+                    raise PreviewReaderConfigurationError(
+                        f"{relation}のPreview Reader用全行SELECT policyが設計と一致しません。"
+                    )
+                cur.execute(
+                    "SELECT count(*) FROM pg_policies WHERE schemaname=%s AND tablename=%s "
+                    "AND (current_user::name=ANY(roles) OR 'public'::name=ANY(roles)) "
+                    "AND NOT (policyname='clinic_comdesk_preview_reader_select' "
+                    "AND permissive='PERMISSIVE' AND cmd='SELECT' "
+                    "AND roles=ARRAY[current_user::name] AND qual='true')",
+                    tuple(relation.split('.', 1)),
+                )
+                if cur.fetchone()[0] != 0:
+                    raise PreviewReaderConfigurationError(
+                        f"{relation}にPreview ReaderまたはPUBLICへ適用される追加policyがあります。"
+                    )
 
             relation_names = list(REQUIRED_COLUMNS)
             cur.execute(

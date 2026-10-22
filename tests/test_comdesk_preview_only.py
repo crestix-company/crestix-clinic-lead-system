@@ -11,6 +11,7 @@ from src.master.comdesk_sync import apply_sync, plan_sync
 from src.master.store import ClinicStore, dumps, now
 from src.repository.sqlite_adapter import SqliteClinicRepository
 from src.repository.sqlite_write_adapter import SqliteClinicWriteRepository
+from src.repository.comdesk_preview import PreviewReaderConfigurationError, REQUIRED_COLUMNS, validate_preview_connection
 from src.safety.preview_mode import PreviewOnlyModeError
 
 
@@ -185,3 +186,63 @@ def test_preview_only_blocks_gmail_api_connection_before_oauth_or_network(monkey
         list_existing_drafts(object())
     with pytest.raises(PreviewOnlyModeError):
         list_existing_messages(object(), query="")
+
+
+class _PreviewRoleCursor:
+    def __init__(self, *, extra_policy_count=0, role_identity=None):
+        self.sql = ""
+        self.params = ()
+        self.extra_policy_count = extra_policy_count
+        self.role_identity = role_identity or (
+            "clinic_comdesk_preview_reader", "on", True, False, False, False, False, False, False
+        )
+
+    def __enter__(self): return self
+    def __exit__(self, *_args): return False
+
+    def execute(self, sql, params=()):
+        self.sql, self.params = sql, params
+
+    def fetchone(self):
+        if "FROM pg_roles r WHERE r.rolname=current_user" in self.sql:
+            return self.role_identity
+        if "FROM pg_auth_members" in self.sql:
+            return (0,)
+        if "has_schema_privilege" in self.sql:
+            return (True, False, True, False)
+        if "SELECT c.relrowsecurity" in self.sql:
+            return (True, False, False, False, False, False, False, False, False, False)
+        if "FROM pg_policies" in self.sql and "NOT (policyname" in self.sql:
+            assert len(self.params) == 2
+            return (self.extra_policy_count,)
+        if "FROM pg_policies" in self.sql:
+            return (1,)
+        if "FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace" in self.sql:
+            return (0,)
+        if "FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace" in self.sql:
+            return (0,)
+        raise AssertionError(f"Unexpected fetchone query: {self.sql}")
+
+    def fetchall(self):
+        if "SELECT a.attname,has_column_privilege" in self.sql:
+            return [(column, True) for column in REQUIRED_COLUMNS[self.params[0]]]
+        if "SELECT n.nspname,c.relname FROM pg_class" in self.sql:
+            return []
+        raise AssertionError(f"Unexpected fetchall query: {self.sql}")
+
+
+class _PreviewRoleConnection:
+    def __init__(self, cursor): self._cursor = cursor
+    def transaction(self): return self
+    def cursor(self): return self._cursor
+    def __enter__(self): return self
+    def __exit__(self, *_args): return False
+
+
+def test_preview_reader_validator_checks_exact_role_permissions_and_rls_policies():
+    validate_preview_connection(_PreviewRoleConnection(_PreviewRoleCursor()))
+    with pytest.raises(PreviewReaderConfigurationError):
+        validate_preview_connection(_PreviewRoleConnection(_PreviewRoleCursor(extra_policy_count=1)))
+    invalid_role = ("clinic_comdesk_preview_reader", "on", True, False, True, False, False, False, False)
+    with pytest.raises(PreviewReaderConfigurationError):
+        validate_preview_connection(_PreviewRoleConnection(_PreviewRoleCursor(role_identity=invalid_role)))
