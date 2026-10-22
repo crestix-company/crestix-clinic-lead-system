@@ -112,6 +112,21 @@ def fixed_row(data, headers=(), mapping=None, raw=None):
         # 既存Comdesk行は原文を保持。URLが空欄のときだけ、本人確認済みMaps websiteで補完する。
         if not str(values.get("URL", "") or "").strip() and maps_url:
             values["URL"] = maps_url
+    # Step7-approved values overlay the immutable source row, and also work for new rows.
+    # Maps/other schedule details remain stored in their own keys and are not erased.
+    reviewed_url = str(data.get("comdesk_verified_url") or "").strip()
+    if reviewed_url and data.get("hp_status") == "VERIFIED":
+        values["URL"] = reviewed_url
+    comdesk_hours = data.get("comdesk_sync_hours")
+    if isinstance(comdesk_hours, dict):
+        hour_headers = {
+            "regular_holiday": "休診日", "business_days": "診療日",
+            "morning_start": "午前始", "morning_end": "午前終",
+            "afternoon_start": "午後始", "afternoon_end": "午後終",
+        }
+        for field, heading in hour_headers.items():
+            if str(comdesk_hours.get(field) or "").strip():
+                values[heading] = comdesk_hours[field]
     # Comdeskの診療時刻4列は、元値がExcel時刻小数でも最終出力ではHH:MMへ統一する。
     for heading in TIME_FIELDS:
         values[heading] = _format_comdesk_time(values.get(heading, ""))
