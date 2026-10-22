@@ -1423,12 +1423,18 @@ class SupabaseClinicWriteRepository:
                 "WHERE c.merged_into IS NULL", (values, values),
             )
             rows = cur.fetchall()
-            ids = [int(row[0]) for row in rows]
+            # SELECT order is (comdesk_uuid, clinic_id, ...); use the internal clinic ID
+            # for the manual-override lookup, never the Comdesk UUID.
+            ids = [int(row[1]) for row in rows]
             overrides = set()
             if ids:
                 cur.execute("SELECT clinic_id FROM provenance.manual_overrides WHERE field='hp_rank' AND clinic_id=ANY(%s::bigint[])", (ids,))
                 overrides = {int(row[0]) for row in cur.fetchall()}
-        for cid, uid, hp_url, hp_rank, base, effective, maps_status, maps_url, raw_json, headers_json in rows:
+        # plan_sync() performs this standalone read before apply_comdesk_sync() on the same
+        # non-autocommit write connection. End the implicit read transaction here so the
+        # subsequent transaction() block is a top-level transaction and commits durably.
+        self._conn.commit()
+        for uid, cid, hp_url, hp_rank, base, effective, maps_status, maps_url, raw_json, headers_json in rows:
             base = base if isinstance(base, dict) else json.loads(base or "{}")
             effective = json.loads(effective or "{}")
             saved_hours = base.get("comdesk_sync_hours", {})
@@ -1520,7 +1526,7 @@ class SupabaseClinicWriteRepository:
                     cur.execute("UPDATE public.clinics SET hp_url=%s,hp_rank=%s,hp_status=%s,base_json=%s,effective_json=%s,last_seen_at=%s WHERE id=%s",
                                 (effective.get("hp_url", row[1]), effective.get("hp_rank", row[2]), effective.get("hp_status", row[3]), Jsonb(base), dumps(effective), now(), item["clinic_id"]))
                     cur.execute("INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(%s,%s,%s,%s,%s,%s)",
-                                (item["clinic_id"], "Comdesk医院情報同期", Jsonb(before), Jsonb(after),
+                                (item["clinic_id"], "Comdesk医院情報同期", dumps(before), dumps(after),
                                  "source=comdesk_csv; file_sha256=" + file_hash + ("; operator_confirmed_url" if item.get("human_reviewed_url") else ""), now()))
                     updated += 1
                 result = {"updated": updated}
