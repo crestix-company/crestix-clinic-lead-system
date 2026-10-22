@@ -33,11 +33,14 @@ SUPPORTED_FIELDS = {"hp_rank", "hp_url", "email", *HOURS_FIELDS}
 def _url_key(value):
     try:
         parsed = urlsplit(str(value or "").strip())
+        scheme = parsed.scheme.casefold()
+        if scheme not in {"http", "https"} or not parsed.hostname:
+            return None
         host = (parsed.hostname or "").casefold().removeprefix("www.")
         if parsed.username or parsed.password:
-            return ("", None, "", "")
+            return None
         port = parsed.port
-        if port in ({"http": 80, "https": 443}.get(parsed.scheme.lower()), None):
+        if port in ({"http": 80, "https": 443}.get(scheme), None):
             port = None
         path = parsed.path.rstrip("/")
         return (host, port, path, parsed.query)
@@ -90,9 +93,11 @@ def plan_sync(table, repository):
                     continue
                 changes[field] = {"before": current, "after": value}
                 if field == "hp_url":
+                    url_key = _url_key(value)
+                    official_url_key = _url_key(clinic.get("official_maps_website_url"))
                     if not value.lower().startswith(("https://", "http://")):
                         held.append(field)
-                    elif not clinic.get("official_maps_website_url") or _url_key(value) != _url_key(clinic["official_maps_website_url"]):
+                    elif url_key is None or official_url_key is None or url_key != official_url_key:
                         held.append(field)
                     else:
                         changes[field]["officiality"] = "MAPS_MATCHED_WEBSITE exact URL"
