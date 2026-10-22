@@ -15,7 +15,12 @@ from filelock import FileLock, Timeout
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
 PRODUCTION_ENV_FILE = "config/production_runtime.env"
 EMAIL_ENV_FILE = "config/email_research.env.local"
-RUNTIME_ENV_KEYS = {"SUPABASE_RUNTIME_DB_URL", "CLINIC_WRITE_BACKEND", "CLINIC_DATA_BACKEND"}
+RUNTIME_ENV_KEYS = {
+    "SUPABASE_RUNTIME_DB_URL",
+    "CLINIC_WRITE_BACKEND",
+    "CLINIC_DATA_BACKEND",
+    "CLINIC_COMMON_IDENTITY_ENABLED",
+}
 EMAIL_ENV_KEYS = {
     "EMAIL_RESEARCH_DB_URL",
     "EMAIL_TARGET_READER_DB_URL",
@@ -45,6 +50,24 @@ EMAIL_ENV_KEYS = {
     "OUTREACH_GMAIL_OAUTH_CLIENT_JSON",
     "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
 }
+
+BOOLEAN_SETTING_VALUES = {
+    "1": "1",
+    "true": "true",
+    "yes": "yes",
+    "on": "on",
+    "0": "0",
+    "false": "false",
+    "no": "no",
+    "off": "off",
+}
+
+
+def _validated_boolean_setting(name, value):
+    normalized = str(value).strip().lower()
+    if normalized not in BOOLEAN_SETTING_VALUES:
+        raise RuntimeError(f"{name}は0/1/true/false/yes/no/on/offで指定してください。")
+    return BOOLEAN_SETTING_VALUES[normalized]
 
 
 def _parse_env_file(path, *, require_private=False, allowed_keys=None):
@@ -80,6 +103,15 @@ def load_runtime_env(root):
         if auto_run_value not in {"true", "false"}:
             raise RuntimeError("EMAIL_AUTO_RUN_ENABLEDはtrueまたはfalseで指定してください。")
         email_db_config["EMAIL_AUTO_RUN_ENABLED"] = auto_run_value
+    if "CLINIC_COMMON_IDENTITY_ENABLED" in parsed:
+        parsed["CLINIC_COMMON_IDENTITY_ENABLED"] = _validated_boolean_setting(
+            "CLINIC_COMMON_IDENTITY_ENABLED", parsed["CLINIC_COMMON_IDENTITY_ENABLED"]
+        )
+    ambient_identity = (os.environ.get("CLINIC_COMMON_IDENTITY_ENABLED") or "").strip()
+    if ambient_identity:
+        os.environ["CLINIC_COMMON_IDENTITY_ENABLED"] = _validated_boolean_setting(
+            "CLINIC_COMMON_IDENTITY_ENABLED", ambient_identity
+        )
     parsed.update(email_db_config)
     selected_write = (os.environ.get("CLINIC_WRITE_BACKEND") or parsed.get("CLINIC_WRITE_BACKEND", "sqlite")).strip()
     runtime_url = (os.environ.get("SUPABASE_RUNTIME_DB_URL") or parsed.get("SUPABASE_RUNTIME_DB_URL", "")).strip()
