@@ -11,10 +11,21 @@ def _clean_runtime_env(monkeypatch):
     """load_runtime_env() also reads CLINIC_WRITE_BACKEND / SUPABASE_RUNTIME_DB_URL from
     the ambient environment before looking at the parsed file; clear them so these tests
     are deterministic regardless of what the outer shell happens to have set."""
-    for key in ("SERPAPI_API_KEY", "EMAIL_SEARCH_PROVIDER", "EMAIL_AUTO_RUN_ENABLED",
-                "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL",
-                "CLINIC_COMMON_IDENTITY_ENABLED"):
+    keys = ("SERPAPI_API_KEY", "EMAIL_SEARCH_PROVIDER", "EMAIL_AUTO_RUN_ENABLED",
+            "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL",
+            "CLINIC_COMMON_IDENTITY_ENABLED")
+    original = {key: os.environ.get(key) for key in keys}
+    for key in keys:
         monkeypatch.delenv(key, raising=False)
+    yield
+    # load_runtime_env() intentionally writes to os.environ directly, outside
+    # monkeypatch. Restore those values explicitly so a fixture credential from
+    # one test can never change backend selection in the rest of the suite.
+    for key, value in original.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 def _write_email_env(root: Path, body: str) -> Path:
