@@ -47,6 +47,71 @@ class SqliteClinicRepository:
     def metrics(self):
         return self._store.metrics()
 
+    def comdesk_sync_clinics(self, uuids):
+        """Read-only SQLite lookup for synthetic/test Preview flows."""
+        import json
+        import sqlite3
+        from pathlib import Path
+        from src.master.comdesk_sync import HOURS_FIELDS
+
+        values = sorted({str(value) for value in uuids if value})
+        if not values:
+            return {}
+        # Do not use ClinicStore.connect() here: it sets journal_mode=WAL and attaches
+        # sidecars. Preview opens the synthetic/local DB with SQLite's URI read-only mode.
+        database_uri = Path(self._store.path).resolve().as_uri() + "?mode=ro"
+        c = sqlite3.connect(database_uri, uri=True, timeout=15)
+        c.row_factory = sqlite3.Row
+        try:
+            c.execute("PRAGMA query_only=ON")
+            rows = c.execute(
+                "SELECT o.uuid AS comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.maps_presence_status,"
+                "c.maps_website_url,c.effective_json,c.base_json,o.row_json,t.headers_json "
+                "FROM comdesk_original_rows o JOIN clinics c ON c.id=o.clinic_id "
+                "JOIN templates t ON t.id=o.template_id WHERE c.merged_into IS NULL AND o.uuid IN (" +
+                ",".join("?" for _ in values) + ") ORDER BY o.id DESC", values,
+            ).fetchall()
+            clinic_ids = sorted({int(row["id"]) for row in rows})
+            overrides = set()
+            if clinic_ids:
+                overrides = {int(row[0]) for row in c.execute(
+                    "SELECT clinic_id FROM manual_overrides WHERE field='hp_rank' AND clinic_id IN (" +
+                    ",".join("?" for _ in clinic_ids) + ")", clinic_ids,
+                ).fetchall()}
+        finally:
+            c.close()
+        result = {}
+        seen = set()
+        for row in rows:
+            uid, clinic_id = str(row["comdesk_uuid"]), int(row["id"])
+            if (uid, clinic_id) in seen:
+                continue
+            seen.add((uid, clinic_id))
+            effective = json.loads(row["effective_json"] or "{}")
+            base = json.loads(row["base_json"] or "{}")
+            raw_values = json.loads(row["row_json"] or "[]")
+            headers = json.loads(row["headers_json"] or "[]")
+            raw_by_header = {str(header): raw_values[i] for i, header in enumerate(headers) if i < len(raw_values)}
+            saved_hours = base.get("comdesk_sync_hours", {})
+            hour_headers = {
+                "regular_holiday": "休診日", "business_days": "診療日",
+                "morning_start": "午前始", "morning_end": "午前終",
+                "afternoon_start": "午後始", "afternoon_end": "午後終",
+            }
+            result.setdefault(uid, []).append({
+                "id": clinic_id, "hp_url": row["hp_url"] or "", "hp_rank": row["hp_rank"] or "",
+                "comdesk_sync_hp_rank": base.get("comdesk_sync_hp_rank", ""),
+                "email": base.get("comdesk_unverified_email", ""),
+                "phone": effective.get("phone", ""), "address": effective.get("address", ""),
+                "clinic_name": effective.get("clinic_name", ""),
+                **{field: saved_hours.get(field, raw_by_header.get(
+                    hour_headers[field], effective.get(field, base.get(field, ""))))
+                   for field in HOURS_FIELDS},
+                "official_maps_website_url": row["maps_website_url"] if row["maps_presence_status"] == "MAPS_MATCHED_WEBSITE" else "",
+                "hp_rank_manual": clinic_id in overrides,
+            })
+        return result
+
 
 class SqliteHpResearchRepository:
     def __init__(self, batch_path=None, production_path=None):

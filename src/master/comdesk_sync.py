@@ -130,6 +130,8 @@ def plan_sync(table, repository):
 
 def apply_sync(repository, plan, *, reviewed_url_rows=()):
     """Apply safe candidates plus only the URL fields explicitly approved by a human."""
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Comdesk Step7 Apply")
     reviewed = {int(row_number) for row_number in reviewed_url_rows}
     changes = []
     for row in plan["rows"]:

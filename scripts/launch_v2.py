@@ -50,6 +50,7 @@ EMAIL_ENV_KEYS = {
     "OUTREACH_GMAIL_OAUTH_CLIENT_JSON",
     "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
 }
+PREVIEW_ONLY_ENV_VAR = "CLINIC_COMDESK_PREVIEW_ONLY"
 
 BOOLEAN_SETTING_VALUES = {
     "1": "1",
@@ -94,10 +95,16 @@ def _parse_env_file(path, *, require_private=False, allowed_keys=None):
 
 def load_runtime_env(root):
     """Load tracked production routing, then the ignored credential, without printing values."""
+    preview_setting = (os.environ.get(PREVIEW_ONLY_ENV_VAR) or "").strip()
+    if preview_setting not in {"", "0", "1"}:
+        raise RuntimeError(f"{PREVIEW_ONLY_ENV_VAR}は1または0で指定してください。")
+    preview_only = preview_setting == "1"
     parsed = _parse_env_file(root / PRODUCTION_ENV_FILE)
     parsed.update(_parse_env_file(root / RUNTIME_ENV_FILE, require_private=True))
-    email_db_config = _parse_env_file(root / EMAIL_ENV_FILE, require_private=True,
-                                      allowed_keys=EMAIL_ENV_KEYS)
+    # Preview-only boot never reads the broad Email/Gmail settings file.
+    email_db_config = {} if preview_only else _parse_env_file(
+        root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
+    )
     if "EMAIL_AUTO_RUN_ENABLED" in email_db_config:
         auto_run_value = email_db_config["EMAIL_AUTO_RUN_ENABLED"].strip().lower()
         if auto_run_value not in {"true", "false"}:
@@ -124,6 +131,15 @@ def load_runtime_env(root):
         elif not (os.environ.get(key) or "").strip():
             # An explicitly exported but empty variable must not shadow the private config.
             os.environ[key] = value
+    if preview_only:
+        if (os.environ.get("CLINIC_DATA_BACKEND", "").strip().casefold() != "supabase"
+                or not os.environ.get("SUPABASE_RUNTIME_DB_URL", "").strip()):
+            raise RuntimeError("Preview専用起動にはSupabaseの専用Reader接続設定が必要です。")
+        # Defense in depth: existing read-only connection setup is also enabled, while
+        # the dedicated role and server-side guards remain the actual write boundary.
+        os.environ["CLINIC_READ_ONLY_UI"] = "1"
+        os.environ["EMAIL_AUTO_RUN_ENABLED"] = "false"
+        os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] = "false"
     return bool(parsed)
 
 

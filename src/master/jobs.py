@@ -104,6 +104,8 @@ def job_limit(store,jid,limit):
 
 
 def run_job(store,jid,provider,fetcher=None,progress_callback=None):
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("HP調査Job実行")
     if getattr(store, "is_supabase_runtime", False):
         # Cross-PC exclusion is the PostgreSQL row-claim/lease contract (FOR UPDATE SKIP
         # LOCKED), not a machine-local lock file.
