@@ -1400,6 +1400,88 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
+    def comdesk_sync_clinics(self, uuids):
+        values = sorted({str(value) for value in uuids if value})
+        if not values:
+            return {}
+        result = {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "WITH identity_matches AS ("
+                " SELECT i.comdesk_uuid,ec.clinic_id FROM public.sales_entity_comdesk_identity i "
+                " JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                " WHERE i.comdesk_uuid=ANY(%s::text[]) "
+                " UNION SELECT uuid,clinic_id FROM provenance.comdesk_original_rows "
+                " WHERE uuid=ANY(%s::text[]) AND clinic_id IS NOT NULL) "
+                "SELECT DISTINCT m.comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.base_json,c.effective_json "
+                "FROM identity_matches m JOIN public.clinics c ON c.id=m.clinic_id "
+                "WHERE c.merged_into IS NULL", (values, values),
+            )
+            rows = cur.fetchall()
+            ids = [int(row[0]) for row in rows]
+            overrides = set()
+            if ids:
+                cur.execute("SELECT clinic_id FROM provenance.manual_overrides WHERE field='hp_rank' AND clinic_id=ANY(%s::bigint[])", (ids,))
+                overrides = {int(row[0]) for row in cur.fetchall()}
+        for cid, uid, hp_url, hp_rank, base, effective in rows:
+            base = base if isinstance(base, dict) else json.loads(base or "{}")
+            result.setdefault(uid, []).append({
+                "id": int(cid), "hp_url": hp_url or "", "hp_rank": hp_rank or "",
+                "email": base.get("comdesk_unverified_email", ""), "business_hours": "", "phone": base.get("phone", ""),
+                "address": base.get("address", ""), "clinic_name": base.get("clinic_name", ""),
+                "hp_rank_manual": int(cid) in overrides,
+            })
+        return result
+
+    def apply_comdesk_sync(self, changes, file_hash):
+        from psycopg.types.json import Jsonb
+        from src.master.comdesk_sync import SUPPORTED_FIELDS
+        batch_id = "comdesk_sync:" + file_hash
+        updated = 0
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                old = cur.fetchone()
+                if old:
+                    value = old[0] if isinstance(old[0], dict) else json.loads(old[0])
+                    return {"already_applied": True, **value}
+                for item in changes:
+                    cur.execute("SELECT uuid,hp_url,hp_rank,base_json,effective_json FROM public.clinics WHERE id=%s AND merged_into IS NULL FOR UPDATE", (item["clinic_id"],))
+                    row = cur.fetchone()
+                    cur.execute(
+                        "SELECT 1 FROM provenance.comdesk_original_rows WHERE uuid=%s AND clinic_id=%s "
+                        "UNION SELECT 1 FROM public.sales_entity_comdesk_identity i "
+                        "JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                        "WHERE i.comdesk_uuid=%s AND ec.clinic_id=%s LIMIT 1",
+                        (item["comdesk_uuid"], item["clinic_id"], item["comdesk_uuid"], item["clinic_id"]),
+                    )
+                    identity = cur.fetchone()
+                    if not row or not identity:
+                        raise ValueError("反映直前にComdesk UUIDとClinic内部IDの対応が変わりました。再取込してください。")
+                    base = row[3] if isinstance(row[3], dict) else json.loads(row[3] or "{}")
+                    effective = json.loads(row[4] or "{}")
+                    before, after = {}, {}
+                    for field, pair in item["changes"].items():
+                        if field not in SUPPORTED_FIELDS:
+                            raise ValueError("未対応項目が反映計画に含まれています。")
+                        current = str((base.get("comdesk_unverified_email", "") if field == "email" else row[1 if field == "hp_url" else 2]) or "").strip()
+                        if current != pair["before"]:
+                            raise ValueError("プレビュー後に値が変わりました。再取込してください。")
+                        before[field], after[field] = current, pair["after"]
+                        if field == "email":
+                            base["comdesk_unverified_email"] = pair["after"]
+                        else:
+                            base[field] = effective[field] = pair["after"]
+                    cur.execute("UPDATE public.clinics SET hp_url=%s,hp_rank=%s,base_json=%s,effective_json=%s,last_seen_at=%s WHERE id=%s",
+                                (effective.get("hp_url", row[1]), effective.get("hp_rank", row[2]), Jsonb(base), dumps(effective), now(), item["clinic_id"]))
+                    cur.execute("INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(%s,%s,%s,%s,%s,%s)",
+                                (item["clinic_id"], "Comdesk医院情報同期", Jsonb(before), Jsonb(after), "source=comdesk_csv; file_sha256=" + file_hash, now()))
+                    updated += 1
+                result = {"updated": updated}
+                cur.execute("INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
+                            (batch_id, "comdesk_sync", Jsonb(result), now()))
+        return result
+
     def import_comdesk(self, table, mapping=None):
         """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
 
