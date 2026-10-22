@@ -121,6 +121,76 @@ class SqliteClinicWriteRepository:
     def import_comdesk(self, table, mapping=None):
         return self._store.import_comdesk(table, mapping)
 
+    def comdesk_sync_clinics(self, uuids):
+        import json
+        values = [str(value) for value in set(uuids) if value]
+        if not values:
+            return {}
+        with self._store.connect() as c:
+            rows = c.execute(
+                "SELECT DISTINCT o.uuid AS comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.effective_json,c.base_json "
+                "FROM comdesk_original_rows o JOIN clinics c ON c.id=o.clinic_id "
+                "WHERE c.merged_into IS NULL AND o.uuid IN (" + ",".join("?" for _ in values) + ")", values,
+            ).fetchall()
+            overrides = {(r[0], r[1]) for r in c.execute(
+                "SELECT clinic_id,field FROM manual_overrides WHERE field='hp_rank' AND clinic_id IN (" +
+                ",".join("?" for _ in rows) + ")", [r["id"] for r in rows]
+            ).fetchall()} if rows else set()
+        result = {}
+        for row in rows:
+            data = json.loads(row["effective_json"] or "{}")
+            base = json.loads(row["base_json"] or "{}")
+            result.setdefault(row["comdesk_uuid"], []).append({
+                "id": row["id"], "hp_url": row["hp_url"], "hp_rank": row["hp_rank"],
+                "email": base.get("comdesk_unverified_email", ""), "business_hours": "", "phone": data.get("phone", ""),
+                "address": data.get("address", ""), "clinic_name": data.get("clinic_name", ""),
+                "hp_rank_manual": (row["id"], "hp_rank") in overrides,
+            })
+        return result
+
+    def apply_comdesk_sync(self, changes, file_hash):
+        import json
+        from src.master.store import dumps, now
+        from src.master.comdesk_sync import SUPPORTED_FIELDS
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            old = c.execute("SELECT result_json FROM import_batches WHERE id=?", ("comdesk_sync:" + file_hash,)).fetchone()
+            if old:
+                return {"already_applied": True, **json.loads(old[0])}
+            updated = 0
+            for item in changes:
+                identity = c.execute("SELECT 1 FROM comdesk_original_rows WHERE uuid=? AND clinic_id=? LIMIT 1", (item["comdesk_uuid"], item["clinic_id"])).fetchone()
+                row = c.execute("SELECT uuid,hp_url,hp_rank,effective_json,base_json FROM clinics WHERE id=? AND merged_into IS NULL", (item["clinic_id"],)).fetchone()
+                if not row or not identity:
+                    raise ValueError("反映直前にComdesk UUIDとClinic内部IDの対応が変わりました。再取込してください。")
+                before, after = {}, {}
+                effective = json.loads(row["effective_json"] or "{}")
+                base = json.loads(row["base_json"] or "{}")
+                for field, pair in item["changes"].items():
+                    if field not in SUPPORTED_FIELDS:
+                        raise ValueError("未対応項目が反映計画に含まれています。")
+                    current = str((base.get("comdesk_unverified_email", "") if field == "email" else row[field]) or "").strip()
+                    if current != pair["before"]:
+                        raise ValueError("プレビュー後に値が変わりました。再取込してください。")
+                    before[field], after[field] = current, pair["after"]
+                    if field == "email":
+                        base["comdesk_unverified_email"] = pair["after"]
+                    else:
+                        effective[field] = pair["after"]
+                        base[field] = pair["after"]
+                ts = now()
+                c.execute("UPDATE clinics SET hp_url=?,hp_rank=?,effective_json=?,base_json=?,last_seen_at=? WHERE id=?",
+                          (effective.get("hp_url", row["hp_url"]), effective.get("hp_rank", row["hp_rank"]),
+                           dumps(effective), dumps(base), ts, item["clinic_id"]))
+                c.execute("INSERT INTO change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
+                          (item["clinic_id"], "Comdesk医院情報同期", dumps(before), dumps(after),
+                           "source=comdesk_csv; file_sha256=" + file_hash, ts))
+                updated += 1
+            result = {"updated": updated}
+            c.execute("INSERT INTO import_batches(id,source,result_json,created_at) VALUES(?,?,?,?)",
+                      ("comdesk_sync:" + file_hash, "comdesk_sync", dumps(result), now()))
+            return result
+
     def import_master(self, frame):
         return self._store.import_master(frame)
 

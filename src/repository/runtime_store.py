@@ -321,6 +321,16 @@ class SupabaseRuntimeStore:
         These two values are derived from current system-of-record data at export time.
         """
         emails = self._verified_emails_for_ids([record["id"] for record in records])
+        ids = [int(record["id"]) for record in records]
+        if ids and self._conn.__class__.__module__.startswith("psycopg"):
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id,base_json->>'comdesk_unverified_email' FROM public.clinics WHERE id=ANY(%s::bigint[])",
+                    (ids,),
+                )
+                for clinic_id, email in cur.fetchall():
+                    if email and int(clinic_id) not in emails:
+                        emails[int(clinic_id)] = str(email).strip()
         output = []
         for record, row in zip(records, rows):
             rank = str(record.get("effective_hp_rank") or "").strip().upper()
