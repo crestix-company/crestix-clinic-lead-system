@@ -314,16 +314,31 @@ class SupabaseRuntimeStore:
             output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
         return output
 
-    def _attach_export_metadata(self, records, rows):
+    def _attach_export_metadata(self, records, rows, *, include_unverified_comdesk_email=True):
         """Append formal outbound-only HP rank and official-verified email columns.
 
         The stored/imported Comdesk row remains the legacy 28-column source row.
         These two values are derived from current system-of-record data at export time.
         """
         emails = self._verified_emails_for_ids([record["id"] for record in records])
+        ids = [int(record["id"]) for record in records]
+        if include_unverified_comdesk_email and ids and self._conn.__class__.__module__.startswith("psycopg"):
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id,base_json->>'comdesk_unverified_email' FROM public.clinics WHERE id=ANY(%s::bigint[])",
+                    (ids,),
+                )
+                for clinic_id, email in cur.fetchall():
+                    if email and int(clinic_id) not in emails:
+                        emails[int(clinic_id)] = str(email).strip()
         output = []
         for record, row in zip(records, rows):
-            rank = str(record.get("effective_hp_rank") or "").strip().upper()
+            manual_fields = record.get("manual_fields") or ()
+            if "hp_rank" in manual_fields:
+                rank_value = record.get("hp_rank")
+            else:
+                rank_value = record.get("comdesk_sync_hp_rank") or record.get("effective_hp_rank")
+            rank = str(rank_value or "").strip().upper()
             if rank not in {"A", "B", "C", "D"}:
                 rank = ""
             output.append([*row, rank, emails.get(int(record["id"]), "")])
@@ -496,7 +511,9 @@ class SupabaseRuntimeStore:
             raise ValueError(
                 "出力中に対象件数が変わったため、欠落の可能性を避けてCSV/Excel出力を中止しました。"
             )
-        rows = self._attach_export_metadata(records, self._export_records(records, read_only=True))
+        rows = self._attach_export_metadata(
+            records, self._export_records(records, read_only=True), include_unverified_comdesk_email=False,
+        )
         for row in rows:
             for header in READ_ONLY_PENDING_EXPORT_HEADERS:
                 row[COMDESK_EXPORT_HEADERS.index(header)] = ""

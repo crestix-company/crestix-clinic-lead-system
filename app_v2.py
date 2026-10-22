@@ -826,11 +826,12 @@ def import_ui(store,demo):
         table = upload_table(upload,"comdesk")
         inferred = infer_comdesk_columns(table)
         mapping = {}
-        labels = {"uuid":"UUID・案件ID","clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+                  "clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１","address2":"住所２・建物名","postal_code":"郵便番号",
                   "manager_name":"院長名","url":"HP URL","epark_url":"EPARK URL"}
         with st.expander("列の対応を確認",expanded=True):
-            st.caption("28列形式の「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
+            st.caption("Comdesk UUIDと案件IDは別項目です。28列形式の「UUID」「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
             for field,label in labels.items():
                 choices = [None]+list(range(len(table.headers)))
                 mapping[field] = st.selectbox(label+"の列",choices,index=choices.index(inferred.get(field)),format_func=lambda i:"未設定" if i is None else f"{i+1}列目：{table.headers[i]}",key="comdesk_map_"+field)
@@ -1365,6 +1366,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
     import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
+    render_comdesk_clinic_sync(store, write_disabled)
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1386,12 +1388,13 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     if upload:
         table = upload_table(upload, key_prefix)
         inferred = infer_comdesk_columns(table)
-        labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+                  "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
                   "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
         mapping = {}
         with st.expander("列の対応を確認", expanded=False):
-            st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+            st.caption("Comdesk UUIDはClinic UUIDと別の外部IDです。案件IDも独立して保持し、医院名・電話番号・住所は照合根拠として扱います。")
             for field, label in labels.items():
                 choices = [None]+list(range(len(table.headers)))
                 selected = inferred.get(field)
@@ -1419,6 +1422,75 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     # checks are the real, independent gate for that path.
     render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
     cloud_comdesk_import_ui(store, key_prefix=key_prefix)
+
+
+def render_comdesk_clinic_sync(store, write_disabled):
+    """Step7's separate preview/apply path for formal Comdesk return files."""
+    import pandas as pd
+    from src.master.comdesk_sync import plan_sync, apply_sync
+
+    sync_labels = {
+        "hp_rank": "HPランク", "hp_url": "公式ホームページURL", "email": "メールアドレス",
+        "regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+        "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終",
+        "phone": "電話番号", "address": "住所", "clinic_name": "医院名",
+    }
+    st.markdown("**医院情報の差分同期（30列形式）**")
+    st.caption("CSV取込とDB反映を分けています。完全一致したUUIDだけを照合し、反映前に差分を確認できます。")
+    upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=write_disabled)
+    if not upload:
+        return
+    table = upload_table(upload, "step7_clinic_sync")
+    if st.button("CSVを照合して差分プレビュー", key="step7_clinic_sync_preview", disabled=write_disabled):
+        try:
+            repo = write_repositories_for(store).clinics
+            plan = plan_sync(table, repo)
+            st.session_state["step7_clinic_sync_plan"] = plan
+            st.session_state["step7_clinic_sync_name"] = upload.name
+        except Exception as exc:
+            st.error(f"差分プレビューを作成できません：{exc}")
+    plan = st.session_state.get("step7_clinic_sync_plan")
+    if not plan or st.session_state.get("step7_clinic_sync_name") != upload.name:
+        return
+    st.write(f"CSV取込件数：{len(plan['rows']):,}件 / UUID照合成功：{sum(r['clinic_id'] is not None for r in plan['rows']):,}件 / "
+             f"更新候補：{plan['counts']['AUTO_UPDATE']:,}件 / 変更なし：{plan['counts']['NO_CHANGE']:,}件 / 確認待ち：{plan['counts']['HOLD']:,}件")
+    st.dataframe(pd.DataFrame([{"項目": sync_labels.get(key, key), "変更件数": value} for key, value in plan["item_counts"].items()]), hide_index=True)
+    preview_rows = []
+    for row in plan["rows"]:
+        for field, change in row["changes"].items():
+            preview_rows.append({"CSV行": row["row_number"], "Clinic ID": row["clinic_id"], "Comdesk UUID": row["comdesk_uuid"],
+                                 "判定": row["status"], "項目": sync_labels.get(field, field), "変更前": change["before"], "変更後": change["after"], "理由": row["reason"]})
+        if row["status"] == "HOLD":
+            preview_rows.append({"CSV行": row["row_number"], "Clinic ID": row["clinic_id"], "Comdesk UUID": row["comdesk_uuid"],
+                                 "判定": "HOLD", "項目": "", "変更前": "", "変更後": "", "理由": row["reason"]})
+    st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+    reviewed_url_rows = []
+    url_candidates = [row for row in plan["rows"] if "hp_url" in row["changes"] and row["status"] == "HOLD"]
+    if url_candidates:
+        st.markdown("**HP URLの人間確認**")
+        st.caption("リンク先がこの医院の公式HPであることを確認した行だけチェックしてください。反映時にHP状態をVERIFIEDにし、既存HP調査履歴は保持します。")
+        for row in url_candidates:
+            change = row["changes"]["hp_url"]
+            st.write(f"CSV {row['row_number']}行目 / Comdesk UUID {row['comdesk_uuid']} / 変更前: {change['before'] or '空欄'} / 変更後: {change['after']}")
+            if str(change["after"]).lower().startswith(("https://", "http://")):
+                st.link_button("変更後URLを開く", change["after"], key=f"step7_url_link_{row['row_number']}")
+            if (str(change["after"]).lower().startswith(("https://", "http://"))
+                    and st.checkbox("このURLが対象医院の公式ホームページであることを確認", key=f"step7_url_review_{row['row_number']}", disabled=write_disabled)):
+                reviewed_url_rows.append(row["row_number"])
+    auto_count = plan["counts"]["AUTO_UPDATE"]
+    apply_enabled = bool(auto_count or reviewed_url_rows)
+    if st.button("プレビューの更新候補をDBへ反映", type="primary", key="step7_clinic_sync_apply",
+                 disabled=write_disabled or not apply_enabled):
+        try:
+            repository = write_repositories_for(store).clinics
+            fresh_plan = plan_sync(table, repository)
+            if fresh_plan != plan:
+                raise ValueError("CSVまたは医院データがプレビュー後に変わりました。最新差分を再確認してください。")
+            result = apply_sync(repository, fresh_plan, reviewed_url_rows=reviewed_url_rows)
+            st.success(f"反映完了：{result.get('updated', 0):,}件")
+            st.session_state.pop("step7_clinic_sync_plan", None)
+        except Exception as exc:
+            st.error(f"同期を反映できません：{exc}")
 
 
 def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
@@ -2678,8 +2750,22 @@ def main():
     # reasoning. nav_locked, not read_only alone, decides nav visibility.
     from src.cloud_run.deployment_context import is_cloud_run_deployment
     nav_locked = read_only or is_cloud_run_deployment()
+    comdesk_preview_enabled = (
+        os.environ.get("CLINIC_COMDESK_UUID_PREVIEW_ENABLED", "").strip().casefold()
+        in {"1", "true", "yes", "on"}
+        and not is_cloud_run_deployment()
+    )
+    comdesk_review_enabled = (
+        os.environ.get("CLINIC_COMDESK_REVIEW_ENABLED", "").strip().casefold()
+        in {"1", "true", "yes", "on"}
+        and not is_cloud_run_deployment()
+    )
     with st.sidebar:
         nav_options = NAV[:2] if nav_locked else NAV
+        if comdesk_preview_enabled:
+            nav_options = [*nav_options, "Comdesk UUID照合プレビュー"]
+        if comdesk_review_enabled:
+            nav_options = [*nav_options, "Comdesk HOLD確認"]
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
@@ -2698,6 +2784,16 @@ def main():
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
     elif nav_locked:
         st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
+
+    if nav == "Comdesk UUID照合プレビュー" and comdesk_preview_enabled:
+        from src.comdesk_uuid_preview_ui import render_comdesk_uuid_preview
+        from src.master.samples import sample_records
+        render_comdesk_uuid_preview(sample_records(), master_label="合成Clinic Master（実DB未接続）")
+        return
+    if nav == "Comdesk HOLD確認" and comdesk_review_enabled:
+        from src.comdesk_hold_review_ui import render_comdesk_hold_review_page
+        render_comdesk_hold_review_page()
+        return
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
