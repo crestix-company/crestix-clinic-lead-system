@@ -36,7 +36,11 @@ def connect(url, *, connect_timeout=20, autocommit=False):
     """
     import os
     import psycopg
-    read_only_ui = os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
+    from src.safety.preview_mode import comdesk_preview_only_enabled
+    read_only_ui = (
+        os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
+        or comdesk_preview_only_enabled()
+    )
     connect_options = {}
     if read_only_ui:
         # PostgreSQL enforces this for every transaction on the connection. This protects the
@@ -229,6 +233,69 @@ class SupabaseClinicRepository:
         self._excluded_ids_cached_at = None
         self._read_only_excluded_ids_cache = None
         self._read_only_excluded_ids_cached_at = None
+
+    def comdesk_sync_clinics(self, uuids):
+        """Read-only Step7 lookup used by Preview-only mode and sync planning."""
+        from src.master.comdesk_sync import HOURS_FIELDS
+        values = sorted({str(value) for value in uuids if value})
+        if not values:
+            return {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "WITH identity_matches AS ("
+                " SELECT i.comdesk_uuid,ec.clinic_id FROM public.sales_entity_comdesk_identity i "
+                " JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                " WHERE i.comdesk_uuid=ANY(%s::text[]) "
+                " UNION SELECT uuid,clinic_id FROM provenance.comdesk_original_rows "
+                " WHERE uuid=ANY(%s::text[]) AND clinic_id IS NOT NULL) "
+                "SELECT DISTINCT m.comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.base_json,c.effective_json,"
+                "c.maps_presence_status,c.maps_website_url,source.row_json,t.headers_json "
+                "FROM identity_matches m JOIN public.clinics c ON c.id=m.clinic_id "
+                "LEFT JOIN LATERAL (SELECT o.id,o.row_json,o.template_id FROM provenance.comdesk_original_rows o "
+                "WHERE o.uuid=m.comdesk_uuid AND o.clinic_id=c.id ORDER BY o.id DESC LIMIT 1) source ON true "
+                "LEFT JOIN provenance.templates t ON t.id=source.template_id "
+                "WHERE c.merged_into IS NULL",
+                (values, values),
+            )
+            rows = cur.fetchall()
+            clinic_ids = sorted({int(row[1]) for row in rows})
+            overrides = set()
+            if clinic_ids:
+                cur.execute(
+                    "SELECT clinic_id FROM provenance.manual_overrides "
+                    "WHERE field='hp_rank' AND clinic_id=ANY(%s::bigint[])",
+                    (clinic_ids,),
+                )
+                overrides = {int(row[0]) for row in cur.fetchall()}
+        result = {}
+        for uid, cid, hp_url, hp_rank, base, effective, maps_status, maps_url, raw_json, headers_json in rows:
+            base = base if isinstance(base, dict) else json.loads(base or "{}")
+            effective = effective if isinstance(effective, dict) else json.loads(effective or "{}")
+            raw_values = raw_json if isinstance(raw_json, list) else json.loads(raw_json or "[]")
+            headers = headers_json if isinstance(headers_json, list) else json.loads(headers_json or "[]")
+            raw_by_header = {
+                str(header): raw_values[index]
+                for index, header in enumerate(headers) if index < len(raw_values)
+            }
+            saved_hours = base.get("comdesk_sync_hours", {})
+            hour_headers = {
+                "regular_holiday": "休診日", "business_days": "診療日",
+                "morning_start": "午前始", "morning_end": "午前終",
+                "afternoon_start": "午後始", "afternoon_end": "午後終",
+            }
+            result.setdefault(str(uid), []).append({
+                "id": int(cid), "hp_url": hp_url or "", "hp_rank": hp_rank or "",
+                "comdesk_sync_hp_rank": base.get("comdesk_sync_hp_rank", ""),
+                "email": base.get("comdesk_unverified_email", ""),
+                "phone": base.get("phone", ""), "address": base.get("address", ""),
+                "clinic_name": base.get("clinic_name", ""),
+                **{field: saved_hours.get(field, raw_by_header.get(
+                    hour_headers[field], effective.get(field, base.get(field, ""))))
+                   for field in HOURS_FIELDS},
+                "official_maps_website_url": maps_url if maps_status == "MAPS_MATCHED_WEBSITE" else "",
+                "hp_rank_manual": int(cid) in overrides,
+            })
+        return result
 
     def _query_excluded_clinic_ids(self, read_only_ui):
         # This is the ORIGINAL predicate verbatim (see supabase_filters.clauses()) -- the one

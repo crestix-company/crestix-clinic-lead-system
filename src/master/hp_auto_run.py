@@ -47,6 +47,8 @@ class AutoHpRunner:
         return bool(self.thread and self.thread.is_alive())
 
     def start(self, store):
+        from src.safety.preview_mode import assert_not_comdesk_preview_only
+        assert_not_comdesk_preview_only("HP自動実行")
         with self.lock:
             if self.running():
                 return False

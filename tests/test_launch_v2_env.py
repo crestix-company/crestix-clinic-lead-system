@@ -13,7 +13,9 @@ def _clean_runtime_env(monkeypatch):
     are deterministic regardless of what the outer shell happens to have set."""
     keys = ("SERPAPI_API_KEY", "EMAIL_SEARCH_PROVIDER", "EMAIL_AUTO_RUN_ENABLED",
             "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL",
-            "CLINIC_COMMON_IDENTITY_ENABLED")
+            "CLINIC_DATA_BACKEND", "CLINIC_COMMON_IDENTITY_ENABLED",
+            "CLINIC_COMDESK_PREVIEW_ONLY", "CLINIC_READ_ONLY_UI",
+            "OUTREACH_GMAIL_DRAFTS_ENABLED")
     original = {key: os.environ.get(key) for key in keys}
     for key in keys:
         monkeypatch.delenv(key, raising=False)
@@ -143,3 +145,42 @@ def test_email_auto_run_enabled_default_false_when_unset(tmp_path):
     # the "default false" behavior lives at the consumption site
     # (src/email_research_ui.py: os.environ.get("EMAIL_AUTO_RUN_ENABLED", "false")).
     assert "EMAIL_AUTO_RUN_ENABLED" not in os.environ
+
+
+def test_preview_only_skips_email_secret_file_and_forces_safe_flags(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=supabase\nCLINIC_WRITE_BACKEND=supabase\n",
+        encoding="utf-8",
+    )
+    runtime = tmp_path / ".supabase-runtime.env.local"
+    runtime.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://fixture.invalid/db\n", encoding="utf-8")
+    runtime.chmod(0o600)
+    _write_email_env(tmp_path, "UNRELATED_EMAIL_SECRET=never-read\n")
+    monkeypatch.setenv("CLINIC_COMDESK_PREVIEW_ONLY", "1")
+
+    launch_v2.load_runtime_env(tmp_path)
+
+    assert os.environ["CLINIC_READ_ONLY_UI"] == "1"
+    assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
+    assert os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] == "false"
+    assert "UNRELATED_EMAIL_SECRET" not in os.environ
+
+
+@pytest.mark.parametrize("value", ["true", "yes", "on", "enabled", "2"])
+def test_preview_only_flag_rejects_noncanonical_values(tmp_path, monkeypatch, value):
+    monkeypatch.setenv("CLINIC_COMDESK_PREVIEW_ONLY", value)
+    with pytest.raises(RuntimeError, match="CLINIC_COMDESK_PREVIEW_ONLY"):
+        launch_v2.load_runtime_env(tmp_path)
+
+
+def test_preview_only_requires_supabase_reader_url(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=sqlite\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("CLINIC_COMDESK_PREVIEW_ONLY", "1")
+    with pytest.raises(RuntimeError, match="専用Reader"):
+        launch_v2.load_runtime_env(tmp_path)

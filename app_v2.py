@@ -102,6 +102,7 @@ def runtime_store_cache_key():
         os.environ.get("CLINIC_DATA_BACKEND", ""),
         os.environ.get("CLINIC_WRITE_BACKEND", ""),
         os.environ.get("SUPABASE_RUNTIME_DB_URL", ""),
+        os.environ.get("CLINIC_COMDESK_PREVIEW_ONLY", ""),
     ]
     payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
     return hmac.new(_STORE_CACHE_SALT, payload, hashlib.sha256).hexdigest()
@@ -109,6 +110,88 @@ def runtime_store_cache_key():
 
 def read_only_ui_mode():
     return os.environ.get(READ_ONLY_UI_ENV_VAR, "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def comdesk_preview_only_mode():
+    from src.safety.preview_mode import comdesk_preview_only_enabled
+    return comdesk_preview_only_enabled()
+
+
+@st.cache_resource(max_entries=2)
+def comdesk_preview_repository_for(runtime_config_key):
+    # runtime_config_key is a process-local HMAC, never the URL itself.
+    from src.repository.comdesk_preview import build_comdesk_preview_repository
+    return build_comdesk_preview_repository()
+
+
+def render_comdesk_preview_only(repository):
+    """Single-purpose UI: file upload + read-only plan; no apply/review controls."""
+    from src.safety.preview_mode import comdesk_preview_only_enabled
+    if not comdesk_preview_only_enabled():
+        raise RuntimeError("Comdesk Preview専用モードが有効ではありません。")
+    from src.master.comdesk import COMDESK_EXPORT_HEADERS
+    from src.master.comdesk_sync import FIELD_HEADERS, plan_sync
+
+    st.header("Comdesk Step7 — Preview専用")
+    st.warning("READ ONLYです。差分確認のみ実行できます。Apply・保存・Job・Email/Gmail・HP処理は無効です。")
+    st.caption("アップロードしたCSVはメモリ上で照合し、DBには保存しません。URLは表示のみで外部サイトを開きません。")
+    upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="comdesk_preview_only_upload")
+    if upload is None:
+        return
+
+    import hashlib
+    from src.io.input_loader import load_table
+    raw = upload.getvalue()
+    upload_digest = hashlib.sha256(raw).hexdigest()
+    table = load_table(raw, upload.name)
+    expected = set(COMDESK_EXPORT_HEADERS)
+    if len(table.headers) != 30 or len(set(table.headers)) != 30 or set(table.headers) != expected:
+        st.error("列名・列数がComdeskの30列出力と一致しません。Previewを中止しました。")
+        return
+
+    if st.button("UUID照合して差分Preview", key="comdesk_preview_only_run", type="primary"):
+        try:
+            plan = plan_sync(table, repository)
+            st.session_state["comdesk_preview_only_plan"] = plan
+            st.session_state["comdesk_preview_only_digest"] = upload_digest
+        except Exception:
+            st.error("Previewを作成できませんでした。接続権限とCSV形式を確認してください。")
+            return
+
+    plan = st.session_state.get("comdesk_preview_only_plan")
+    if not plan or st.session_state.get("comdesk_preview_only_digest") != upload_digest:
+        return
+
+    counts = plan["counts"]
+    st.write(
+        f"CSV行数：{len(plan['rows']):,} / UUID照合行："
+        f"{sum(row['clinic_id'] is not None for row in plan['rows']):,} / "
+        f"更新候補：{counts['AUTO_UPDATE']:,} / 変更なし：{counts['NO_CHANGE']:,} / HOLD：{counts['HOLD']:,}"
+    )
+    labels = {
+        "hp_rank": "HPランク", "hp_url": "公式HP URL", "email": "メール候補",
+        "regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+        "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終",
+        "phone": "電話番号", "address": "住所", "clinic_name": "医院名",
+    }
+    output = []
+    for row in plan["rows"]:
+        if not row["changes"]:
+            output.append({
+                "CSV行": row["row_number"], "Clinic ID": row["clinic_id"],
+                "Comdesk UUID": row["comdesk_uuid"], "判定": row["status"],
+                "項目": "", "変更前": "", "変更後": "", "HOLD理由": row["reason"],
+            })
+        for field, change in row["changes"].items():
+            output.append({
+                "CSV行": row["row_number"], "Clinic ID": row["clinic_id"],
+                "Comdesk UUID": row["comdesk_uuid"], "判定": row["status"],
+                "項目": labels.get(field, FIELD_HEADERS.get(field, field)),
+                "変更前": change["before"], "変更後": change["after"],
+                "HOLD理由": row["reason"] if row["status"] == "HOLD" else "",
+            })
+    st.dataframe(pd.DataFrame(output), hide_index=True, use_container_width=True)
+    st.info("このモードにApply操作はありません。反映は別途承認された通常Runtimeでのみ行います。")
 
 
 @st.cache_resource(max_entries=2)
@@ -1491,6 +1574,81 @@ def render_comdesk_clinic_sync(store, write_disabled):
             st.error(f"同期を反映できません：{exc}")
 
 
+def render_comdesk_preview_only(repository):
+    """Single-purpose UI: a 30-column CSV upload and read-only diff plan only."""
+    from src.safety.preview_mode import comdesk_preview_only_enabled
+    if not comdesk_preview_only_enabled():
+        raise RuntimeError("Comdesk Preview専用モードが有効ではありません。")
+    from src.master.comdesk import COMDESK_EXPORT_HEADERS
+    from src.master.comdesk_sync import FIELD_HEADERS, plan_sync
+
+    st.header("Comdesk Step7 — Preview専用")
+    st.warning("READ ONLYです。差分確認のみ実行できます。Apply・保存・Job・Email/Gmail・HP処理は無効です。")
+    st.caption("CSVはメモリ上で照合します。URLはテキスト表示のみで外部サイトを開きません。")
+    upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="comdesk_preview_only_upload")
+    if upload is None:
+        return
+
+    import hashlib
+    from src.io.input_loader import load_table
+    raw = upload.getvalue()
+    upload_digest = hashlib.sha256(raw).hexdigest()
+    try:
+        table = load_table(raw, upload.name)
+    except Exception:
+        st.error("CSVを読み込めませんでした。ファイル形式を確認してください。")
+        return
+    expected_headers = set(COMDESK_EXPORT_HEADERS)
+    if (len(table.headers) != 30 or len(set(table.headers)) != 30
+            or set(table.headers) != expected_headers):
+        st.error("列名・列数がComdeskの30列出力と一致しません。Previewを中止しました。")
+        return
+
+    if st.button("UUID照合して差分Preview", key="comdesk_preview_only_run", type="primary"):
+        try:
+            plan = plan_sync(table, repository)
+            st.session_state["comdesk_preview_only_plan"] = plan
+            st.session_state["comdesk_preview_only_digest"] = upload_digest
+        except Exception:
+            st.error("Previewを作成できませんでした。Reader権限、RLS、CSV形式を確認してください。")
+            return
+
+    plan = st.session_state.get("comdesk_preview_only_plan")
+    if not plan or st.session_state.get("comdesk_preview_only_digest") != upload_digest:
+        return
+
+    counts = plan["counts"]
+    matched = sum(row["clinic_id"] is not None for row in plan["rows"])
+    st.write(
+        f"CSV行数：{len(plan['rows']):,} / UUID照合行：{matched:,} / "
+        f"更新候補：{counts['AUTO_UPDATE']:,} / 変更なし：{counts['NO_CHANGE']:,} / HOLD：{counts['HOLD']:,}"
+    )
+    labels = {
+        "hp_rank": "HPランク", "hp_url": "公式HP URL", "email": "メール候補",
+        "regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+        "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終",
+        "phone": "電話番号", "address": "住所", "clinic_name": "医院名",
+    }
+    output = []
+    for row in plan["rows"]:
+        if not row["changes"]:
+            output.append({
+                "CSV行": row["row_number"], "Clinic ID": row["clinic_id"],
+                "Comdesk UUID": row["comdesk_uuid"], "判定": row["status"],
+                "項目": "", "変更前": "", "変更後": "", "HOLD理由": row["reason"],
+            })
+        for field, change in row["changes"].items():
+            output.append({
+                "CSV行": row["row_number"], "Clinic ID": row["clinic_id"],
+                "Comdesk UUID": row["comdesk_uuid"], "判定": row["status"],
+                "項目": labels.get(field, FIELD_HEADERS.get(field, field)),
+                "変更前": change["before"], "変更後": change["after"],
+                "HOLD理由": row["reason"] if row["status"] == "HOLD" else "",
+            })
+    st.dataframe(pd.DataFrame(output), hide_index=True, use_container_width=True)
+    st.info("このモードにApply操作はありません。反映は別途承認された通常Runtimeでのみ行います。")
+
+
 def render_comdesk_snapshot_diff_import(store, demo, *, key_prefix):
     """Separate, opt-in path for the two 30-column CRM snapshot exports.
 
@@ -2732,6 +2890,17 @@ def _show_supabase_startup_error(exc):
 
 def main():
     st.set_page_config(page_title="クリニック営業マスター", page_icon="📋", layout="wide")
+    if comdesk_preview_only_mode():
+        st.title("Clinic Lead System — Comdesk Preview専用")
+        st.caption("他の画面・自動処理・外部APIを起動せず、Step7の読取Previewだけを表示します。")
+        try:
+            repository = comdesk_preview_repository_for(runtime_store_cache_key())
+        except Exception:
+            st.error("専用Reader接続の検証に失敗しました。接続ロール・権限・RLSを確認してください。")
+            return
+        render_comdesk_preview_only(repository)
+        return
+
     st.title("クリニック営業マスター")
     st.caption("①データ準備 → ②Google Maps → ③HP調査 → ④営業対象・Comdesk出力")
 

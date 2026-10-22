@@ -1455,6 +1455,8 @@ class SupabaseClinicWriteRepository:
         return result
 
     def apply_comdesk_sync(self, changes, file_hash):
+        from src.safety.preview_mode import assert_not_comdesk_preview_only
+        assert_not_comdesk_preview_only("Supabase Comdesk Step7 Apply")
         from psycopg.types.json import Jsonb
         from src.master.comdesk_sync import HOURS_FIELDS, SUPPORTED_FIELDS
         batch_id = "comdesk_sync:" + file_hash
