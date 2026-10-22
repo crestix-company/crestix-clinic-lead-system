@@ -121,6 +121,122 @@ class SqliteClinicWriteRepository:
     def import_comdesk(self, table, mapping=None):
         return self._store.import_comdesk(table, mapping)
 
+    def comdesk_sync_clinics(self, uuids):
+        import json
+        from src.master.comdesk_sync import HOURS_FIELDS
+        values = [str(value) for value in set(uuids) if value]
+        if not values:
+            return {}
+        with self._store.connect() as c:
+            rows = c.execute(
+                "SELECT o.uuid AS comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.maps_presence_status,c.maps_website_url,"
+                "c.effective_json,c.base_json,o.row_json,t.headers_json "
+                "FROM comdesk_original_rows o JOIN clinics c ON c.id=o.clinic_id "
+                "JOIN templates t ON t.id=o.template_id WHERE c.merged_into IS NULL AND o.uuid IN (" +
+                ",".join("?" for _ in values) + ") ORDER BY o.id DESC", values,
+            ).fetchall()
+            overrides = {(r[0], r[1]) for r in c.execute(
+                "SELECT clinic_id,field FROM manual_overrides WHERE field='hp_rank' AND clinic_id IN (" +
+                ",".join("?" for _ in rows) + ")", [r["id"] for r in rows]
+            ).fetchall()} if rows else set()
+        result = {}
+        seen = set()
+        for row in rows:
+            identity_key = (row["comdesk_uuid"], row["id"])
+            if identity_key in seen:
+                continue
+            seen.add(identity_key)
+            data = json.loads(row["effective_json"] or "{}")
+            base = json.loads(row["base_json"] or "{}")
+            saved_hours = base.get("comdesk_sync_hours", {})
+            raw_values = json.loads(row["row_json"] or "[]")
+            headers = json.loads(row["headers_json"] or "[]")
+            raw_by_header = {str(header): raw_values[index] for index, header in enumerate(headers) if index < len(raw_values)}
+            hour_headers = {"regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+                            "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終"}
+            result.setdefault(row["comdesk_uuid"], []).append({
+                "id": row["id"], "hp_url": row["hp_url"], "hp_rank": row["hp_rank"],
+                "comdesk_sync_hp_rank": base.get("comdesk_sync_hp_rank", ""),
+                "email": base.get("comdesk_unverified_email", ""), "phone": data.get("phone", ""),
+                "address": data.get("address", ""), "clinic_name": data.get("clinic_name", ""),
+                **{field: saved_hours.get(field, raw_by_header.get(hour_headers[field], data.get(field, base.get(field, "")))) for field in HOURS_FIELDS},
+                "official_maps_website_url": row["maps_website_url"] if row["maps_presence_status"] == "MAPS_MATCHED_WEBSITE" else "",
+                "hp_rank_manual": (row["id"], "hp_rank") in overrides,
+            })
+        return result
+
+    def apply_comdesk_sync(self, changes, file_hash):
+        import json
+        from src.master.store import dumps, now
+        from src.master.comdesk_sync import HOURS_FIELDS, SUPPORTED_FIELDS
+        with self._store.connect() as c:
+            c.execute("BEGIN IMMEDIATE")
+            old = c.execute("SELECT result_json FROM import_batches WHERE id=?", ("comdesk_sync:" + file_hash,)).fetchone()
+            if old:
+                return {"already_applied": True, **json.loads(old[0])}
+            updated = 0
+            for item in changes:
+                identity = c.execute(
+                    "SELECT o.row_json,t.headers_json FROM comdesk_original_rows o JOIN templates t ON t.id=o.template_id "
+                    "WHERE o.uuid=? AND o.clinic_id=? ORDER BY o.id DESC LIMIT 1",
+                    (item["comdesk_uuid"], item["clinic_id"]),
+                ).fetchone()
+                row = c.execute("SELECT uuid,hp_url,hp_rank,hp_status,effective_json,base_json FROM clinics WHERE id=? AND merged_into IS NULL", (item["clinic_id"],)).fetchone()
+                if not row or not identity:
+                    raise ValueError("反映直前にComdesk UUIDとClinic内部IDの対応が変わりました。再取込してください。")
+                before, after = {}, {}
+                effective = json.loads(row["effective_json"] or "{}")
+                base = json.loads(row["base_json"] or "{}")
+                hours = dict(base.get("comdesk_sync_hours", {}))
+                source_values = json.loads(identity[0] or "[]")
+                source_headers = json.loads(identity[1] or "[]")
+                source_hours = {"regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+                                "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終"}
+                original_by_header = {str(header): source_values[index] for index, header in enumerate(source_headers) if index < len(source_values)}
+                for field, pair in item["changes"].items():
+                    if field not in SUPPORTED_FIELDS:
+                        raise ValueError("未対応項目が反映計画に含まれています。")
+                    if field == "hp_rank" and c.execute(
+                        "SELECT 1 FROM manual_overrides WHERE clinic_id=? AND field='hp_rank'", (item["clinic_id"],)
+                    ).fetchone():
+                        raise ValueError("反映前にHPランクの手動確定値が登録されました。HOLDとして再確認してください。")
+                    current = str((base.get("comdesk_unverified_email", "") if field == "email"
+                                   else hours.get(field, original_by_header.get(source_hours[field], effective.get(field, base.get(field, "")))) if field in HOURS_FIELDS
+                                   else row[field]) or "").strip()
+                    if current != pair["before"]:
+                        raise ValueError("プレビュー後に値が変わりました。再取込してください。")
+                    before[field], after[field] = current, pair["after"]
+                    if field == "email":
+                        base["comdesk_unverified_email"] = pair["after"]
+                    elif field == "hp_url":
+                        effective["hp_url"] = effective["comdesk_verified_url"] = pair["after"]
+                        effective["hp_status"] = "VERIFIED"
+                        base["hp_url"] = base["comdesk_verified_url"] = pair["after"]
+                        base["hp_status"] = "VERIFIED"
+                        if item.get("human_reviewed_url"):
+                            base["comdesk_url_reviewed_at"] = now()
+                    elif field in HOURS_FIELDS:
+                        hours[field] = pair["after"]
+                        base["comdesk_sync_hours"] = effective["comdesk_sync_hours"] = hours
+                    elif field == "hp_rank":
+                        effective["comdesk_sync_hp_rank"] = base["comdesk_sync_hp_rank"] = pair["after"]
+                        effective[field] = base[field] = pair["after"]
+                    else:
+                        effective[field] = pair["after"]
+                        base[field] = pair["after"]
+                ts = now()
+                c.execute("UPDATE clinics SET hp_url=?,hp_rank=?,hp_status=?,effective_json=?,base_json=?,last_seen_at=? WHERE id=?",
+                          (effective.get("hp_url", row["hp_url"]), effective.get("hp_rank", row["hp_rank"]),
+                           effective.get("hp_status", row["hp_status"]), dumps(effective), dumps(base), ts, item["clinic_id"]))
+                c.execute("INSERT INTO change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
+                          (item["clinic_id"], "Comdesk医院情報同期", dumps(before), dumps(after),
+                           "source=comdesk_csv; file_sha256=" + file_hash + ("; operator_confirmed_url" if item.get("human_reviewed_url") else ""), ts))
+                updated += 1
+            result = {"updated": updated}
+            c.execute("INSERT INTO import_batches(id,source,result_json,created_at) VALUES(?,?,?,?)",
+                      ("comdesk_sync:" + file_hash, "comdesk_sync", dumps(result), now()))
+            return result
+
     def import_master(self, frame):
         return self._store.import_master(frame)
 

@@ -1356,6 +1356,140 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
+    def comdesk_sync_clinics(self, uuids):
+        from src.master.comdesk_sync import HOURS_FIELDS
+        values = sorted({str(value) for value in uuids if value})
+        if not values:
+            return {}
+        result = {}
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "WITH identity_matches AS ("
+                " SELECT i.comdesk_uuid,ec.clinic_id FROM public.sales_entity_comdesk_identity i "
+                " JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                " WHERE i.comdesk_uuid=ANY(%s::text[]) "
+                " UNION SELECT uuid,clinic_id FROM provenance.comdesk_original_rows "
+                " WHERE uuid=ANY(%s::text[]) AND clinic_id IS NOT NULL) "
+                "SELECT DISTINCT m.comdesk_uuid,c.id,c.hp_url,c.hp_rank,c.base_json,c.effective_json,"
+                "c.maps_presence_status,c.maps_website_url,source.row_json,t.headers_json "
+                "FROM identity_matches m JOIN public.clinics c ON c.id=m.clinic_id "
+                "LEFT JOIN LATERAL (SELECT o.row_json,o.template_id FROM provenance.comdesk_original_rows o "
+                "WHERE o.uuid=m.comdesk_uuid AND o.clinic_id=c.id ORDER BY o.id DESC LIMIT 1) source ON true "
+                "LEFT JOIN provenance.templates t ON t.id=source.template_id "
+                "WHERE c.merged_into IS NULL", (values, values),
+            )
+            rows = cur.fetchall()
+            # SELECT order is (comdesk_uuid, clinic_id, ...); use the internal clinic ID
+            # for the manual-override lookup, never the Comdesk UUID.
+            ids = [int(row[1]) for row in rows]
+            overrides = set()
+            if ids:
+                cur.execute("SELECT clinic_id FROM provenance.manual_overrides WHERE field='hp_rank' AND clinic_id=ANY(%s::bigint[])", (ids,))
+                overrides = {int(row[0]) for row in cur.fetchall()}
+        # plan_sync() performs this standalone read before apply_comdesk_sync() on the same
+        # non-autocommit write connection. End the implicit read transaction here so the
+        # subsequent transaction() block is a top-level transaction and commits durably.
+        self._conn.commit()
+        for uid, cid, hp_url, hp_rank, base, effective, maps_status, maps_url, raw_json, headers_json in rows:
+            base = base if isinstance(base, dict) else json.loads(base or "{}")
+            effective = json.loads(effective or "{}")
+            saved_hours = base.get("comdesk_sync_hours", {})
+            raw_values = raw_json if isinstance(raw_json, list) else json.loads(raw_json or "[]")
+            headers = headers_json if isinstance(headers_json, list) else json.loads(headers_json or "[]")
+            raw_by_header = {str(header): raw_values[index] for index, header in enumerate(headers) if index < len(raw_values)}
+            hour_headers = {"regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+                            "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終"}
+            result.setdefault(uid, []).append({
+                "id": int(cid), "hp_url": hp_url or "", "hp_rank": hp_rank or "",
+                "comdesk_sync_hp_rank": base.get("comdesk_sync_hp_rank", ""),
+                "email": base.get("comdesk_unverified_email", ""), "phone": base.get("phone", ""),
+                "address": base.get("address", ""), "clinic_name": base.get("clinic_name", ""),
+                **{field: saved_hours.get(field, raw_by_header.get(hour_headers[field], effective.get(field, base.get(field, "")))) for field in HOURS_FIELDS},
+                "official_maps_website_url": maps_url if maps_status == "MAPS_MATCHED_WEBSITE" else "",
+                "hp_rank_manual": int(cid) in overrides,
+            })
+        return result
+
+    def apply_comdesk_sync(self, changes, file_hash):
+        from psycopg.types.json import Jsonb
+        from src.master.comdesk_sync import HOURS_FIELDS, SUPPORTED_FIELDS
+        batch_id = "comdesk_sync:" + file_hash
+        updated = 0
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                old = cur.fetchone()
+                if old:
+                    value = old[0] if isinstance(old[0], dict) else json.loads(old[0])
+                    return {"already_applied": True, **value}
+                for item in changes:
+                    cur.execute("SELECT uuid,hp_url,hp_rank,hp_status,base_json,effective_json FROM public.clinics WHERE id=%s AND merged_into IS NULL FOR UPDATE", (item["clinic_id"],))
+                    row = cur.fetchone()
+                    cur.execute(
+                        "SELECT 1 FROM provenance.comdesk_original_rows WHERE uuid=%s AND clinic_id=%s "
+                        "UNION SELECT 1 FROM public.sales_entity_comdesk_identity i "
+                        "JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                        "WHERE i.comdesk_uuid=%s AND ec.clinic_id=%s LIMIT 1",
+                        (item["comdesk_uuid"], item["clinic_id"], item["comdesk_uuid"], item["clinic_id"]),
+                    )
+                    identity = cur.fetchone()
+                    if not row or not identity:
+                        raise ValueError("反映直前にComdesk UUIDとClinic内部IDの対応が変わりました。再取込してください。")
+                    cur.execute(
+                        "SELECT o.row_json,t.headers_json FROM provenance.comdesk_original_rows o "
+                        "JOIN provenance.templates t ON t.id=o.template_id WHERE o.uuid=%s AND o.clinic_id=%s "
+                        "ORDER BY o.id DESC LIMIT 1", (item["comdesk_uuid"], item["clinic_id"]),
+                    )
+                    source_row = cur.fetchone()
+                    base = row[4] if isinstance(row[4], dict) else json.loads(row[4] or "{}")
+                    effective = json.loads(row[5] or "{}")
+                    hours = dict(base.get("comdesk_sync_hours", {}))
+                    source_values = source_row[0] if source_row and isinstance(source_row[0], list) else json.loads((source_row[0] if source_row else None) or "[]")
+                    source_headers = source_row[1] if source_row and isinstance(source_row[1], list) else json.loads((source_row[1] if source_row else None) or "[]")
+                    source_hours = {"regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+                                    "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終"}
+                    original_by_header = {str(header): source_values[index] for index, header in enumerate(source_headers) if index < len(source_values)}
+                    before, after = {}, {}
+                    for field, pair in item["changes"].items():
+                        if field not in SUPPORTED_FIELDS:
+                            raise ValueError("未対応項目が反映計画に含まれています。")
+                        if field == "hp_rank":
+                            cur.execute("SELECT 1 FROM provenance.manual_overrides WHERE clinic_id=%s AND field='hp_rank' LIMIT 1", (item["clinic_id"],))
+                            if cur.fetchone():
+                                raise ValueError("反映前にHPランクの手動確定値が登録されました。HOLDとして再確認してください。")
+                        current = str((base.get("comdesk_unverified_email", "") if field == "email"
+                                       else hours.get(field, original_by_header.get(source_hours[field], effective.get(field, base.get(field, "")))) if field in HOURS_FIELDS
+                                       else row[1 if field == "hp_url" else 2]) or "").strip()
+                        if current != pair["before"]:
+                            raise ValueError("プレビュー後に値が変わりました。再取込してください。")
+                        before[field], after[field] = current, pair["after"]
+                        if field == "email":
+                            base["comdesk_unverified_email"] = pair["after"]
+                        elif field == "hp_url":
+                            base["hp_url"] = base["comdesk_verified_url"] = pair["after"]
+                            effective["hp_url"] = effective["comdesk_verified_url"] = pair["after"]
+                            base["hp_status"] = effective["hp_status"] = "VERIFIED"
+                            if item.get("human_reviewed_url"):
+                                base["comdesk_url_reviewed_at"] = now()
+                        elif field in HOURS_FIELDS:
+                            hours[field] = pair["after"]
+                            base["comdesk_sync_hours"] = effective["comdesk_sync_hours"] = hours
+                        elif field == "hp_rank":
+                            base["comdesk_sync_hp_rank"] = effective["comdesk_sync_hp_rank"] = pair["after"]
+                            base[field] = effective[field] = pair["after"]
+                        else:
+                            base[field] = effective[field] = pair["after"]
+                    cur.execute("UPDATE public.clinics SET hp_url=%s,hp_rank=%s,hp_status=%s,base_json=%s,effective_json=%s,last_seen_at=%s WHERE id=%s",
+                                (effective.get("hp_url", row[1]), effective.get("hp_rank", row[2]), effective.get("hp_status", row[3]), Jsonb(base), dumps(effective), now(), item["clinic_id"]))
+                    cur.execute("INSERT INTO provenance.change_history(clinic_id,action,before_json,after_json,note,created_at) VALUES(%s,%s,%s,%s,%s,%s)",
+                                (item["clinic_id"], "Comdesk医院情報同期", dumps(before), dumps(after),
+                                 "source=comdesk_csv; file_sha256=" + file_hash + ("; operator_confirmed_url" if item.get("human_reviewed_url") else ""), now()))
+                    updated += 1
+                result = {"updated": updated}
+                cur.execute("INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
+                            (batch_id, "comdesk_sync", Jsonb(result), now()))
+        return result
+
     def import_comdesk(
         self, table, mapping=None, *, project_scope_id=None, project_scope_confirmed=False,
     ):
