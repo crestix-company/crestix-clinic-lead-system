@@ -1427,6 +1427,12 @@ def render_comdesk_clinic_sync(store, write_disabled):
     import pandas as pd
     from src.master.comdesk_sync import plan_sync, apply_sync
 
+    sync_labels = {
+        "hp_rank": "HPランク", "hp_url": "公式ホームページURL", "email": "メールアドレス",
+        "regular_holiday": "休診日", "business_days": "診療日", "morning_start": "午前始",
+        "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終",
+        "phone": "電話番号", "address": "住所", "clinic_name": "医院名",
+    }
     st.markdown("**医院情報の差分同期（30列形式）**")
     st.caption("CSV取込とDB反映を分けています。完全一致したUUIDだけを照合し、反映前に差分を確認できます。")
     upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=write_disabled)
@@ -1446,24 +1452,39 @@ def render_comdesk_clinic_sync(store, write_disabled):
         return
     st.write(f"CSV取込件数：{len(plan['rows']):,}件 / UUID照合成功：{sum(r['clinic_id'] is not None for r in plan['rows']):,}件 / "
              f"更新候補：{plan['counts']['AUTO_UPDATE']:,}件 / 変更なし：{plan['counts']['NO_CHANGE']:,}件 / 確認待ち：{plan['counts']['HOLD']:,}件")
-    st.dataframe(pd.DataFrame([{"項目": key, "変更件数": value} for key, value in plan["item_counts"].items()]), hide_index=True)
+    st.dataframe(pd.DataFrame([{"項目": sync_labels.get(key, key), "変更件数": value} for key, value in plan["item_counts"].items()]), hide_index=True)
     preview_rows = []
     for row in plan["rows"]:
         for field, change in row["changes"].items():
             preview_rows.append({"CSV行": row["row_number"], "Clinic ID": row["clinic_id"], "Comdesk UUID": row["comdesk_uuid"],
-                                 "判定": row["status"], "項目": field, "変更前": change["before"], "変更後": change["after"], "理由": row["reason"]})
+                                 "判定": row["status"], "項目": sync_labels.get(field, field), "変更前": change["before"], "変更後": change["after"], "理由": row["reason"]})
         if row["status"] == "HOLD":
             preview_rows.append({"CSV行": row["row_number"], "Clinic ID": row["clinic_id"], "Comdesk UUID": row["comdesk_uuid"],
                                  "判定": "HOLD", "項目": "", "変更前": "", "変更後": "", "理由": row["reason"]})
     st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+    reviewed_url_rows = []
+    url_candidates = [row for row in plan["rows"] if "hp_url" in row["changes"] and row["status"] == "HOLD"]
+    if url_candidates:
+        st.markdown("**HP URLの人間確認**")
+        st.caption("リンク先がこの医院の公式HPであることを確認した行だけチェックしてください。反映時にHP状態をVERIFIEDにし、既存HP調査履歴は保持します。")
+        for row in url_candidates:
+            change = row["changes"]["hp_url"]
+            st.write(f"CSV {row['row_number']}行目 / Comdesk UUID {row['comdesk_uuid']} / 変更前: {change['before'] or '空欄'} / 変更後: {change['after']}")
+            if str(change["after"]).lower().startswith(("https://", "http://")):
+                st.link_button("変更後URLを開く", change["after"], key=f"step7_url_link_{row['row_number']}")
+            if (str(change["after"]).lower().startswith(("https://", "http://"))
+                    and st.checkbox("このURLが対象医院の公式ホームページであることを確認", key=f"step7_url_review_{row['row_number']}", disabled=write_disabled)):
+                reviewed_url_rows.append(row["row_number"])
+    auto_count = plan["counts"]["AUTO_UPDATE"]
+    apply_enabled = bool(auto_count or reviewed_url_rows)
     if st.button("プレビューの更新候補をDBへ反映", type="primary", key="step7_clinic_sync_apply",
-                 disabled=write_disabled or not plan["counts"]["AUTO_UPDATE"]):
+                 disabled=write_disabled or not apply_enabled):
         try:
             repository = write_repositories_for(store).clinics
             fresh_plan = plan_sync(table, repository)
             if fresh_plan != plan:
                 raise ValueError("CSVまたは医院データがプレビュー後に変わりました。最新差分を再確認してください。")
-            result = apply_sync(repository, fresh_plan)
+            result = apply_sync(repository, fresh_plan, reviewed_url_rows=reviewed_url_rows)
             st.success(f"反映完了：{result.get('updated', 0):,}件")
             st.session_state.pop("step7_clinic_sync_plan", None)
         except Exception as exc:

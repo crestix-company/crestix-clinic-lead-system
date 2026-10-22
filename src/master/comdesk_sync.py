@@ -10,17 +10,39 @@ from dataclasses import dataclass, asdict
 from collections import Counter
 import hashlib
 import json
+from urllib.parse import urlsplit
 
 FIELD_HEADERS = {
     "hp_rank": "HPランク",
     "hp_url": "URL",
     "email": "メールアドレス",
-    "business_hours": "診療日",
+    "regular_holiday": "休診日",
+    "business_days": "診療日",
+    "morning_start": "午前始",
+    "morning_end": "午前終",
+    "afternoon_start": "午後始",
+    "afternoon_end": "午後終",
     "phone": "Tel1",
     "address": "住所１",
     "clinic_name": "名前",
 }
-SUPPORTED_FIELDS = {"hp_rank", "email"}
+HOURS_FIELDS = frozenset({"regular_holiday", "business_days", "morning_start", "morning_end", "afternoon_start", "afternoon_end"})
+SUPPORTED_FIELDS = {"hp_rank", "hp_url", "email", *HOURS_FIELDS}
+
+
+def _url_key(value):
+    try:
+        parsed = urlsplit(str(value or "").strip())
+        host = (parsed.hostname or "").casefold().removeprefix("www.")
+        if parsed.username or parsed.password:
+            return ("", None, "", "")
+        port = parsed.port
+        if port in ({"http": 80, "https": 443}.get(parsed.scheme.lower()), None):
+            port = None
+        path = parsed.path.rstrip("/")
+        return (host, port, path, parsed.query)
+    except ValueError:
+        return ("", None, "", "")
 
 
 @dataclass
@@ -58,6 +80,8 @@ def plan_sync(table, repository):
             changes = {}
             held = []
             for field, header in FIELD_HEADERS.items():
+                if header not in table.headers:
+                    continue
                 value = str(raw[table.headers.index(header)] or "").strip()
                 if not value:
                     continue
@@ -65,6 +89,14 @@ def plan_sync(table, repository):
                 if value == current:
                     continue
                 changes[field] = {"before": current, "after": value}
+                if field == "hp_url":
+                    if not value.lower().startswith(("https://", "http://")):
+                        held.append(field)
+                    elif not clinic.get("official_maps_website_url") or _url_key(value) != _url_key(clinic["official_maps_website_url"]):
+                        held.append(field)
+                    else:
+                        changes[field]["officiality"] = "MAPS_MATCHED_WEBSITE exact URL"
+                    continue
                 if field not in SUPPORTED_FIELDS:
                     held.append(field)
                     continue
@@ -74,9 +106,6 @@ def plan_sync(table, repository):
                         continue
                     value = value.upper()
                     changes[field]["after"] = value
-                if field == "hp_url":
-                    held.append(field)
-                    continue
             if held:
                 decision = SyncChange(index + 2, int(clinic["id"]), uid, "HOLD",
                                       "保存先未定義または手動値と競合: " + ", ".join(held), changes)
@@ -94,7 +123,17 @@ def plan_sync(table, repository):
     return payload
 
 
-def apply_sync(repository, plan):
-    """Apply only candidates from a freshly recomputed preview; repository is transactional."""
-    changes = [row for row in plan["rows"] if row["status"] == "AUTO_UPDATE"]
-    return repository.apply_comdesk_sync(changes, plan["file_hash"])
+def apply_sync(repository, plan, *, reviewed_url_rows=()):
+    """Apply safe candidates plus only the URL fields explicitly approved by a human."""
+    reviewed = {int(row_number) for row_number in reviewed_url_rows}
+    changes = []
+    for row in plan["rows"]:
+        if row["status"] == "AUTO_UPDATE":
+            changes.append(row)
+        elif (row["row_number"] in reviewed and "hp_url" in row["changes"]
+              and str(row["changes"]["hp_url"].get("after") or "").lower().startswith(("https://", "http://"))):
+            changes.append({**row, "changes": {"hp_url": row["changes"]["hp_url"]}, "human_reviewed_url": True})
+    operation_key = hashlib.sha256(json.dumps(
+        [plan["file_hash"], sorted(reviewed)], separators=(",", ":")
+    ).encode()).hexdigest()
+    return repository.apply_comdesk_sync(changes, operation_key)
