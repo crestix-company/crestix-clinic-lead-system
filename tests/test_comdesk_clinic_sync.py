@@ -168,6 +168,20 @@ def test_maps_exact_url_auto_updates_and_human_reviewed_url_uses_safe_path(tmp_p
     assert "operator_confirmed_url" in history_note
 
 
+def test_malformed_official_or_incoming_url_is_held(tmp_path):
+    malformed_map = ClinicStore(tmp_path / "malformed-map.sqlite")
+    _clinic(malformed_map, maps_url="https://", maps_status="MAPS_MATCHED_WEBSITE")
+    plan = plan_sync(_table(UUID="COMDESK-1", URL="https://"), SqliteClinicWriteRepository(malformed_map))
+    assert plan["counts"]["HOLD"] == 1
+    assert "hp_url" in plan["rows"][0]["reason"]
+
+    malformed_input = ClinicStore(tmp_path / "malformed-input.sqlite")
+    _clinic(malformed_input, maps_url="https://clinic.example.jp", maps_status="MAPS_MATCHED_WEBSITE")
+    plan = plan_sync(_table(UUID="COMDESK-1", URL="https://"), SqliteClinicWriteRepository(malformed_input))
+    assert plan["counts"]["HOLD"] == 1
+    assert "hp_url" in plan["rows"][0]["reason"]
+
+
 def test_comdesk_unverified_email_is_not_an_outreach_recipient():
     from src.outreach.auto_draft_batch import plan_auto_drafts
     from src.outreach.generation import OutreachResult, READY
