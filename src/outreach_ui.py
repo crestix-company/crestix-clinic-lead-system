@@ -14,6 +14,7 @@ from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from src.outreach.article_adapter import ArticleLink
@@ -556,6 +557,14 @@ def _tab_results(read_only=False):
     st.caption("メール送信・予約送信は実装していません。Gmail下書き保存はデフォルト無効で、環境設定・個別確認・Gmail/DB照合を通過した場合だけ実行できます。")
     from src.outreach.gmail_workflow import create_gmail_draft, gmail_drafts_enabled
     draft_enabled = gmail_drafts_enabled()
+    shared_api_mode = str(os.environ.get("SHARED_DRAFT_API_ENABLED", "false")).strip().casefold() == "true"
+    shared_api_endpoint = os.environ.get("SHARED_DRAFT_API_URL", "").strip()
+    shared_api_token = os.environ.get("SHARED_DRAFT_API_TOKEN", "").strip()
+    shared_api_configured = bool(shared_api_mode and shared_api_endpoint and shared_api_token)
+    if shared_api_mode and not shared_api_configured:
+        st.error("共通Draft APIが有効ですが、API URLまたは認証情報がありません。下書き保存は停止しています。")
+    if shared_api_mode:
+        st.info("共通Draft API経由でGmail下書きを作成します。送信・予約送信は行いません。")
     i3_reference = configured_i3_reference()
     if not draft_enabled:
         st.info("Gmail下書き保存は無効です（OUTREACH_GMAIL_DRAFTS_ENABLED=false）。")
@@ -627,46 +636,101 @@ def _tab_results(read_only=False):
     if read_only:
         st.info("READ ONLY画面確認モードのため、Gmail下書き保存は無効です。")
     if st.button("Gmail下書きに保存", key=K + "create_drafts", type="primary",
-                 disabled=(read_only or not draft_enabled or not selected_drafts or len(selected_drafts) > 25
+                 disabled=(read_only or (not draft_enabled and not shared_api_mode)
+                           or (shared_api_mode and not shared_api_configured)
+                           or not selected_drafts or len(selected_drafts) > 25
                            or not all_reviewed or typed_confirmation != "CREATE_GMAIL_DRAFTS")):
-        repository = None
-        try:
-            from src.outreach.gmail_oauth import connect_existing
-            from src.repository.outreach_delivery_repository import OutreachDeliveryRepository
-            campaign_id = st.session_state.get(K + "campaign_id", "").strip()
-            gmail = connect_existing(root=Path.cwd())
-            repository = OutreachDeliveryRepository.connect()
-            if not repository.health_check():
-                raise RuntimeError("Outreach DB health check failed")
-            outcomes = []
-            for i in selected_drafts:
-                outcomes.append(create_gmail_draft(
-                    results[i], campaign_id=campaign_id,
-                    generation_batch_id=settings.generation_batch_id,
-                    staff_name=settings.staff, gmail=gmail, repository=repository,
-                    as_of=today_japan(), enabled=draft_enabled,
-                    draft_save_review=review_payloads[i],
-                ))
-            counts = {}
-            for outcome in outcomes:
-                counts[outcome.status] = counts.get(outcome.status, 0) + 1
-            st.session_state[K + "draft_outcomes"] = outcomes
-            st.session_state[K + "draft_result_by_outreach"] = {
-                outcome.outreach_id: results[i] for i, outcome in zip(selected_drafts, outcomes)
-                if outcome.outreach_id
-            }
-            st.session_state[K + "draft_counts"] = {
-                "success": sum(outcome.status in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
-                "failure": sum(outcome.status not in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
-            }
-            st.success("下書き処理結果：" + "、".join(f"{status} {count}件" for status, count in sorted(counts.items())))
-            if any(outcome.status == "UNKNOWN" for outcome in outcomes):
-                st.warning("結果不明の医院があります。Gmailと送付履歴DBを手動照合するまで再実行しないでください。")
-        except Exception as exc:
-            st.error(f"Gmail下書き保存を安全に完了できませんでした（{type(exc).__name__}）。")
-        finally:
-            if repository is not None:
-                repository.close()
+        if shared_api_mode:
+            try:
+                from src.outreach.shared_draft_ui_adapter import (
+                    SharedDraftApiClient, context_from_outreach_result, display_fields,
+                )
+                local_mock = (str(os.environ.get("OUTREACH_LOCAL_MOCK_MODE", "false")).strip().casefold() == "true"
+                              and shared_api_endpoint.startswith("mock://"))
+                if local_mock:
+                    from src.outreach.local_mock_draft_transport import LocalMockDraftTransport
+                    api_transport = LocalMockDraftTransport(
+                        st.session_state.setdefault(K + "local_mock_draft_records", {})
+                    )
+                else:
+                    api_transport = requests.post
+                def cloud_run_identity_token():
+                    audience = os.environ.get("SHARED_DRAFT_CLOUD_RUN_AUDIENCE", "").strip()
+                    if not audience:
+                        return ""
+                    from google.auth.transport.requests import Request
+                    from google.oauth2.id_token import fetch_id_token
+                    return fetch_id_token(Request(), audience)
+
+                campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+                api_client = SharedDraftApiClient(
+                    endpoint=shared_api_endpoint, token_provider=lambda: shared_api_token,
+                    transport=api_transport, timeout_seconds=20,
+                    identity_token_provider=(cloud_run_identity_token
+                        if os.environ.get("SHARED_DRAFT_CLOUD_RUN_AUDIENCE", "").strip() else None),
+                )
+                api_results = []
+                for i in selected_drafts:
+                    result = results[i]
+                    context = context_from_outreach_result(
+                        result, campaign_id=campaign_id,
+                        operation_key=review_payloads[i]["operation_key"],
+                    )
+                    response = api_client.create_or_recover(context)
+                    api_results.append(display_fields(context, response))
+                st.session_state[K + "shared_api_results"] = api_results
+                st.success("共通Draft APIの処理が終了しました。状態とHOLD理由を確認してください。")
+                if any(row["状態"] in {"HOLD", "UNKNOWN"} for row in api_results):
+                    st.warning("HOLD/UNKNOWNがあります。Gmail状態を確認するまで再試行しないでください。")
+            except Exception as exc:
+                st.error(f"共通Draft APIを安全に完了できませんでした（{type(exc).__name__}）。")
+        else:
+            repository = None
+            try:
+                from src.outreach.gmail_oauth import connect_existing
+                from src.repository.outreach_delivery_repository import OutreachDeliveryRepository
+                campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+                gmail = connect_existing(root=Path.cwd())
+                repository = OutreachDeliveryRepository.connect()
+                if not repository.health_check():
+                    raise RuntimeError("Outreach DB health check failed")
+                outcomes = []
+                for i in selected_drafts:
+                    outcomes.append(create_gmail_draft(
+                        results[i], campaign_id=campaign_id,
+                        generation_batch_id=settings.generation_batch_id,
+                        staff_name=settings.staff, gmail=gmail, repository=repository,
+                        as_of=today_japan(), enabled=draft_enabled,
+                        draft_save_review=review_payloads[i],
+                    ))
+                counts = {}
+                for outcome in outcomes:
+                    counts[outcome.status] = counts.get(outcome.status, 0) + 1
+                st.session_state[K + "draft_outcomes"] = outcomes
+                st.session_state[K + "draft_result_by_outreach"] = {
+                    outcome.outreach_id: results[i] for i, outcome in zip(selected_drafts, outcomes)
+                    if outcome.outreach_id
+                }
+                st.session_state[K + "draft_counts"] = {
+                    "success": sum(outcome.status in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
+                    "failure": sum(outcome.status not in {"DRAFT_CREATED", "DRAFT_RECOVERED"} for outcome in outcomes),
+                }
+                st.success("下書き処理結果：" + "、".join(f"{status} {count}件" for status, count in sorted(counts.items())))
+                if any(outcome.status == "UNKNOWN" for outcome in outcomes):
+                    st.warning("結果不明の医院があります。Gmailと送付履歴DBを手動照合するまで再実行しないでください。")
+            except Exception as exc:
+                st.error(f"Gmail下書き保存を安全に完了できませんでした（{type(exc).__name__}）。")
+            finally:
+                if repository is not None:
+                    repository.close()
+    if st.session_state.get(K + "shared_api_results"):
+        st.dataframe(pd.DataFrame(st.session_state[K + "shared_api_results"]), hide_index=True,
+                     use_container_width=True)
+        for row in st.session_state[K + "shared_api_results"]:
+            st.text(f"{row.get('医院', '医院未取得')}｜Gmail状態: {row.get('Gmail状態', 'UNKNOWN')}｜保存結果: {row.get('保存結果', 'UNKNOWN')}")
+            st.text(f"Draft ID: {row.get('Draft ID') or '未取得'}｜Message ID: {row.get('Message ID') or '未取得'}｜Thread ID: {row.get('Thread ID') or '未取得'}")
+            if row.get("HOLD理由"):
+                st.warning("HOLD理由: " + str(row["HOLD理由"]))
     if st.session_state.get(K + "draft_outcomes"):
         st.dataframe(pd.DataFrame([{
             "状態": outcome.status, "outreach_id": outcome.outreach_id,
@@ -688,6 +752,34 @@ def _tab_results(read_only=False):
 def _tab_cases(demo):
     st.markdown("#### 営業案件・Gmail同期状況")
     campaign_id = st.session_state.get(K + "campaign_id", "").strip()
+    if str(os.environ.get("OUTREACH_LOCAL_MOCK_MODE", "false")).strip().casefold() == "true":
+        rows = [
+            {"医院名": "あおば歯科（MOCK）", "Clinic ID": "901", "Clinic UUID": "fixture-clinic-uuid-1",
+             "GAS案件ID": "GAS-DEMO-001", "担当IS": "Mock IS", "担当FS": "未取得",
+             "Gmail下書き": "DRAFT（MOCK）", "送信予約": "未予約（MOCK）", "送信済み": "未送信（MOCK）",
+             "返信履歴": "返信なし（MOCK）", "記事選定": "記事あり・候補1件（MOCK）",
+             "Sheets同期": "未同期（ローカルのみ）", "アポイント": "未取得（MOCK）",
+             "Campaign ID": "fixture-campaign", "保存結果": "DRAFT / mock-draft-0001"},
+            {"医院名": "みどりクリニック（MOCK）", "Clinic ID": "902", "Clinic UUID": "fixture-clinic-uuid-2",
+             "GAS案件ID": "GAS-DEMO-002", "担当IS": "Mock IS", "担当FS": "Mock FS",
+             "Gmail下書き": "未作成（MOCK）", "送信予約": "予約なし（MOCK）", "送信済み": "未送信（MOCK）",
+             "返信履歴": "未取得（MOCK）", "記事選定": "類似記事候補（MOCK）",
+             "Sheets同期": "未同期（ローカルのみ）", "アポイント": "日程未確定（MOCK）",
+             "Campaign ID": "fixture-campaign", "保存結果": "未保存"},
+            {"医院名": "さくら医院（MOCK）", "Clinic ID": "903", "Clinic UUID": "fixture-clinic-uuid-3",
+             "GAS案件ID": "GAS-DEMO-003", "担当IS": "未取得（MOCK）", "担当FS": "未取得（MOCK）",
+             "Gmail下書き": "HOLD（重複候補）", "送信予約": "未確認（MOCK）", "送信済み": "未確認（MOCK）",
+             "返信履歴": "未取得（MOCK）", "記事選定": "未取得（MOCK）",
+             "Sheets同期": "未同期（ローカルのみ）", "アポイント": "未取得（MOCK）",
+             "Campaign ID": "fixture-campaign", "保存結果": "重複作成を保留"},
+        ]
+        st.info("LOCAL MOCK MODE：Clinic Lead台帳・Gmail・Sheetsには接続していません。表示は合成fixtureです。")
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        clinic = st.selectbox("医院案件の詳細", [row["Clinic UUID"] for row in rows],
+                              format_func=lambda value: next(row["医院名"] for row in rows if row["Clinic UUID"] == value),
+                              key=K + "local_mock_case_detail")
+        st.json(next(row for row in rows if row["Clinic UUID"] == clinic))
+        return
     if demo or not campaign_id or not st.session_state.get(K + "delivery_ready"):
         st.info("案件台帳のREAD ONLY確認には、履歴DB接続・Campaign IDが必要です。")
         return
@@ -752,16 +844,33 @@ def _tab_cases(demo):
 def _tab_import_preview():
     st.markdown("#### Google Sheets / CSV取込プレビュー（ローカル・書込みなし）")
     st.caption("全元列・元値・行順を保ったローカルプレビューです。Clinic ID・Clinic UUID・案件ID・operation_keyは候補として表示し、重複行・履歴行・同一医院の複数案件を統合しません。")
-    uploaded = st.file_uploader("変換前の案件・履歴CSV", type=["csv"], key=K + "source_csv_preview")
-    if uploaded is None:
+    local_mock = str(os.environ.get("OUTREACH_LOCAL_MOCK_MODE", "false")).strip().casefold() == "true"
+    if local_mock and st.button("Mock CSV全件をプレビュー", key=K + "load_mock_csv"):
+        st.session_state[K + "local_import_bytes"] = (
+            "clinic_id,clinic_uuid,clinic_name,案件ID,campaign_id,gmail_state\n"
+            "901,fixture-clinic-uuid-1,あおば歯科,GAS-DEMO-001,fixture-campaign,DRAFT\n"
+            "902,fixture-clinic-uuid-2,みどりクリニック,GAS-DEMO-002,fixture-campaign,SENT\n"
+            "903,fixture-clinic-uuid-3,さくら医院,GAS-DEMO-003,fixture-campaign,UNKNOWN\n"
+            "904,fixture-clinic-uuid-4,ゆき医院,GAS-DEMO-004,fixture-campaign,DRAFT\n"
+            "904,fixture-clinic-uuid-4,ゆき医院,GAS-DEMO-004,fixture-campaign,DRAFT\n"
+        ).encode("utf-8")
+    uploaded = st.file_uploader("案件管理・メール管理・進捗CSV（ダウンロード済みREAD ONLYデータ）", type=["csv"], key=K + "source_csv_preview")
+    saved_bytes = st.session_state.get(K + "local_import_bytes") if local_mock else None
+    data = uploaded.getvalue() if uploaded is not None else saved_bytes
+    if data is None:
         return
     try:
-        preview = preview_csv(uploaded.getvalue())
+        preview = preview_csv(data)
     except CSVPreviewError as exc:
         st.error(str(exc))
         return
+    source_tab = st.selectbox("元タブ", ["案件管理", "メール管理", "進捗"], key=K + "import_source_tab")
+    if local_mock and st.button("この全件CSVをローカルセッションに保存", key=K + "save_local_import"):
+        st.session_state[K + "local_import_bytes"] = data
+        st.session_state[K + "local_import_source_tab"] = source_tab
+        st.success("元データ・行番号をこのローカルセッションに保存しました。Sheets/DBへの書込みはありません。")
     try:
-        legacy_rows = parse_legacy_import_csv(uploaded.getvalue())
+        legacy_rows = parse_legacy_import_csv(data)
         legacy = preview_legacy_import(legacy_rows)
     except LegacyImportInputError:
         legacy = None
@@ -782,8 +891,32 @@ def _tab_import_preview():
         "候補型": ", ".join(f"{kind}:{count}" for kind, count in counts.items() if kind != "empty") or "empty",
     } for header, counts in zip(preview.headers, preview.type_counts)]), hide_index=True, use_container_width=True)
     st.json({key: values for key, values in preview.key_suggestions.items() if values})
-    st.dataframe(pd.DataFrame(preview.rows[:25], columns=list(preview.headers)), hide_index=True, use_container_width=True)
-    st.warning("プレビューのみです。取込履歴への保存・Sheets書込み・DB書込み・自動紐付けは実行しません。")
+    st.dataframe(pd.DataFrame(preview.rows, columns=list(preview.headers)), hide_index=True, use_container_width=True)
+    if local_mock:
+        from src.outreach.local_import_actions import plan_local_import_actions
+        known = {
+            "fixture-clinic-uuid-1": {"clinic_id": "901"},
+            "fixture-clinic-uuid-2": {"clinic_id": "902"},
+            "fixture-clinic-uuid-3": {"clinic_id": "903"},
+            "fixture-clinic-uuid-4": {"clinic_id": "904"},
+        }
+        ledger = {
+            "fixture-clinic-uuid-1": {"case_id": "GAS-DEMO-001", "campaign_id": "fixture-campaign", "gmail_state": "DRAFT"},
+            "fixture-clinic-uuid-2": {"case_id": "GAS-DEMO-OLD", "campaign_id": "fixture-campaign", "gmail_state": "DRAFT"},
+        }
+        actions = plan_local_import_actions(
+            preview.headers, preview.rows,
+            source_tab=st.session_state.get(K + "local_import_source_tab", source_tab),
+            known_clinics=known, local_ledger=ledger,
+        )
+        action_counts = {action: sum(row["action"] == action for row in actions)
+                         for action in ("INSERT", "UPDATE", "NOOP", "HOLD")}
+        st.caption(f"全 {len(actions)} 行｜INSERT {action_counts['INSERT']}｜UPDATE {action_counts['UPDATE']}｜NOOP {action_counts['NOOP']}｜HOLD {action_counts['HOLD']}")
+        st.markdown("**Clinic ID / UUID照合・差分アクション（ローカルMock）**")
+        st.dataframe(pd.DataFrame([{key: value for key, value in row.items() if key != "raw_values"}
+                                   for row in actions]), hide_index=True, use_container_width=True)
+        st.caption("原データと行番号はセッション内に保持。重複Clinic ID/UUIDは全該当行をHOLD。INSERT/UPDATEはプレビューのみです。")
+    st.warning("READ ONLYプレビューです。Sheets書込み・DB書込み・Gmail接続・自動紐付けは実行しません。")
 
 
 def outreach_email_page(store, demo=False, *, formal_email_page=None, read_only=False):

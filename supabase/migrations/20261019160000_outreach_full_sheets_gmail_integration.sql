@@ -18,10 +18,12 @@ create table outreach.sales_cases (
   external_case_id text not null default '',
   clinic_id bigint not null references public.clinics(id) on delete restrict,
   clinic_uuid text not null,
+  clinic_name_snapshot text not null default '',
   campaign_id text not null,
   is_owner text not null default '',
   fs_owner text not null default '',
   case_status text not null default 'OPEN' check (case_status in ('OPEN','ON_HOLD','CLOSED','CONFLICT')),
+  hold_reason text not null default '',
   source_updated_at timestamptz,
   imported_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
@@ -132,6 +134,7 @@ create table outreach.article_selection_results (
   similar_article_url text not null default '',
   clinic_detail_url text not null default '',
   article_audit_id text not null default '',
+  source_event_key text not null default '',
   source_payload_hash text not null default '',
   selected_at timestamptz not null default now(),
   selected_by text not null default '',
@@ -139,6 +142,8 @@ create table outreach.article_selection_results (
   conflict_status text not null default 'NONE' check (conflict_status in ('NONE','PENDING_REVIEW','RESOLVED'))
 );
 create index article_selection_case_history_idx on outreach.article_selection_results(sales_case_id,selected_at desc);
+create unique index article_selection_source_event_uq
+  on outreach.article_selection_results(source_event_key) where source_event_key <> '';
 
 create table outreach.engagement_events (
   event_id uuid primary key default gen_random_uuid(),
@@ -163,6 +168,7 @@ create table outreach.calendar_appointments (
   sales_case_id uuid not null references outreach.sales_cases(sales_case_id) on delete restrict,
   provider text not null check (provider in ('GOOGLE_CALENDAR','GAS_SHEETS','CSV_IMPORT')),
   external_event_id text not null default '',
+  source_event_key text not null default '',
   appointment_status text not null check (appointment_status in ('PROPOSED','CONFIRMED','CANCELLED','COMPLETED','CONFLICT')),
   starts_at timestamptz,
   ends_at timestamptz,
@@ -176,6 +182,8 @@ create table outreach.calendar_appointments (
 );
 create unique index calendar_appointments_external_event_uq
   on outreach.calendar_appointments(provider,external_event_id) where external_event_id <> '';
+create unique index calendar_appointments_source_event_uq
+  on outreach.calendar_appointments(provider,source_event_key) where source_event_key <> '';
 create index calendar_appointments_case_time_idx on outreach.calendar_appointments(sales_case_id,starts_at desc);
 
 create table outreach.source_import_batches (
@@ -194,6 +202,7 @@ create table outreach.source_import_batches (
   imported_by text not null default '',
   imported_at timestamptz not null default now(),
   mapping_version text not null default '',
+  snapshot_retrieved_at timestamptz not null,
   unique(source_system,source_file_checksum,source_tab,source_revision)
 );
 create index source_import_batches_time_idx on outreach.source_import_batches(imported_at desc);
@@ -212,7 +221,9 @@ create table outreach.source_import_rows (
   candidate_operation_key text not null default '',
   linked_sales_case_id uuid references outreach.sales_cases(sales_case_id) on delete restrict,
   mapping_status text not null default 'UNREVIEWED'
-    check (mapping_status in ('UNREVIEWED','MATCHED','AMBIGUOUS','CONFLICT','UNMATCHED','APPROVED')),
+    check (mapping_status in ('UNREVIEWED','MATCHED','AMBIGUOUS','CONFLICT','UNMATCHED','HOLD','APPROVED')),
+  mapping_reason text not null default '',
+  snapshot_retrieved_at timestamptz not null,
   imported_at timestamptz not null default now(),
   unique(import_batch_id,source_tab,source_row_number)
 );

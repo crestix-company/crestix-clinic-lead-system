@@ -22,6 +22,7 @@ from src.outreach.gmail_drafts import (
     DRAFT_KEY_HEADER,
     OPERATION_ID_HEADER,
     OUTREACH_ID_HEADER,
+    build_shared_draft_key,
     ExistingDraft,
     ExistingMessage,
     list_existing_drafts,
@@ -162,19 +163,18 @@ def classify_target_state(target, *, state: GmailState, outreach_id: str = "") -
 
 
 def _draft_key(clinic_id: int, campaign_id: str) -> str:
-    material = f"clinic-outreach-v1|{int(clinic_id)}|{campaign_id.strip()}".encode()
-    return hashlib.sha256(material).hexdigest()
+    return build_shared_draft_key(clinic_id, campaign_id)
 
 
 def _raw_message(result: OutreachResult, *, campaign_id: str,
-                 reservation: DraftReservation, sender_account: str) -> str:
+                 reservation: DraftReservation, sender_account: str, operation_key: str = "") -> str:
     target = result.target
     message = EmailMessage(policy=policy.SMTP)
     message["To"] = target.email
     message["From"] = sender_account
     message["Subject"] = result.subject
     message[DRAFT_KEY_HEADER] = _draft_key(target.clinic_id, campaign_id)
-    message[OUTREACH_ID_HEADER] = reservation.outreach_id
+    message[OUTREACH_ID_HEADER] = operation_key.strip() or reservation.outreach_id
     message[OPERATION_ID_HEADER] = reservation.operation_id
     message[CLINIC_ID_HEADER] = str(target.clinic_id)
     message[CLINIC_UUID_HEADER] = target.clinic_uuid
@@ -458,7 +458,7 @@ def create_gmail_draft(
     try:
         response = _create(gmail.service, raw=_raw_message(
             result, campaign_id=campaign_id, reservation=reservation,
-            sender_account=gmail.email_address,
+            sender_account=gmail.email_address, operation_key=review_payload["operation_key"],
         ))
         draft_id = str(response.get("id") or "") if isinstance(response, dict) else ""
         message = response.get("message") or {} if isinstance(response, dict) else {}

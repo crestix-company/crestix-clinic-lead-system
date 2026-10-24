@@ -42,6 +42,7 @@ CLINIC_UUID_HEADER = "X-Clinic-Lead-Clinic-UUID"
 CAMPAIGN_ID_HEADER = "X-Clinic-Lead-Campaign-ID"
 CLINIC_NAME_HEADER = "X-Clinic-Lead-Clinic-Name"
 CLINIC_ADDRESS_HEADER = "X-Clinic-Lead-Clinic-Address"
+GAS_CASE_ID_HEADER = "X-Clinic-Lead-GAS-Case-ID"
 DEFAULT_DRAFT_LEDGER = DEFAULT_TOKEN_FILE.with_name("draft_ledger.jsonl")
 CANARY_ACCOUNT = "info@crestix-inc.com"
 CANARY_CONFIRMATION = "I_APPROVE_ONE_CANARY_DRAFT_TO_INFO"
@@ -72,6 +73,7 @@ class ExistingDraft:
     campaign_id: str = ""
     message_id: str = ""
     thread_id: str = ""
+    gas_case_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -87,6 +89,7 @@ class ExistingMessage:
     campaign_id: str = ""
     clinic_name: str = ""
     clinic_address: str = ""
+    gas_case_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -165,9 +168,24 @@ def build_draft_key(identity: DraftIdentity) -> str:
     return f"clinic-lead-v1-{digest}"
 
 
+def build_shared_draft_key(clinic_id: int, campaign_id: str) -> str:
+    """Stable cross-client key shared by GAS and Clinic Lead for one clinic/campaign."""
+    material = f"clinic-outreach-v1|{int(clinic_id)}|{campaign_id.strip()}".encode()
+    return hashlib.sha256(material).hexdigest()
+
+
 def _headers(message: dict[str, Any]) -> dict[str, str]:
     values = message.get("payload", {}).get("headers", [])
-    return {str(item.get("name", "")).casefold(): str(item.get("value", "")) for item in values}
+    # RFC 5322 permits folded header lines. Gmail metadata adapters (and test
+    # doubles) may expose the continuation whitespace literally, while the
+    # value written by _raw_message is a single token. Unfold before comparing
+    # idempotency keys; trim only transport whitespace, never alter the token.
+    result: dict[str, str] = {}
+    for item in values:
+        name = str(item.get("name", "")).casefold()
+        value = re.sub(r"\r?\n[ \t]+", " ", str(item.get("value", ""))).strip(" \t\r\n")
+        result[name] = value
+    return result
 
 
 def _recipients(value: str) -> tuple[str, ...]:
@@ -199,7 +217,7 @@ def list_existing_drafts(service: Any) -> list[ExistingDraft]:
             metadataHeaders=["To", "Subject", "Message-ID", "Date", DRAFT_KEY_HEADER,
                              OUTREACH_ID_HEADER, OPERATION_ID_HEADER, CLINIC_ID_HEADER,
                              CLINIC_UUID_HEADER, CAMPAIGN_ID_HEADER, CLINIC_NAME_HEADER,
-                             CLINIC_ADDRESS_HEADER],
+                             CLINIC_ADDRESS_HEADER, GAS_CASE_ID_HEADER],
         ).execute()
         headers = _headers(item.get("message", {}))
         result.append(ExistingDraft(
@@ -213,6 +231,7 @@ def list_existing_drafts(service: Any) -> list[ExistingDraft]:
             campaign_id=headers.get(CAMPAIGN_ID_HEADER.casefold(), ""),
             message_id=str(item.get("message", {}).get("id") or ""),
             thread_id=str(item.get("message", {}).get("threadId") or ""),
+            gas_case_id=headers.get(GAS_CASE_ID_HEADER.casefold(), ""),
         ))
     return result
 
@@ -237,7 +256,7 @@ def list_existing_messages(service: Any, *, query: str) -> list[ExistingMessage]
     metadata_headers = ["To", "Subject", "Message-ID", "Date", DRAFT_KEY_HEADER,
                         OUTREACH_ID_HEADER, OPERATION_ID_HEADER, CLINIC_ID_HEADER,
                         CLINIC_UUID_HEADER, CAMPAIGN_ID_HEADER, CLINIC_NAME_HEADER,
-                        CLINIC_ADDRESS_HEADER]
+                        CLINIC_ADDRESS_HEADER, GAS_CASE_ID_HEADER]
     for message_id, listed_thread_id in ids:
         message = api.get(userId="me", id=message_id, format="metadata",
                           metadataHeaders=metadata_headers).execute()
@@ -254,6 +273,7 @@ def list_existing_messages(service: Any, *, query: str) -> list[ExistingMessage]
             campaign_id=headers.get(CAMPAIGN_ID_HEADER.casefold(), ""),
             clinic_name=headers.get(CLINIC_NAME_HEADER.casefold(), ""),
             clinic_address=headers.get(CLINIC_ADDRESS_HEADER.casefold(), ""),
+            gas_case_id=headers.get(GAS_CASE_ID_HEADER.casefold(), ""),
         ))
     return result
 
