@@ -679,9 +679,9 @@ class SupabaseProvenanceWriteRepository:
         classification and the website-preservation decision are NOT reimplemented here --
         they call the exact same pure functions (classify_match_status / build_maps_update)
         that the SQLite path calls, so the anti-downgrade business rule cannot drift between
-        backends. Only I/O (table names, placeholder style, jsonb vs text-json) differs.
-        The whole batch is one transaction, matching the SQLite BEGIN IMMEDIATE scope exactly
-        (either the entire batch commits, or none of it does).
+        backends. Maps updates are limited to Maps-specific projection columns; the feature
+        Writer does not refresh HP, UUID, medical_key, or unrelated projections. The whole
+        batch is one transaction (either the entire batch commits, or none of it does).
         """
         from src.master.google_maps import validate_maps_frame, classify_match_status, build_maps_update, _s
 
@@ -695,7 +695,7 @@ class SupabaseProvenanceWriteRepository:
         batch = hashlib.sha256(json.dumps(records, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         counts = {"TOTAL": len(records), "MATCHED": 0, "WEBSITE": 0, "NO_WEBSITE": 0, "NOT_FOUND": 0,
                   "AMBIGUOUS": 0, "EXCLUDED": 0, "ERROR": 0, "UNLINKED": 0, "PRESERVED_WEBSITE": 0}
-        result_rows, base_rows, history_rows = [], [], []
+        result_rows, history_rows = [], []
         clinic_state = {}
         try:
             with self._conn.cursor() as raw_cur:
@@ -732,13 +732,15 @@ class SupabaseProvenanceWriteRepository:
                 started = time.perf_counter()
                 if clinic_ids:
                     cur.execute(
-                        "SELECT id,base_json,uuid,medical_key FROM public.clinics "
+                        "SELECT id,base_json,effective_json FROM public.clinics "
                         "WHERE id=ANY(%s::bigint[]) ORDER BY id FOR UPDATE", (clinic_ids,),
                     )
-                    for cid, raw_base, uuid_value, stored_key in cur.fetchall():
+                    for cid, raw_base, raw_effective in cur.fetchall():
                         clinic_state[int(cid)] = {
-                            "base": self._json_value(raw_base), "uuid": uuid_value,
-                            "medical_key": stored_key,
+                            "base": self._json_value(raw_base),
+                            # effective_json is TEXT by design. Parse and serialize in Python so
+                            # legacy escaped-NUL payloads remain lossless; do not cast to JSONB.
+                            "effective": self._json_value(raw_effective),
                         }
                     absent = set(clinic_ids) - set(clinic_state)
                     if absent:
@@ -762,12 +764,28 @@ class SupabaseProvenanceWriteRepository:
                     if preserved:
                         counts["PRESERVED_WEBSITE"] += 1
                     base.update(maps_update)
+                    # Keep the user-facing JSON projection in sync while touching only Maps
+                    # keys. The previous full projection refresh rewrote unrelated HP,
+                    # identity, and research columns and required broad cross-schema SELECTs.
+                    clinic_state[cid]["effective"].update(maps_update)
                     if before != base:
                         history_rows.append((
                             cid, "Google Maps取込", dumps(before), dumps(base),
                             _s(row.get("maps_match_method")) or method, now(),
                         ))
-                base_rows = [(cid, Jsonb(clinic_state[cid]["base"])) for cid in clinic_ids]
+                maps_projection_rows = []
+                for cid in clinic_ids:
+                    base = clinic_state[cid]["base"]
+                    effective = clinic_state[cid]["effective"]
+                    maps_projection_rows.append((
+                        cid, Jsonb(base), dumps(effective),
+                        str(base.get("maps_presence_status", "")),
+                        str(base.get("maps_profile_url", "")),
+                        str(base.get("maps_website_url", "")),
+                        str(base.get("maps_match_method", "")),
+                        str(base.get("maps_checked_at", "")),
+                        str(base.get("exclude_reason", "")),
+                    ))
                 phase["maps_calculation_seconds"] = time.perf_counter() - started
 
                 started = time.perf_counter()
@@ -782,11 +800,16 @@ class SupabaseProvenanceWriteRepository:
 
                 started = time.perf_counter()
                 self._execute_values(
-                    cur, "UPDATE public.clinics AS c SET base_json=v.base_json FROM (VALUES ",
-                    [(cid, base_json) for cid, base_json in base_rows],
-                    ") AS v(id,base_json) WHERE c.id=v.id",
+                    cur,
+                    "UPDATE public.clinics AS c SET base_json=v.base_json,effective_json=v.effective_json,"
+                    "maps_presence_status=v.maps_presence_status,maps_profile_url=v.maps_profile_url,"
+                    "maps_website_url=v.maps_website_url,maps_match_method=v.maps_match_method,"
+                    "maps_checked_at=v.maps_checked_at,exclude_reason=v.exclude_reason FROM (VALUES ",
+                    maps_projection_rows,
+                    ") AS v(id,base_json,effective_json,maps_presence_status,maps_profile_url,"
+                    "maps_website_url,maps_match_method,maps_checked_at,exclude_reason) WHERE c.id=v.id",
                 )
-                phase["base_json_bulk_write_seconds"] = time.perf_counter() - started
+                phase["maps_projection_bulk_write_seconds"] = time.perf_counter() - started
 
                 started = time.perf_counter()
                 self._execute_values(
@@ -796,14 +819,6 @@ class SupabaseProvenanceWriteRepository:
                     history_rows,
                 )
                 phase["history_bulk_insert_seconds"] = time.perf_counter() - started
-
-                started = time.perf_counter()
-                columns, projection_rows = self._projection_values(cur, clinic_ids, clinic_state, phase)
-                phase["projection_prefetch_and_calculation_seconds"] = time.perf_counter() - started
-
-                started = time.perf_counter()
-                self._bulk_update_projection(cur, columns if clinic_ids else [], projection_rows)
-                phase["projection_bulk_write_seconds"] = time.perf_counter() - started
 
                 cur.execute(
                     "INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",

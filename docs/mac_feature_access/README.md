@@ -91,10 +91,28 @@ show local file previews without a Writer. Step 4 matching preview requires
 its dedicated Writer's SELECT rights and rolls the read transaction back.
 Step 7 preview uses only `clinic_comdesk_export_reader`; apply rechecks the
 plan before opening `clinic_comdesk_sync_writer`. Each apply action still
-requires its original button and a confirmation. These roles have **not** been
-created and no DML grant proposal for them has been approved. Their DML policy
-must be reviewed separately against each Repository's mutation tables before
-setting any of the four values. Do not copy `runtime-writer.env` into this file.
+requires its original button and a confirmation. These feature roles must not
+be substituted with `clinic_runtime` or another Writer. The Maps role is
+currently absent in the audited Supabase project. Its unapplied least-column
+proposal and rollback are in [maps_import_writer_apply.sql](maps_import_writer_apply.sql)
+and [maps_import_writer_rollback.sql](maps_import_writer_rollback.sql). DBA
+approval is required before applying either file. The proposal scopes RLS to
+unmerged clinic rows, `Google Maps` batch records, Maps result inserts, and
+`Google Maps取込` history inserts. The repository updates only Maps projection
+columns and Maps keys in `effective_json`; it no longer refreshes HP, identity,
+or unrelated projections. Do not copy `runtime-writer.env` or another feature
+Writer DSN into the Maps entry.
+
+After approval and role provisioning, obtain the dedicated DSN through the
+administrator's secure handoff. Add only
+`SUPABASE_MAPS_IMPORT_WRITER_DB_URL=<dedicated DSN>` to
+`~/.config/clinic-lead/feature-writers.env`, preserving any existing entries;
+create the file with `umask 077` and verify mode `600`. Never put the DSN in a
+command argument, source file, terminal output, or Git. The app verifies that
+the DSN belongs to the configured Clinic Runtime Supabase project and that the
+server reports `current_user=clinic_maps_import_writer`. The matching preview
+is read-only; import still requires the existing preview, confirmation
+checkbox, and explicit button click.
 
 ## Dashboard and HP-target denominator
 
