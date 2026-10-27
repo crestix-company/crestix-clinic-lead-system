@@ -152,7 +152,7 @@ class ReaderSafetyTests(unittest.TestCase):
             count_relation="public.clinic_cloudrun_readonly",
         )
         self.assertEqual((role, count), ("clinic_mac_reader", 164201))
-        self.assertTrue(any("SELECT id,clinic_name,address,prefecture,medical_type" in query
+        self.assertTrue(any("SELECT id,clinic_name,phone,address,prefecture,medical_type" in query
                             for query, _ in conn.cursor_obj.executed))
         self.assertFalse(any("email_candidates" in query for query, _ in conn.cursor_obj.executed))
         self.assertFalse(any("app_config.settings" in query for query, _ in conn.cursor_obj.executed))

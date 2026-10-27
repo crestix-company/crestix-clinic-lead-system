@@ -120,6 +120,9 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def get(self, clinic_id): return self.repositories.clinics.get(clinic_id)
     @_retry_closed_read_connection
+    def get_hp_research_clinic(self, clinic_id):
+        return self.repositories.clinics.get_hp_research_clinic(clinic_id)
+    @_retry_closed_read_connection
     def get_by_uuid(self, value): return self.repositories.clinics.get_by_uuid(value)
     @_retry_closed_read_connection
     def get_by_medical_key(self, value): return self.repositories.clinics.get_by_medical_key(value)

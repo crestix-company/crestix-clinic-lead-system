@@ -497,6 +497,32 @@ class SupabaseClinicRepository:
         machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories = hp_row or ("", "", "", "", [])
         return self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories)
 
+    def get_hp_research_clinic(self, clinic_id):
+        """Fetch the minimal HP worker input from the Reader projection, never public.clinics."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,clinic_name,phone,address,prefecture,medical_type,maps_website_url,"
+                "maps_presence_status,departments_json FROM public.clinic_cloudrun_readonly WHERE id=%s",
+                (int(clinic_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise ValueError("医院が見つかりません。")
+        departments = row[8] or []
+        if isinstance(departments, str):
+            try:
+                departments = json.loads(departments)
+            except (TypeError, ValueError):
+                departments = [departments]
+        if not isinstance(departments, (list, tuple)):
+            departments = [str(departments)]
+        return {
+            "id": row[0], "clinic_name": row[1] or "", "phone": row[2] or "",
+            "address": row[3] or "", "prefecture": row[4] or "", "medical_type": row[5] or "",
+            "maps_website_url": row[6] or "", "maps_presence_status": row[7] or "",
+            "departments": " / ".join(str(value) for value in departments if value),
+        }
+
     def get_by_uuid(self, uuid):
         d = self._fetch_row("uuid=%s AND merged_into IS NULL", uuid)
         return self.get(d["id"]) if d else None

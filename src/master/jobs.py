@@ -212,7 +212,12 @@ def _research_one(store,jid,job,options,researcher,cid,claim_token=None):
     research_repo = repositories.research
     record = {}
     try:
-        record = store.get(cid)
+        # The normal Mac HP worker must read only the Reader projection.  Its general
+        # `get()` path addresses public.clinics, which is outside clinic_cloudrun_reader's
+        # intended grants; keep legacy/non-Supabase workers on their existing repository.
+        record = (store.get_hp_research_clinic(cid)
+                  if job.get("kind") == "hp" and hasattr(store, "get_hp_research_clinic")
+                  else store.get(cid))
         # 手動値は解析入力としては使うが、自動シグナルの保存に手動値をコピーしない。
         auto = research_repo.get_saved_research(cid)
         record["marketing_signals"] = auto.get("marketing_signals", [])

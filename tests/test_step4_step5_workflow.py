@@ -67,6 +67,10 @@ def test_completed_hp_worker_writes_canonical_ledger_before_finishing(monkeypatc
 
     class Store:
         def get(self, clinic_id):
+            raise AssertionError("HP worker must not read public.clinics through its Reader")
+
+        def get_hp_research_clinic(self, clinic_id):
+            events.append(("reader_projection", clinic_id))
             return {"id": clinic_id, "hp_url": "https://clinic.example/"}
 
     class Researcher:
@@ -77,6 +81,7 @@ def test_completed_hp_worker_writes_canonical_ledger_before_finishing(monkeypatc
                      "hp_verified": True, "hp_url": "https://clinic.example/"}, [])
 
     assert _research_one(Store(), "job", {"kind": "hp"}, {}, Researcher(), 12)
+    assert events[0] == ("reader_projection", 12)
     assert events[-2][0] == "ledger"
     assert events[-1] == ("finish", 12, "ERROR" if failure else "SUCCESS")
     assert events[-2][2] == ("ERROR" if failure else "OK")

@@ -44,9 +44,9 @@ NORMAL_HP_REQUIRED_TABLES = (
 ) + HP_REQUIRED_TABLES
 NORMAL_HP_REQUIRED_COLUMNS = {
     "public.clinic_cloudrun_readonly": (
-        "id", "clinic_name", "address", "prefecture", "medical_type",
+        "id", "clinic_name", "phone", "address", "prefecture", "medical_type",
         "maps_website_url", "maps_presence_status", "active", "merged_into",
-        "merge_hold", "is_new",
+        "merge_hold", "is_new", "departments_json",
     ),
     "hp_research.clinic_hp_research": ("clinic_id", "fetch_status"),
     "research.research_jobs": ("id", "kind", "status", "created_at"),
