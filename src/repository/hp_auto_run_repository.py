@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+import logging
 import uuid
 
 from psycopg.types.json import Jsonb
@@ -123,7 +124,8 @@ class SupabaseHpAutoRunRepository:
         return int(cur.fetchone()[0])
 
     @staticmethod
-    def _insert_job(cur, clinic_ids, *, force, auto_run_id=None, extra_options=None):
+    def _insert_job(cur, clinic_ids, *, force, auto_run_id=None, extra_options=None,
+                    stage_callback=None):
         jid = uuid.uuid4().hex
         options = {"force": bool(force), "max_pages": 20}
         if auto_run_id:
@@ -131,11 +133,15 @@ class SupabaseHpAutoRunRepository:
         if extra_options:
             options.update(extra_options)
         ts = now()
+        if stage_callback:
+            stage_callback("insert_job_header")
         cur.execute(
             "INSERT INTO research.research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
             "VALUES(%s,'hp',%s,0,%s,%s)",
             (jid, Jsonb(options), ts, ts),
         )
+        if stage_callback:
+            stage_callback("insert_job_items")
         cur.executemany(
             "INSERT INTO research.research_job_items(job_id,clinic_id) VALUES(%s,%s)",
             [(jid, clinic_id) for clinic_id in clinic_ids],
@@ -255,12 +261,18 @@ class SupabaseHpAutoRunRepository:
             raise ValueError("医院IDの重複または不正値があります。")
         if not statuses or any(value not in allowed for value in statuses):
             raise ValueError("SUCCESSは調査対象にできません。状態を再確認してください。")
+        stage = "acquire_transaction_lock"
+        def _set_write_stage(value):
+            nonlocal stage
+            stage = value
         try:
             with self._conn.cursor() as cur:
                 self._lock(cur)
+                stage = "read_autorun_state"
                 state = self._locked_state(cur)
                 if state and state.get("status") in ACTIVE_AUTO_STATUSES:
                     raise ValueError("Auto Runが未完了です。HP Jobを作成できません。")
+                stage = "check_running_hp_job"
                 cur.execute("SELECT 1 FROM research.research_jobs WHERE kind='hp' AND status='RUNNING' LIMIT 1")
                 if cur.fetchone():
                     raise ValueError("実行中HP Jobがあります。完了または一時停止を確認してください。")
@@ -278,8 +290,9 @@ class SupabaseHpAutoRunRepository:
                     " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
                     "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
                     "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
-                    "AND success_i.result::text ILIKE '%SUCCESS%' AND success_j.kind='hp')"
+                    "AND success_i.result::text ILIKE '%%SUCCESS%%' AND success_j.kind='hp')"
                 )
+                stage = "select_and_lock_targets"
                 cur.execute(
                     "SELECT c.id FROM public.clinics c LEFT JOIN hp_research.clinic_hp_research h "
                     "ON h.clinic_id=c.id WHERE " + predicate +
@@ -291,11 +304,25 @@ class SupabaseHpAutoRunRepository:
                     raise ValueError("選択医院の状態が変わったか、既存Jobが予約しています。候補を再確認してください。")
                 force = any(value in {"ERROR", "REVIEW"} for value in statuses)
                 jid = self._insert_job(cur, requested, force=force,
-                                       extra_options={"mac_explicit_statuses": statuses})
+                                       extra_options={"mac_explicit_statuses": statuses},
+                                       stage_callback=lambda value: _set_write_stage(value))
+            stage = "commit"
             self._conn.commit()
             return jid
-        except Exception:
-            self._conn.rollback()
+        except Exception as exc:
+            _set_write_stage(stage)
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+            diag = getattr(exc, "diag", None)
+            logging.getLogger(__name__).warning(
+                "HP selected Job write failed exception_type=%s sqlstate=%s stage=%s schema=%s table=%s column=%s",
+                type(exc).__name__, str(getattr(exc, "sqlstate", "") or ""), stage,
+                str(getattr(diag, "schema_name", "") or ""),
+                str(getattr(diag, "table_name", "") or ""),
+                str(getattr(diag, "column_name", "") or ""),
+            )
             raise
 
     def start(self, prefecture, medical_types, force, batch_size):

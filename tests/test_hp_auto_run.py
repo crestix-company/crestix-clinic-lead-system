@@ -247,7 +247,7 @@ def test_mac_selected_job_revalidates_exact_statuses_and_excludes_paused_job_cla
     assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in check_sql
     assert "WHEN h.fetch_status='OK' THEN 'SUCCESS'" in check_sql
     assert "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' ELSE 'ERROR'" in check_sql
-    assert "success_i.result::text ILIKE '%SUCCESS%'" in check_sql
+    assert "success_i.result::text ILIKE '%%SUCCESS%%'" in check_sql
     assert any("pg_advisory_xact_lock" in sql for sql in sqls)
     queued = [params for sql, params in conn.executed if "INSERT INTO research.research_job_items" in sql]
     assert [params[1] for params in queued] == [101, 202]
