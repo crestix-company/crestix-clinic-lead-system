@@ -1313,6 +1313,8 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
 
     st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
+    if mac_normal:
+        st.caption("このRuntimeにはComdesk取込専用Writerが未設定のため、アップロードとDB反映は停止しています。")
     import_ui_comdesk_step(store, write_disabled)
 
     st.subheader("現在のデータ状況")
@@ -1328,9 +1330,13 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
             st.rerun()
 
     st.subheader("Step2：厚生局データを取り込む")
+    if mac_normal:
+        st.caption("厚生局取込はClinic Masterの更新権限を必要とします。専用Writerが未設定のため停止しています。")
     cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
+    if mac_normal:
+        st.caption("Collectorは既存の外部Chrome拡張を使用します。厚生局起点の調査キューはsource_recordsのReader権限が不足しているため表示していません。")
     # Independent, separately-gated Cloud Run management screen for the
     # EXISTING, human-operated Collector (Chrome extension v5.7.0, unchanged
     # by this work) -- see cloud_maps_collection_admin_ui()'s own docstring
@@ -1339,6 +1345,8 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     cloud_maps_collection_admin_ui(store, key_prefix="simple_maps_collection")
 
     st.subheader("Step4：Google Maps結果を取り込む")
+    if mac_normal:
+        st.caption("Maps取込は既存Clinicとの照合・provenance登録を行う専用Writerが未設定のため停止しています。")
 
     maps_upload = st.file_uploader(
         "③ Google Maps収集結果CSVをアップロード",
@@ -1612,7 +1620,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
             st.rerun()
 
     if mac_normal:
-        st.info("Email調査・Human Reviewは表示のみです。HP以外のJob・個別Writer操作は無効です。")
+        st.info("Email専用接続での手動調査・Human Reviewを利用できます。Auto RunとGmail操作は無効です。Clinicマスターの取込・同期は専用Writer整備まで停止しています。")
     elif read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
     elif is_cloud_run_deployment():
@@ -1641,6 +1649,8 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
+    if mac_normal:
+        st.caption("Step7のUUID照合プレビューにはComdesk Export Reader、反映にはClinic Sync専用Writerが必要です。権限未設定のため停止しています。")
     import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
     render_comdesk_clinic_sync(store, write_disabled)
 
@@ -2918,7 +2928,7 @@ def advanced_ui(store, demo, *, mac_normal=False):
     )
 
     if mac_normal:
-        st.caption("Mac通常版では、HP調査以外のWriter操作・既存Job変更・Email/Gmail処理を無効にしています。")
+        st.caption("Mac通常版では、既存の専用Email接続による手動調査・Human Reviewを利用できます。Email Auto RunとGmail操作は無効です。Clinicマスター更新は専用Writer整備まで停止しています。")
         if section == "ダッシュボード":
             metrics = store.metrics(read_only_ui=True)
             columns = st.columns(5)
@@ -2940,6 +2950,10 @@ def advanced_ui(store, demo, *, mac_normal=False):
                                         key="mac_read_only_hp_job")
                 show_job_progress(store, selected, hp_only=True)
                 _show_hp_normal_job_results(store, selected)
+        elif section == "メール調査":
+            email_research_page(store)
+        elif section == "Email Human Review":
+            email_human_review_page(store)
         else:
             st.info("この画面は元のメニュー構成を維持しています。Mac通常版では承認済みのHP調査以外の更新操作を停止しています。")
         return
@@ -3224,10 +3238,7 @@ def main():
     elif hp_normal_runtime and nav == "営業対象・出力":
         simple_sales_ui(store, demo, read_only=True)
     elif hp_normal_runtime and nav == "Email調査":
-        st.header("メール調査")
-        st.caption("元の画面構成を維持しています。Mac通常版ではEmail候補の直接参照・Job操作を無効にしています。")
-        show_read_only_email_research_metrics(store)
-        st.info("Email Researchの詳細・候補住所・Job操作は、このReader権限の範囲外です。")
+        email_research_page(store)
     elif hp_normal_runtime and nav == "メール送付文章":
         from src.outreach_ui import outreach_email_page
         outreach_email_page(store, demo, read_only=True)

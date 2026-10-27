@@ -15,6 +15,7 @@ from filelock import FileLock, Timeout
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
 PRODUCTION_ENV_FILE = "config/production_runtime.env"
 EMAIL_ENV_FILE = "config/email_research.env.local"
+MAC_EMAIL_ENV_FILE = Path.home() / "ClinicLeadRuntime" / EMAIL_ENV_FILE
 RUNTIME_ENV_KEYS = {
     "SUPABASE_RUNTIME_DB_URL",
     "CLINIC_WRITE_BACKEND",
@@ -109,10 +110,24 @@ def load_runtime_env(root):
         parsed.update(_parse_env_file(runtime_file, require_private=True))
     else:
         parsed.pop("SUPABASE_RUNTIME_DB_URL", None)
-    # Preview, READ ONLY, and HP-only boot never read the broad Email/Gmail settings file.
-    email_db_config = {} if (preview_only or read_only_ui or normal_mac) else _parse_env_file(
-        root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
-    )
+    # Normal Mac may use existing dedicated Email repositories from the private
+    # Runtime config. Gmail OAuth settings are excluded, and the switches below
+    # keep Auto Run and Gmail drafts disabled. Preview/Reader-only never load it.
+    if preview_only or read_only_ui:
+        email_db_config = {}
+    elif normal_mac:
+        email_db_config = _parse_env_file(
+            MAC_EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
+        )
+        for key in (
+            "OUTREACH_GMAIL_OAUTH_CLIENT_JSON", "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
+            "OUTREACH_GMAIL_EXPECTED_ACCOUNT", "OUTREACH_GMAIL_DRAFTS_ENABLED",
+        ):
+            email_db_config.pop(key, None)
+    else:
+        email_db_config = _parse_env_file(
+            root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
+        )
     if "EMAIL_AUTO_RUN_ENABLED" in email_db_config:
         auto_run_value = email_db_config["EMAIL_AUTO_RUN_ENABLED"].strip().lower()
         if auto_run_value not in {"true", "false"}:

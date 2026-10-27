@@ -16,6 +16,8 @@ def _clean_runtime_env(monkeypatch):
             "CLINIC_DATA_BACKEND", "CLINIC_COMMON_IDENTITY_ENABLED",
             "CLINIC_COMDESK_PREVIEW_ONLY", "CLINIC_READ_ONLY_UI",
             "OUTREACH_GMAIL_DRAFTS_ENABLED", "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
+            "EMAIL_RESEARCH_DB_URL", "EMAIL_TARGET_READER_DB_URL",
+            "OUTREACH_GMAIL_OAUTH_CLIENT_JSON", "OUTREACH_GMAIL_EXPECTED_ACCOUNT",
             "SUPABASE_READONLY_DB_URL", "CLINIC_RUNTIME_ENV_FILE", "CLINIC_NORMAL_MAC_RUNTIME")
     original = {key: os.environ.get(key) for key in keys}
     for key in keys:
@@ -192,6 +194,32 @@ def test_preview_only_skips_email_secret_file_and_forces_safe_flags(tmp_path, mo
     assert "UNRELATED_EMAIL_SECRET" not in os.environ
 
 
+def test_normal_mac_loads_private_email_repositories_but_not_gmail_or_auto_run(tmp_path, monkeypatch):
+    private_email = tmp_path / "runtime" / "email_research.env.local"
+    private_email.parent.mkdir()
+    private_email.write_text(
+        "EMAIL_RESEARCH_DB_URL=postgresql://email-role.invalid/db\n"
+        "EMAIL_TARGET_READER_DB_URL=postgresql://reader-role.invalid/db\n"
+        "SERPAPI_API_KEY=fixture-secret\n"
+        "EMAIL_AUTO_RUN_ENABLED=true\n"
+        "OUTREACH_GMAIL_DRAFTS_ENABLED=true\n"
+        "OUTREACH_GMAIL_OAUTH_TOKEN_JSON=fixture-oauth\n",
+        encoding="utf-8",
+    )
+    private_email.chmod(0o600)
+    monkeypatch.setattr(launch_v2, "MAC_EMAIL_ENV_FILE", private_email)
+    monkeypatch.setenv("CLINIC_NORMAL_MAC_RUNTIME", "1")
+
+    launch_v2.load_runtime_env(tmp_path)
+
+    assert os.environ["EMAIL_RESEARCH_DB_URL"] == "postgresql://email-role.invalid/db"
+    assert os.environ["EMAIL_TARGET_READER_DB_URL"] == "postgresql://reader-role.invalid/db"
+    assert os.environ["SERPAPI_API_KEY"] == "fixture-secret"
+    assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
+    assert os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] == "false"
+    assert "OUTREACH_GMAIL_OAUTH_TOKEN_JSON" not in os.environ
+
+
 def test_readonly_ui_never_opens_writer_or_email_files(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     config_dir.mkdir(parents=True)
@@ -212,7 +240,7 @@ def test_readonly_ui_never_opens_writer_or_email_files(tmp_path, monkeypatch):
     assert "UNRELATED_EMAIL_SECRET" not in os.environ
 
 
-def test_normal_mac_hp_runtime_skips_email_and_gmail_credentials(tmp_path, monkeypatch):
+def test_normal_mac_hp_runtime_loads_dedicated_email_settings_without_gmail(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (config_dir / "production_runtime.env").write_text(
@@ -224,13 +252,21 @@ def test_normal_mac_hp_runtime_skips_email_and_gmail_credentials(tmp_path, monke
     monkeypatch.setenv("CLINIC_NORMAL_MAC_RUNTIME", "1")
     monkeypatch.setenv("CLINIC_RUNTIME_ENV_FILE", str(writer))
     monkeypatch.setenv("SUPABASE_READONLY_DB_URL", "postgresql://reader.invalid/db")
-    _write_email_env(tmp_path, "SERPAPI_API_KEY=must-not-load\nOUTREACH_GMAIL_OAUTH_TOKEN_JSON=must-not-load\n")
+    email_file = _write_email_env(
+        tmp_path,
+        "EMAIL_RESEARCH_DB_URL=postgresql://email.invalid/db\n"
+        "SERPAPI_API_KEY=email-search-key\n"
+        "OUTREACH_GMAIL_OAUTH_TOKEN_JSON=must-not-load\n"
+        "OUTREACH_GMAIL_DRAFTS_ENABLED=true\n",
+    )
+    monkeypatch.setattr(launch_v2, "MAC_EMAIL_ENV_FILE", email_file)
 
     launch_v2.load_runtime_env(tmp_path)
 
     assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
     assert os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] == "false"
-    assert "SERPAPI_API_KEY" not in os.environ
+    assert os.environ["EMAIL_RESEARCH_DB_URL"] == "postgresql://email.invalid/db"
+    assert os.environ["SERPAPI_API_KEY"] == "email-search-key"
     assert "OUTREACH_GMAIL_OAUTH_TOKEN_JSON" not in os.environ
 
 

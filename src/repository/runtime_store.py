@@ -594,21 +594,21 @@ class SupabaseRuntimeStore:
         """Return the latest fully completed HP job; never fall back to historical clinics."""
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT j.id,j.created_at,j.updated_at,count(i.clinic_id) AS target_count, "
+                "SELECT j.id,j.created_at,count(i.clinic_id) AS target_count, "
                 "count(*) FILTER (WHERE i.state='DONE') AS done_count "
                 "FROM research.research_jobs j "
                 "JOIN research.research_job_items i ON i.job_id=j.id "
                 "WHERE j.kind='hp' AND j.status='COMPLETED' "
-                "GROUP BY j.id,j.created_at,j.updated_at "
+                "GROUP BY j.id,j.created_at "
                 "HAVING count(i.clinic_id)>0 "
                 "AND count(*) FILTER (WHERE i.state<>'DONE')=0 "
-                "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC LIMIT 1"
+                "ORDER BY j.created_at DESC,j.id DESC LIMIT 1"
             )
             row = cur.fetchone()
         if not row:
             return None
-        return {"id": row[0], "created_at": row[1], "updated_at": row[2],
-                "target_count": row[3], "done_count": row[4]}
+        return {"id": row[0], "created_at": row[1], "updated_at": None,
+                "target_count": row[2], "done_count": row[3]}
 
     @_retry_closed_read_connection
     def hp_job_export_summary(self, job_id):
