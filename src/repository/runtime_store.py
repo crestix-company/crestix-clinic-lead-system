@@ -290,6 +290,56 @@ class SupabaseRuntimeStore:
             ]
 
     @_retry_closed_read_connection
+    def maps_hp_status_candidates(self, prefecture="", medical_types=None, statuses=None, limit=50):
+        """Reader-only HP candidates grouped by ledger status; reserved clinics stay excluded."""
+        allowed = {"UNRESEARCHED", "ERROR", "REVIEW", "SUCCESS"}
+        statuses = list(dict.fromkeys(statuses or []))
+        if not statuses or any(value not in allowed for value in statuses):
+            raise ValueError("Unsupported HP research status")
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, True,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        status_expr = ("CASE WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='OK' THEN 'SUCCESS' WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+                       "ELSE 'ERROR' END")
+        predicate += f" AND ({status_expr})=ANY(%s::text[])"
+        args.append(statuses)
+        args.append(min(100, max(1, int(limit))))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.id,c.clinic_name,c.address,c.medical_type,c.maps_website_url," + status_expr + ",h.fetch_status" +
+                " FROM public.clinic_cloudrun_readonly c LEFT JOIN hp_research.clinic_hp_research h "
+                "ON h.clinic_id=c.id WHERE " + predicate + " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
+            )
+            return [{"id": row[0], "clinic_name": row[1], "address": row[2],
+                     "medical_type": row[3], "maps_website_url": row[4], "hp_status": row[5],
+                     "hp_status_detail": row[6]}
+                    for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def maps_hp_status_count(self, prefecture="", medical_types=None, statuses=None):
+        allowed = {"UNRESEARCHED", "ERROR", "REVIEW", "SUCCESS"}
+        statuses = list(dict.fromkeys(statuses or []))
+        if not statuses or any(value not in allowed for value in statuses):
+            raise ValueError("Unsupported HP research status")
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, True,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        status_expr = ("CASE WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='OK' THEN 'SUCCESS' WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+                       "ELSE 'ERROR' END")
+        predicate += f" AND ({status_expr})=ANY(%s::text[])"
+        args.append(statuses)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM public.clinic_cloudrun_readonly c LEFT JOIN hp_research.clinic_hp_research h "
+                "ON h.clinic_id=c.id WHERE " + predicate, args,
+            )
+            return cur.fetchone()[0]
+
+    @_retry_closed_read_connection
     def hp_recent_jobs(self):
         """Read HP job headers through the verified Reader connection."""
         with self._conn.cursor() as cur:

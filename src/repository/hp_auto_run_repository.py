@@ -212,6 +212,51 @@ class SupabaseHpAutoRunRepository:
             self._conn.rollback()
             raise
 
+    def create_selected_hp_job(self, clinic_ids, research_statuses):
+        """Atomically create an HP job for the exact, explicitly selected Mac targets."""
+        requested = [int(value) for value in clinic_ids]
+        statuses = list(dict.fromkeys(research_statuses or []))
+        allowed = {"UNRESEARCHED", "ERROR", "REVIEW"}
+        if not requested or len(requested) > 50:
+            raise ValueError("一度に選択できる医院は1〜50件です。")
+        if len(set(requested)) != len(requested) or any(value <= 0 for value in requested):
+            raise ValueError("医院IDの重複または不正値があります。")
+        if not statuses or any(value not in allowed for value in statuses):
+            raise ValueError("SUCCESSは調査対象にできません。状態を再確認してください。")
+        try:
+            with self._conn.cursor() as cur:
+                self._lock(cur)
+                state = self._locked_state(cur)
+                if state and state.get("status") in ACTIVE_AUTO_STATUSES:
+                    raise ValueError("Auto Runが未完了です。HP Jobを作成できません。")
+                cur.execute("SELECT 1 FROM research.research_jobs WHERE kind='hp' AND status='RUNNING' LIMIT 1")
+                if cur.fetchone():
+                    raise ValueError("実行中HP Jobがあります。完了または一時停止を確認してください。")
+                predicate, args = maps_hp_target_predicate(force=True)
+                predicate += (
+                    " AND c.id=ANY(%s::bigint[]) AND (CASE "
+                    "WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                    "WHEN h.fetch_status='OK' THEN 'SUCCESS' "
+                    "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' ELSE 'ERROR' END)=ANY(%s::text[])"
+                )
+                cur.execute(
+                    "SELECT c.id FROM public.clinics c LEFT JOIN hp_research.clinic_hp_research h "
+                    "ON h.clinic_id=c.id WHERE " + predicate +
+                    " ORDER BY c.id FOR UPDATE OF c SKIP LOCKED",
+                    (*args, requested, statuses),
+                )
+                eligible = [int(row[0]) for row in cur.fetchall()]
+                if set(eligible) != set(requested) or len(eligible) != len(requested):
+                    raise ValueError("選択医院の状態が変わったか、既存Jobが予約しています。候補を再確認してください。")
+                force = any(value in {"ERROR", "REVIEW"} for value in statuses)
+                jid = self._insert_job(cur, requested, force=force,
+                                       extra_options={"mac_explicit_statuses": statuses})
+            self._conn.commit()
+            return jid
+        except Exception:
+            self._conn.rollback()
+            raise
+
     def start(self, prefecture, medical_types, force, batch_size):
         """Create state and Batch 1 in one transaction; concurrent starts serialize."""
         batch_size = min(500, max(1, int(batch_size)))

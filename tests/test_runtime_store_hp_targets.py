@@ -77,6 +77,27 @@ def test_hp_candidate_preview_uses_projected_reader_relation_and_safe_columns():
     assert "email_candidates" not in sql
 
 
+def test_status_candidates_use_hp_ledger_reader_and_always_exclude_reserved_jobs():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "医科", "https://clinic.test", "ERROR", "NOT_FOUND")]])
+    rows = store.maps_hp_status_candidates("東京都", ["医科"], ["ERROR"], limit=100)
+
+    assert rows == [{"id": 7, "clinic_name": "Clinic", "address": "Tokyo", "medical_type": "医科",
+                     "maps_website_url": "https://clinic.test", "hp_status": "ERROR",
+                     "hp_status_detail": "NOT_FOUND"}]
+    sql, args = conn.calls[0]
+    assert "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in sql
+    assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in sql
+    assert "public.clinic_cloudrun_readonly c" in sql
+    assert "public.clinics" not in sql and "email_candidates" not in sql.lower()
+    assert args[-2:] == (["ERROR"], 100)
+
+
+def test_status_candidate_query_rejects_unknown_states():
+    store, _conn = _store([])
+    with pytest.raises(ValueError, match="Unsupported"):
+        store.maps_hp_status_candidates(statuses=["SUCCESS_WITH_WRITE"])
+
+
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
     predicate, args = _maps_hp_target_predicate("東京都", ["医科"], force=False)
 

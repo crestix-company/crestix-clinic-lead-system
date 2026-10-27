@@ -46,6 +46,7 @@ def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
     assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
     assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in main
+    assert "if hp_normal_runtime:\n            nav_options = NORMAL_MAC_NAV" in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 
@@ -56,11 +57,23 @@ def test_sidebar_shows_full_local_menu_structure_as_static_text_only():
     block_end = main.index("else:", block_start)
     block = main[block_start:block_end]
 
-    # Renders every NAV entry (all 5 local menu items), not a hardcoded subset.
-    assert "for name in NAV:" in block
+    # Mac normal mode exposes exactly four reviewed pages; Cloud/read-only retains its old set.
+    assert "for name in (NORMAL_MAC_NAV if hp_normal_runtime else NAV):" in block
     assert "st.radio" not in block
     assert "st.button" not in block
     assert "st.file_uploader" not in block
+
+
+def test_mac_normal_menu_restores_four_pages_without_unlocking_other_local_pages():
+    source = _app_source()
+    assert 'NORMAL_MAC_NAV = ["データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力"]' in source
+    main = _main_source()
+    for label in NORMAL_MAC_NAV_LABELS:
+        assert f'nav == "{label}"' in main
+    assert "simple_sales_ui(store, demo, read_only=True)" in main
+
+
+NORMAL_MAC_NAV_LABELS = ("データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力")
 
 
 def test_locked_menu_items_are_labeled_as_requiring_separate_authorization():

@@ -19,6 +19,17 @@ class FakeStreamlit:
             return lambda label, options, **kwargs: (self.labels.append((name, label)) or list(options)[0])
         if name == "number_input":
             return lambda label, **kwargs: (self.labels.append((name, label)) or kwargs["value"])
+        if name == "multiselect":
+            def multiselect(label, options, **kwargs):
+                self.labels.append((name, label))
+                if "Job対象" in label:
+                    return [7] if 7 in options else []
+                return kwargs.get("default", [])
+            return multiselect
+        if name == "checkbox":
+            return lambda label, **kwargs: (self.labels.append((name, label)) or True)
+        if name == "columns":
+            return lambda count: [type("Column", (), {"metric": lambda self, *a, **k: None})() for _ in range(count)]
         if name == "button":
             return lambda label, **kwargs: (self.buttons.append(label) or False)
         if name == "dataframe":
@@ -49,9 +60,12 @@ def test_normal_hp_screen_searches_candidates_and_reads_selected_job_progress(mo
             assert read_only_ui
             return ["東京都"]
 
-        def maps_hp_candidate_preview(self, *args, **kwargs):
+        def maps_hp_status_count(self, _pref, _medical_types, statuses):
+            return 1 if statuses == ["UNRESEARCHED"] else 0
+
+        def maps_hp_status_candidates(self, *_args, **_kwargs):
             return [{"id": 7, "clinic_name": "医院A", "address": "東京", "medical_type": "医科",
-                     "maps_website_url": "https://clinic.example"}]
+                     "maps_website_url": "https://clinic.example", "hp_status": "UNRESEARCHED"}]
 
         def hp_normal_recent_jobs(self):
             return [{"id": "job-1", "kind": "hp", "status": "RUNNING", "created_at": "now"}]
@@ -62,8 +76,8 @@ def test_normal_hp_screen_searches_candidates_and_reads_selected_job_progress(mo
     app_v2.hp_normal_research_ui(Store())
 
     assert progress == ["job-1", "job-1"]  # current job and selectable history progress
-    assert any("未調査対象" in str(label) for _kind, label in fake_st.labels)
-    assert any(isinstance(frame, pd.DataFrame) and "医院名" in frame.columns for frame in fake_st.frames)
-    assert "HP調査Jobを作成" in fake_st.buttons
+    assert any("状態" in str(label) for _kind, label in fake_st.labels)
+    assert any(isinstance(frame, pd.DataFrame) and "HP調査状態" in frame.columns for frame in fake_st.frames)
+    assert "選択医院でHP調査Jobを作成" in fake_st.buttons
     assert "このJobのWorkerを開始" in fake_st.buttons
     assert all("Email" not in label and "Maps結果を取り込む" not in label for label in fake_st.buttons)

@@ -208,6 +208,41 @@ def test_error_canary_job_refuses_while_auto_run_is_unfinished():
     assert conn.committed == 0 and conn.rolled_back == 1
 
 
+def test_mac_selected_job_revalidates_exact_statuses_and_excludes_paused_job_claims():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None, [(101,), (202,)],
+    ])
+    job_id = SupabaseHpAutoRunRepository(conn).create_selected_hp_job(
+        [101, 202], ["UNRESEARCHED", "ERROR"],
+    )
+    sqls = [sql for sql, _ in conn.executed]
+    check_sql = next(sql for sql in sqls if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in check_sql
+    assert "WHEN h.fetch_status='OK' THEN 'SUCCESS'" in check_sql
+    assert "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' ELSE 'ERROR'" in check_sql
+    assert any("pg_advisory_xact_lock" in sql for sql in sqls)
+    queued = [params for sql, params in conn.executed if "INSERT INTO research.research_job_items" in sql]
+    assert [params[1] for params in queued] == [101, 202]
+    assert job_id and conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_mac_selected_job_rejects_success_and_rolls_back_stale_or_claimed_targets():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    with pytest.raises(ValueError, match="SUCCESS"):
+        SupabaseHpAutoRunRepository(_Connection([])).create_selected_hp_job([1], ["SUCCESS"])
+    conn = _Connection([None, (json.dumps({"status": "COMPLETED"}),), None, [(1,)]] )
+    with pytest.raises(ValueError, match="状態が変わった"):
+        SupabaseHpAutoRunRepository(conn).create_selected_hp_job([1, 2], ["ERROR"])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
 def test_k_unexpired_database_clock_lease_rejects_second_pc():
     from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
     import json

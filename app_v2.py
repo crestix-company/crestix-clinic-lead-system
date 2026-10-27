@@ -59,6 +59,7 @@ from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL
 from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
+NORMAL_MAC_NAV = ["データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力"]
 READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
 _STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -1141,7 +1142,7 @@ def cloud_email_human_review_ui(store, *, read_only=False):
 
 
 def hp_normal_research_ui(store):
-    """HP-only Mac operator surface; all other mutating UI is intentionally absent."""
+    """Mac HP operator surface: Reader previews, explicit selection, isolated Writer actions."""
     st.header("HP Auto Research")
     st.caption("対象検索・状態確認はReader、HP Jobの登録とWorker操作は専用Writerを使用します。起動だけでは調査を開始しません。")
     if not getattr(store, "is_supabase_runtime", False):
@@ -1153,27 +1154,59 @@ def hp_normal_research_ui(store):
     pref = "" if pref_label == "すべて" else pref_label
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], key="normal_hp_medical_type")
     medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
-    available = _maps_hp_available_count(store, pref, False, medical_types)
-    st.metric("未調査対象", f"{available:,}件")
-    st.caption("active・未統合・Maps公式HP URLあり・HP調査履歴なし。進行中または一時停止中のHP Jobに予約済みの医院は除外します。")
-    with st.expander("対象医院を確認（先頭10件）", expanded=True):
-        rows = store.maps_hp_candidate_preview(pref, medical_types, False, limit=10) if available else []
-        if rows:
-            st.dataframe(pd.DataFrame([{
-                "ID": r["id"], "医院名": r.get("clinic_name", ""), "住所": r.get("address", ""),
-                "診療科": r.get("medical_type", ""), "Maps公式HP URL": r.get("maps_website_url", ""),
-            } for r in rows]), hide_index=True, use_container_width=True)
-        else:
-            st.caption("現在の条件に合う候補はありません。")
+    status_labels = {
+        "UNRESEARCHED": "未調査", "ERROR": "ERROR", "REVIEW": "REVIEW", "SUCCESS": "SUCCESS（閲覧のみ）",
+    }
+    selected_status_labels = st.multiselect(
+        "HP URLあり医院の状態", list(status_labels.values()), default=[status_labels["UNRESEARCHED"]],
+        key="normal_hp_status_filter",
+    )
+    selected_statuses = [key for key, label in status_labels.items() if label in selected_status_labels]
+    counts = {status: store.maps_hp_status_count(pref, medical_types, [status]) for status in selected_statuses}
+    metric_cols = st.columns(max(1, len(counts)))
+    for col, (status, count_value) in zip(metric_cols, counts.items()):
+        col.metric(status_labels[status], f"{count_value:,}件")
+    st.caption("Maps公式HP URLあり・active・未統合の医院を表示します。実行中/一時停止中/予算停止Jobに予約済みの医院は除外されます。SUCCESSは閲覧のみです。")
+    rows = store.maps_hp_status_candidates(pref, medical_types, selected_statuses, limit=100) if selected_statuses else []
+    if rows:
+        st.dataframe(pd.DataFrame([{
+            "ID": r["id"], "医院名": r.get("clinic_name", ""), "住所": r.get("address", ""),
+            "HP URL": r.get("maps_website_url", ""), "HP調査状態": status_labels.get(r.get("hp_status"), r.get("hp_status", "")),
+            "記録ステータス": r.get("hp_status_detail") or "未記録",
+        } for r in rows]), hide_index=True, use_container_width=True)
+    else:
+        st.caption("現在の条件に合う候補はありません。")
+
+    runnable_rows = [r for r in rows if r.get("hp_status") in {"UNRESEARCHED", "ERROR", "REVIEW"}]
+    row_by_id = {int(row["id"]): row for row in runnable_rows}
+    selected_ids = st.multiselect(
+        "Job対象として選択（SUCCESSは対象外）", list(row_by_id),
+        format_func=lambda value: f"{value} · {row_by_id[value].get('clinic_name','')}",
+        max_selections=50,
+        key="normal_hp_selected_ids",
+    )
+    selected_ids = [int(value) for value in selected_ids if int(value) in row_by_id]
+    retry_selected = any(row_by_id[value].get("hp_status") in {"ERROR", "REVIEW"} for value in selected_ids)
+    if retry_selected:
+        st.warning("ERROR/REVIEW医院を明示選択しています。過去履歴を保持し、選択医院だけを再調査します。")
+    confirmed = st.checkbox("選択した医院だけをHP調査Jobに登録することを確認", key="normal_hp_confirm_selection")
 
     jobs = store.hp_normal_recent_jobs()
     current_id = st.session_state.get("normal_hp_active_job")
     runner = runner_for(str(store.path))
-    max_count = min(50, available)
-    count = st.number_input("今回の最大件数", min_value=1, max_value=50, value=max(1, max_count), key="normal_hp_count")
-    if st.button("HP調査Jobを作成", type="primary", disabled=available < 1 or runner.running(), key="normal_hp_create_job"):
-        jid = _create_maps_hp_job(store, pref, int(count), False, medical_types)
+    count = st.number_input("今回の対象件数（選択数と一致させてください）", min_value=1, max_value=50,
+                            value=max(1, min(50, len(selected_ids) or 1)), key="normal_hp_count")
+    if st.button("選択医院でHP調査Jobを作成", type="primary",
+                 disabled=not selected_ids or len(selected_ids) != int(count) or not confirmed or runner.running(),
+                 key="normal_hp_create_job"):
+        if not getattr(store, "is_supabase_runtime", False):
+            st.error("専用Writerを利用できません。")
+            return
+        jid = write_repositories_for(store).auto_hp.create_selected_hp_job(
+            selected_ids, [row_by_id[value]["hp_status"] for value in selected_ids],
+        )
         st.session_state["normal_hp_active_job"] = jid
+        st.session_state.setdefault("normal_hp_created_jobs", []).append(jid)
         st.rerun()
 
     if current_id:
@@ -1187,7 +1220,8 @@ def hp_normal_research_ui(store):
                 show_job_progress(store, current_id, hp_only=True)
             if st.button(
                 "このJobのWorkerを開始", type="primary",
-                disabled=runner.running() or status["status"] not in {"PAUSED", "BUDGET"}
+                disabled=current_id not in st.session_state.get("normal_hp_created_jobs", [])
+                    or runner.running() or status["status"] not in {"PAUSED", "BUDGET"}
                     or status.get("counts", {}).get("PENDING", 0) < 1,
                 key="normal_hp_worker_start",
             ):
@@ -1213,9 +1247,6 @@ def hp_normal_research_ui(store):
 
 
 def simple_workflow_ui(store, demo, *, read_only=False):
-    if os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1":
-        hp_normal_research_ui(store)
-        return
     if read_only:
         st.header("クリニック営業マスター")
         st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
@@ -2991,12 +3022,14 @@ def main():
     nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime
     with st.sidebar:
         nav_options = ([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV
+        if hp_normal_runtime:
+            nav_options = NORMAL_MAC_NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
             with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
                 st.caption("READ ONLYまたはHP専用ローカル実行では、許可されたメニューだけを表示します。")
-                for name in NAV:
+                for name in (NORMAL_MAC_NAV if hp_normal_runtime else NAV):
                     if name in nav_options:
                         st.caption(f"✅ {name}：利用可能")
                     else:
@@ -3004,9 +3037,11 @@ def main():
         else:
             with st.expander("開発・確認用", expanded=False):
                 demo = st.toggle("サンプルモード", key="sample_mode")
-        st.caption("HP専用実行はHP Job操作だけを表示します。")
+        st.caption("Mac通常版はReader画面と、明示操作のHP専用Writerを分離しています。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
+    elif hp_normal_runtime:
+        st.info("Mac通常版です。データ準備・Google Maps・営業出力はREAD ONLY、HP Job操作だけ明示操作で利用できます。")
     elif nav_locked:
         st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
 
@@ -3064,10 +3099,29 @@ def main():
         load_demo(store)
         st.info("架空サンプル4医院を表示しています。実データとは別に保存されます。")
 
-    if nav == "かんたん操作":
+    if hp_normal_runtime and nav == "データ準備":
+        simple_workflow_ui(store, demo, read_only=True)
+    elif hp_normal_runtime and nav == "Google Maps":
+        st.header("Google Maps")
+        st.caption("この画面はREAD ONLYです。Google Maps取込・更新操作は提供しません。Mapsに登録済みの公式HP URLを確認できます。")
+        map_count = store.maps_hp_available_count("", ["医科", "歯科"], False)
+        st.metric("Maps公式HP URLあり・未調査（予約除外）", f"{map_count:,}件")
+        map_rows = store.maps_hp_candidate_preview("", ["医科", "歯科"], False, limit=10)
+        if map_rows:
+            st.dataframe(pd.DataFrame([{
+                "ID": row["id"], "医院名": row.get("clinic_name", ""), "住所": row.get("address", ""),
+                "HP URL": row.get("maps_website_url", ""),
+            } for row in map_rows]), hide_index=True, use_container_width=True)
+        else:
+            st.caption("現在、未調査候補はありません。")
+    elif hp_normal_runtime and nav == "HP調査":
+        hp_normal_research_ui(store)
+    elif hp_normal_runtime and nav == "営業対象・Comdesk出力":
+        simple_sales_ui(store, demo, read_only=True)
+    elif nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
-        simple_sales_ui(store, demo, read_only=(read_only or hp_normal_runtime))
+        simple_sales_ui(store, demo, read_only=read_only)
     elif nav == "Email調査":
         email_research_page(store)
     elif nav == "メール送付文章":

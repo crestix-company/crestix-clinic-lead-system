@@ -48,7 +48,7 @@ NORMAL_HP_REQUIRED_COLUMNS = {
         "maps_website_url", "maps_presence_status", "active", "merged_into",
         "merge_hold", "is_new",
     ),
-    "hp_research.clinic_hp_research": ("clinic_id",),
+    "hp_research.clinic_hp_research": ("clinic_id", "fetch_status"),
     "research.research_jobs": ("id", "kind", "status", "created_at"),
     "research.research_job_items": ("job_id", "clinic_id", "state", "result"),
 }
