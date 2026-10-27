@@ -24,6 +24,9 @@ class Cursor:
     def fetchone(self):
         return next(self.answers)
 
+    def fetchall(self):
+        return []
+
 
 class Connection:
     def __init__(self, answers):
@@ -130,7 +133,7 @@ class ReaderSafetyTests(unittest.TestCase):
                    (False,), (False,), (False,)]
         for relation in reader.NORMAL_REQUIRED_TABLES:
             answers += [(relation,), (True,)]
-        answers += [(164201,)]
+        answers += [(164201,), (0,)]
         conn = Connection(answers)
         role, count = reader.verify_reader(
             "fake-url", connect=lambda *a, **kw: conn,
@@ -138,8 +141,10 @@ class ReaderSafetyTests(unittest.TestCase):
             count_relation="public.clinic_cloudrun_readonly",
         )
         self.assertEqual((role, count), ("clinic_mac_reader", 164201))
-        self.assertIn("SELECT count(*) FROM public.clinic_cloudrun_readonly",
+        self.assertIn("SELECT count(*) FROM email_research.clinic_email_status_readonly",
                       conn.cursor_obj.executed[-1][0])
+        self.assertTrue(any("research_status,candidate_count,researched_at" in query
+                            for query, _ in conn.cursor_obj.executed))
 
 
 if __name__ == "__main__":

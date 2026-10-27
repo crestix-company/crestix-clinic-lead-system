@@ -130,6 +130,16 @@ def verify_reader(dsn, *, connect=None, required_tables=None, count_relation=Non
             count = cur.fetchone()[0]
             if count == 0:
                 raise RuntimeError("医院データを参照できません。RLSポリシーを確認してください。")
+            if "email_research.clinic_email_status_readonly" in (
+                REQUIRED_TABLES if required_tables is None else required_tables
+            ):
+                cur.execute(
+                    "SELECT clinic_id,research_status,candidate_count,researched_at "
+                    "FROM email_research.clinic_email_status_readonly LIMIT 0"
+                )
+                cur.fetchall()
+                cur.execute("SELECT count(*) FROM email_research.clinic_email_status_readonly")
+                cur.fetchone()  # zero is valid; successful execution proves SELECT/RLS is usable
         conn.rollback()
     return role, count
 
