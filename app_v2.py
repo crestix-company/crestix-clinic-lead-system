@@ -555,10 +555,16 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
                 if failure_repo is not None:
                     failure_repo._conn.close()
             logging.warning(
-                "HP Auto Run launch agent failed exception_type=%s category=%s",
+                "HP Auto Run launch agent failed exception_type=%s category=%s stage=%s code=%s returncode=%s",
                 type(exc).__name__, connection_error_category(exc),
+                str(getattr(exc, "stage", "unknown")), str(getattr(exc, "code", "unknown")),
+                str(getattr(exc, "returncode", "") or ""),
             )
-            st.error("バックグラウンドWorkerを起動できませんでした。Runをエラー状態で安全に保持しました。")
+            reason = (
+                f"（{exc.stage}: {exc.code}）"
+                if hasattr(exc, "stage") and hasattr(exc, "code") else ""
+            )
+            st.error(f"バックグラウンドWorkerを起動できませんでした{reason}。RunとJobは再開できる状態で保持しました。")
             return False
         return True
 
