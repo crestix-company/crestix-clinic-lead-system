@@ -31,6 +31,7 @@ NORMAL_REQUIRED_TABLES = (
     "hp_research.clinic_hp_research",
     "treatment.clinic_treatment_research",
     "treatment.clinic_research_status",
+    "email_research.clinic_email_status_readonly",
 )
 WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 

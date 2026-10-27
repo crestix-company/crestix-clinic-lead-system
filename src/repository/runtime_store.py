@@ -156,6 +156,17 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def web_research_metrics(self, *, read_only_ui=False):
         return self.repositories.hp_research.batch_metrics(read_only_ui=read_only_ui)
+
+    @_retry_closed_read_connection
+    def email_research_status_metrics(self):
+        """Aggregate the allowlisted Email status projection; never read candidate addresses."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT research_status,count(*) FROM email_research.clinic_email_status_readonly "
+                "GROUP BY research_status ORDER BY research_status"
+            )
+            rows = cur.fetchall()
+        return {str(status): int(count) for status, count in rows}
     @_retry_closed_read_connection
     def history(self, clinic_id, limit=30):
         return self.repositories.provenance.history_for_clinic(clinic_id, limit)

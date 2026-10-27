@@ -239,6 +239,25 @@ def show_email_research_metrics(store):
         column.metric(label, f"{values[key]:,}件", help=definition)
 
 
+def show_read_only_email_research_metrics(store):
+    """Display counts from a reviewed status projection without opening Email writers."""
+    st.subheader("Email調査状況（READ ONLY）")
+    try:
+        counts = store.email_research_status_metrics()
+    except Exception:
+        st.warning("Email調査状況を参照できません。専用ReaderのSELECT/RLS設定を確認してください。")
+        return
+    labels = [
+        ("未調査", "NOT_RESEARCHED"), ("調査中", "RUNNING"),
+        ("候補あり", "FOUND"), ("候補なし", "NO_EMAIL_FOUND"),
+        ("要確認", "REVIEW"), ("エラー", "ERROR"),
+    ]
+    columns = st.columns(len(labels))
+    for column, (label, status) in zip(columns, labels):
+        column.metric(label, f"{counts.get(status, 0):,}件")
+    st.caption("状態別件数のみを集計します。候補メール本文・未承認アドレス・調査根拠は表示しません。")
+
+
 AUTO_HP_PROGRESS_REFRESH_SECONDS = 5
 AUTO_HP_ACTIVE_STATUSES = {"RUNNING", "WAITING_NETWORK"}
 
@@ -1132,6 +1151,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             help="左の母集団のうちUUIDが紐付いている件数です。「既存営業リスト」（全国展開前のレガシーコホート）とは別の定義・別の件数です。",
         )
         show_web_research_metrics(store, read_only=True)
+        show_read_only_email_research_metrics(store)
         with st.expander("ローカル版の処理順序（参考・READ ONLYでは操作不可）", expanded=False):
             st.caption("①データ準備（Comdesk・厚生局取込） → ②Google Maps収集・取込 → ③HP・Email自動調査 → ④営業対象検索・Comdesk出力")
             st.caption("①〜③はデータ更新を伴うため、READ ONLY版では状態の表示のみで操作ボタンは提供していません。④は「営業対象・出力」メニューから閲覧・検索・CSV/Excel出力のみ利用できます。")

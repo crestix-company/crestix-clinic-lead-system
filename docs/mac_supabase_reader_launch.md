@@ -31,14 +31,30 @@ Preview起動は `CLINIC_COMDESK_PREVIEW_ONLY=1` でComdesk差分確認だけに
 `public.clinic_email_enrichment`、
 `provenance.clinic_cloudrun_comdesk_rows`、`provenance.templates`、
 `hp_research.clinic_hp_research`、`treatment.clinic_treatment_research`、
-`treatment.clinic_research_status`のSELECTを確認します。これは画面の読取契約を示す最低限のrelation一覧です。
+`treatment.clinic_research_status`、`email_research.clinic_email_status_readonly`のSELECTを確認します。
+Email画面では状態別件数のみを表示し、メール候補や調査根拠を取得しません。これは画面の読取契約を示す最低限のrelation一覧です。
 DB管理者は各列・RLS条件を追加レビューし、Email候補・個人情報・原本JSON・履歴など画面に不要な列/行は
 Reader用viewから除外してください。追加relationが必要と判明した場合は、検査リストと投影設計を更新してから起動します。
 
 提案する境界は専用NOINHERIT/NOBYPASSRLS/NOLOGIN helperを作り、helperにのみ必要列SELECTと
 `TO <reader_helper>` のSELECTポリシーを与え、専用LOGIN Readerには投影済みviewのSELECTだけを付ける方式です。
-医院一覧の全国範囲を認める場合でも、RLS条件は承認済み対象医院の範囲に固定し、`USING (true)`を
-無条件に採用しないでください。画面要件が未確定の参照先については、権限を追加せず起動を拒否し、
+Email状態viewは`clinic_id,research_status,candidate_count,researched_at`だけを出し、
+`security_invoker=true`で基表RLSを有効にしてください。基表policyは専用Readerに対するSELECTのみとし、
+全国医院マスターの利用が承認された対象範囲であることをDBAが確認してから行範囲を定めます。
+`USING (true)`は全国全件の開示承認が明示され、他のClinic側RLS条件と矛盾しない場合に限る選択肢です。
+実装するview/policyの形（レビュー用のSQL案。実行禁止）:
+
+```sql
+CREATE VIEW email_research.clinic_email_status_readonly
+  WITH (security_invoker = true) AS
+SELECT clinic_id, research_status, candidate_count, researched_at
+FROM email_research.clinic_email_status;
+-- DBAが全国参照を承認した場合に限り、上記4列のSELECTと
+-- FOR SELECT TO <dedicated_reader> USING (true) を個別に付与する。
+-- 候補テーブルへのSELECTは不要。
+```
+
+画面要件が未確定の参照先については、権限を追加せず起動を拒否し、
 不足relation/columnと必要なSELECT/RLS案を管理者レビューへ返します。本番GRANT・Policy作成はこの作業では行いません。
 
 ## DB作業（保留）

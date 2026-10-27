@@ -61,6 +61,31 @@ def test_supabase_runtime_ignores_all_sqlite_path_environment(monkeypatch):
     assert app_v2.store_for(None) is sentinel
 
 
+def test_email_status_metrics_read_only_uses_projection_and_only_aggregates_status():
+    from src.repository.runtime_store import SupabaseRuntimeStore
+
+    class Cursor:
+        def __init__(self):
+            self.statement = ""
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def execute(self, statement): self.statement = statement
+        def fetchall(self):
+            return [("FOUND", 12), ("NOT_RESEARCHED", 30)]
+
+    class Connection:
+        def __init__(self): self.cursor_value = Cursor()
+        def cursor(self): return self.cursor_value
+
+    store = object.__new__(SupabaseRuntimeStore)
+    store._conn = Connection()
+    assert store.email_research_status_metrics() == {"FOUND": 12, "NOT_RESEARCHED": 30}
+    sql = store._conn.cursor_value.statement
+    assert "clinic_email_status_readonly" in sql
+    assert "research_status,count(*)" in sql
+    assert "email_candidates" not in sql
+
+
 def test_supabase_job_runner_uses_database_claim_not_local_file_lock(monkeypatch):
     import src.master.jobs as jobs
     store = SimpleNamespace(is_supabase_runtime=True)
