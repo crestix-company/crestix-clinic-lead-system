@@ -1218,6 +1218,16 @@ def hp_normal_research_ui(store):
             st.subheader(f"HP Job {current_id} · {JOB_LABELS.get(status['status'], status['status'])}")
             if status.get("total"):
                 show_job_progress(store, current_id, hp_only=True)
+                if hasattr(store, "hp_normal_job_results"):
+                    result_rows = store.hp_normal_job_results(current_id)
+                    if result_rows:
+                        st.dataframe(pd.DataFrame([{
+                            "医院ID": row["clinic_id"], "医院名": row.get("clinic_name", ""),
+                            "住所": row.get("address", ""), "Job状態": row.get("item_state", ""),
+                            "Job結果": row.get("item_result", ""), "HP状態": row.get("fetch_status", ""),
+                            "公開ランク": row.get("published_hp_rank", ""),
+                            "最終HP URL": row.get("final_url") or row.get("hp_url", ""),
+                        } for row in result_rows]), hide_index=True, use_container_width=True)
             if st.button(
                 "このJobのWorkerを開始", type="primary",
                 disabled=current_id not in st.session_state.get("normal_hp_created_jobs", [])

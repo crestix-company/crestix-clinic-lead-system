@@ -98,6 +98,23 @@ def test_status_candidate_query_rejects_unknown_states():
         store.maps_hp_status_candidates(statuses=["SUCCESS_WITH_WRITE"])
 
 
+def test_hp_job_result_preview_reads_only_reader_visible_projection_and_ledger():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "DONE", "SUCCESS", "OK",
+                           "https://clinic.test/", "https://clinic.test/", "A", "HP確認済み", "A")]])
+    rows = store.hp_normal_job_results("job-1")
+    assert rows == [{
+        "clinic_id": 7, "clinic_name": "Clinic", "address": "Tokyo", "item_state": "DONE",
+        "item_result": "SUCCESS", "fetch_status": "OK", "hp_url": "https://clinic.test/",
+        "final_url": "https://clinic.test/", "machine_hp_rank": "A",
+        "published_hp_status": "HP確認済み", "published_hp_rank": "A",
+    }]
+    sql, params = conn.calls[0]
+    assert "JOIN public.clinic_cloudrun_readonly c ON c.id=i.clinic_id" in sql
+    assert "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id" in sql
+    assert "research.research_results" not in sql and "public.clinics" not in sql
+    assert params == ("job-1",)
+
+
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
     predicate, args = _maps_hp_target_predicate("東京都", ["医科"], force=False)
 

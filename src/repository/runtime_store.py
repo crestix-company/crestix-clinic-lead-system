@@ -412,6 +412,25 @@ class SupabaseRuntimeStore:
             return result
 
     @_retry_closed_read_connection
+    def hp_normal_job_results(self, job_id):
+        """Read per-clinic job outcomes and published HP fields via the dedicated Reader."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT i.clinic_id,c.clinic_name,c.address,i.state,i.result,h.fetch_status,"
+                "h.hp_url,h.final_url,h.machine_hp_rank,c.hp_status,c.hp_rank "
+                "FROM research.research_job_items i "
+                "JOIN public.clinic_cloudrun_readonly c ON c.id=i.clinic_id "
+                "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
+                "WHERE i.job_id=%s ORDER BY i.clinic_id", (job_id,),
+            )
+            return [{
+                "clinic_id": row[0], "clinic_name": row[1], "address": row[2],
+                "item_state": row[3], "item_result": row[4], "fetch_status": row[5],
+                "hp_url": row[6], "final_url": row[7], "machine_hp_rank": row[8],
+                "published_hp_status": row[9], "published_hp_rank": row[10],
+            } for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
     def hp_auto_run_state(self):
         with self._conn.cursor() as cur:
             cur.execute("SELECT value FROM app_config.settings WHERE key=%s", ("hp_auto_run_state",))

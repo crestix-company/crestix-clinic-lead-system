@@ -55,7 +55,9 @@ def test_hp_reader_contract_excludes_email_and_source_relations():
     assert all("email" not in relation for relation in NORMAL_HP_REQUIRED_TABLES)
     assert "public.clinics" not in NORMAL_HP_REQUIRED_TABLES
     assert {"phone", "departments_json"} <= set(NORMAL_HP_REQUIRED_COLUMNS["public.clinic_cloudrun_readonly"])
-    assert NORMAL_HP_REQUIRED_COLUMNS["hp_research.clinic_hp_research"] == ("clinic_id", "fetch_status")
+    assert NORMAL_HP_REQUIRED_COLUMNS["hp_research.clinic_hp_research"] == (
+        "clinic_id", "fetch_status", "hp_url", "final_url", "machine_hp_rank",
+    )
 
 
 def test_supabase_read_factory_uses_readonly_url_and_readonly_session(monkeypatch):

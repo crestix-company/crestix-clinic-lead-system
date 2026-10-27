@@ -73,11 +73,17 @@ def test_normal_hp_screen_searches_candidates_and_reads_selected_job_progress(mo
         def hp_normal_job_status(self, jid):
             return {"id": jid, "status": "RUNNING", "counts": {"PENDING": 1}, "total": 2}
 
+        def hp_normal_job_results(self, jid):
+            return [{"clinic_id": 7, "clinic_name": "医院A", "address": "東京", "item_state": "DONE",
+                     "item_result": "SUCCESS", "fetch_status": "OK", "published_hp_rank": "A",
+                     "final_url": "https://clinic.example/"}]
+
     app_v2.hp_normal_research_ui(Store())
 
     assert progress == ["job-1", "job-1"]  # current job and selectable history progress
     assert any("状態" in str(label) for _kind, label in fake_st.labels)
     assert any(isinstance(frame, pd.DataFrame) and "HP調査状態" in frame.columns for frame in fake_st.frames)
+    assert any(isinstance(frame, pd.DataFrame) and "公開ランク" in frame.columns for frame in fake_st.frames)
     assert "選択医院でHP調査Jobを作成" in fake_st.buttons
     assert "このJobのWorkerを開始" in fake_st.buttons
     assert all("Email" not in label and "Maps結果を取り込む" not in label for label in fake_st.buttons)
