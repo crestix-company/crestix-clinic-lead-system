@@ -79,6 +79,8 @@ def test_mac_hp_controls_stay_in_original_step5_and_use_explicit_selection():
     assert '"SUCCESS": "SUCCESS（閲覧のみ）"' in simple
     assert 'if allow_unlimited_auto_run(hp_mode) and not mac_normal:' in simple
     assert "disabled=mac_normal or hp_control_disabled" in simple
+    assert '{"status": "IDLE"} if mac_normal' in simple
+    assert "if not mac_normal and auto_state.get(\"status\") != \"IDLE\":" in simple
 
 
 def test_read_only_step_overview_is_static_text_with_no_write_calls():

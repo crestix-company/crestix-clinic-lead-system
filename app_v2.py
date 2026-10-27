@@ -1477,7 +1477,11 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
         getattr(st, level)(text)
     runner = runner_for(str(store.path))
     auto_runner = auto_hp_runner_for(str(store.path))
-    auto_state = store.hp_auto_run_state() if getattr(store, "is_supabase_runtime", False) else {"status": "IDLE"}
+    auto_state = (
+        {"status": "IDLE"} if mac_normal
+        else store.hp_auto_run_state() if getattr(store, "is_supabase_runtime", False)
+        else {"status": "IDLE"}
+    )
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
     # Loading/rerunning the UI never elects a local Auto Run worker. Worker start/resume
     # always requires the explicit control below; the database lease remains the cross-host fence.
@@ -1580,7 +1584,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
             write_repositories_for(store).auto_hp.start(pref, research_medical_types, force, int(batch_size))
             st.rerun()
 
-    if auto_state.get("status") != "IDLE":
+    if not mac_normal and auto_state.get("status") != "IDLE":
         if auto_state.get("status") in AUTO_HP_ACTIVE_STATUSES:
             _live_auto_hp_progress(store)
         else:
