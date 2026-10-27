@@ -453,6 +453,15 @@ class SupabaseRuntimeStore:
         return value if isinstance(value, dict) else json.loads(value)
 
     @_retry_closed_read_connection
+    def hp_running_job_count(self):
+        """Read the standalone HP RUNNING-job blocker without expanding Reader scope."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM research.research_jobs WHERE kind='hp' AND status='RUNNING'"
+            )
+            return int(cur.fetchone()[0])
+
+    @_retry_closed_read_connection
     def hp_auto_run_cumulative_results(self, run_id):
         with self._conn.cursor() as cur:
             cur.execute("SELECT value FROM app_config.settings WHERE key=%s", ("hp_auto_run_state",))

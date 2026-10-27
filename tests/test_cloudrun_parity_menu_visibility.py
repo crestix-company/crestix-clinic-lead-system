@@ -67,21 +67,22 @@ def test_locked_menu_items_are_labeled_as_requiring_separate_authorization():
     assert "未有効・別権限が必要" in main
 
 
-def test_mac_hp_controls_stay_in_original_step5_and_use_explicit_selection():
+def test_mac_step5_uses_one_click_detached_auto_run_without_individual_selection():
     source = _app_source()
     start = source.index("def simple_workflow_ui")
     end = source.index("def simple_sales_ui", start)
     simple = source[start:end]
     assert 'st.subheader("Step5：HP・Email自動調査")' in simple
-    assert "store.maps_hp_status_count" in simple
-    assert "store.maps_hp_status_candidates" in simple
-    assert "create_selected_hp_job" in simple
-    assert '"SUCCESS": "SUCCESS（閲覧のみ）"' in simple
-    assert 'if allow_unlimited_auto_run(hp_mode):' in simple
-    assert 'if mode == "未調査がなくなるまで自動調査" and mac_normal:' in simple
-    assert "max_value=50, value=50" in simple
-    assert '"自動調査を一時停止"' in simple
-    assert '"Auto Run状態を再開"' in simple
+    assert "_mac_auto_hp_run_ui(" in simple
+    assert '"HP自動調査を開始"' in source
+    assert '"一時停止"' in source
+    assert '"HP自動調査を再開"' in source
+    assert 'if mac_normal:\n        mode = "mac_detached_auto_run"' in simple
+    assert "max_value=50, value=50" in simple  # retained for non-Mac/legacy mode
+    assert '"Job対象の医院（最大50件・SUCCESSは選択不可）"' not in simple
+    assert '"HP調査Jobを作成"' in simple  # retained only for non-Mac branches
+    assert 'if not mac_normal:\n        with st.expander("HP調査の詳細' in simple
+    assert '"HP単発Job管理・復旧"' in _app_source()
 
 
 def test_read_only_step_overview_is_static_text_with_no_write_calls():

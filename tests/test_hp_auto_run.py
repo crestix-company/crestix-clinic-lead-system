@@ -171,6 +171,25 @@ def test_k_supabase_start_serializes_state_and_batch_creation():
     assert state["current_job_id"] and conn.committed == 1 and conn.rolled_back == 0
 
 
+def test_k_writer_preflight_is_select_only_and_requires_expected_role_and_privileges():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+
+    good_conn = _Connection([("clinic_runtime", "postgres", True, True, True, True, True)])
+    result = SupabaseHpAutoRunRepository(good_conn).preflight()
+    assert result == {
+        "ok": True, "role": "clinic_runtime", "database": "postgres", "privileges_ok": True,
+    }
+    assert len(good_conn.executed) == 1
+    assert "SELECT current_user" in good_conn.executed[0][0]
+    assert good_conn.committed == 0 and good_conn.rolled_back == 1
+
+    denied_conn = _Connection([("clinic_runtime", "postgres", True, True, True, False, True)])
+    assert SupabaseHpAutoRunRepository(denied_conn).preflight()["ok"] is False
+
+    wrong_role_conn = _Connection([("postgres", "postgres", True, True, True, True, True)])
+    assert SupabaseHpAutoRunRepository(wrong_role_conn).preflight()["ok"] is False
+
+
 def test_k_second_controller_cannot_start_an_active_auto_run():
     from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
     import pytest
@@ -357,6 +376,42 @@ def test_e_network_waiting_then_recovery_keeps_completed_work(monkeypatch):
     assert "WAITING_NETWORK" in repo.transitions
     assert calls["done"] == 500
     assert repo.state["status"] == "COMPLETED"
+
+
+def test_e_network_retry_is_bounded_and_persists_safe_error(monkeypatch):
+    from src.master import hp_auto_run
+
+    class Repo:
+        def __init__(self):
+            self.state = {"status": "RUNNING", "current_job_id": "job-1"}
+            self.transitions = []
+        def acquire(self, _controller):
+            return dict(self.state) if self.state["status"] in {"RUNNING", "WAITING_NETWORK"} else None
+        def set_controller_status(self, _controller, status, error="", retry_count=0):
+            self.state.update(status=status, last_error=error, retry_count=retry_count)
+            self.transitions.append(status)
+            return True
+        def get_state(self):
+            return dict(self.state)
+        def heartbeat(self, _controller):
+            return True
+
+    repo = Repo()
+    calls = {"run": 0}
+    monkeypatch.setattr(hp_auto_run, "job_status", lambda *_: {
+        "status": "RUNNING", "counts": {"DONE": 0, "PENDING": 50}, "total": 50,
+    })
+    def fail(*_args, **_kwargs):
+        calls["run"] += 1
+        raise ConnectionError("network is unreachable")
+    monkeypatch.setattr(hp_auto_run, "run_job", fail)
+    runner = hp_auto_run.AutoHpRunner(sleeper=lambda _seconds: None, backoffs=(0, 0))
+    monkeypatch.setattr(runner, "_repo", lambda _store: repo)
+    result = runner.run_blocking(object())
+    assert result == {"reason": "error_network_retry_limit", "failure_category": "temporary"}
+    assert calls["run"] == 3
+    assert repo.state["status"] == "ERROR"
+    assert "network is unreachable" not in repo.state["last_error"]
 
 
 def test_e_auth_and_dns_are_not_classified_as_unbounded_network_retry():

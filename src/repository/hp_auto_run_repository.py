@@ -52,6 +52,35 @@ class SupabaseHpAutoRunRepository:
     def __init__(self, conn):
         self._conn = conn
 
+    def preflight(self, expected_role="clinic_runtime"):
+        """Verify the HP Writer identity and required Run/job privileges using SELECT only."""
+        try:
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT current_user,current_database(),"
+                    "has_schema_privilege(current_user,'research','USAGE'),"
+                    "has_schema_privilege(current_user,'app_config','USAGE'),"
+                    "(has_table_privilege(current_user,'research.research_jobs','SELECT') AND "
+                    "has_table_privilege(current_user,'research.research_jobs','INSERT') AND "
+                    "has_table_privilege(current_user,'research.research_jobs','UPDATE')),"
+                    "(has_table_privilege(current_user,'research.research_job_items','SELECT') AND "
+                    "has_table_privilege(current_user,'research.research_job_items','INSERT') AND "
+                    "has_table_privilege(current_user,'research.research_job_items','UPDATE')),"
+                    "(has_table_privilege(current_user,'app_config.settings','SELECT') AND "
+                    "has_table_privilege(current_user,'app_config.settings','UPDATE'))"
+                )
+                role, database, *privileges = cur.fetchone()
+            self._conn.rollback()
+            return {
+                "ok": role == expected_role and all(privileges),
+                "role": role,
+                "database": database,
+                "privileges_ok": all(privileges),
+            }
+        except Exception:
+            self._conn.rollback()
+            raise
+
     @staticmethod
     def _decode(row):
         if not row:
@@ -356,6 +385,41 @@ class SupabaseHpAutoRunRepository:
                 self._save(cur, state)
             self._conn.commit()
             return state
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def mark_worker_start_failure(self, run_id, error="Worker起動を確認できませんでした。"):
+        """Safely pause the just-created Run if its detached local Worker failed to start."""
+        try:
+            with self._conn.cursor() as cur:
+                self._lock(cur)
+                state = self._locked_state(cur)
+                if (
+                    not state
+                    or state.get("run_id") != run_id
+                    or state.get("status") != "RUNNING"
+                    or state.get("controller_id")
+                ):
+                    self._conn.commit()
+                    return False
+                state.update({
+                    "status": "ERROR",
+                    "requested_pause": False,
+                    "controller_id": "",
+                    "controller_lease_until": "",
+                    "last_error": str(error or "Worker起動を確認できませんでした。")[:200],
+                    "last_progress_at": _iso(),
+                })
+                if state.get("current_job_id"):
+                    cur.execute(
+                        "UPDATE research.research_jobs SET status='PAUSED',updated_at=%s "
+                        "WHERE id=%s AND status<>'COMPLETED'",
+                        (now(), state["current_job_id"]),
+                    )
+                self._save(cur, state)
+            self._conn.commit()
+            return True
         except Exception:
             self._conn.rollback()
             raise

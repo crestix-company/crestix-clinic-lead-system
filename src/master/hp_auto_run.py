@@ -12,6 +12,7 @@ import time
 import uuid
 
 from src.enrichment.search_provider import TavilySearchProvider
+from src.enrichment.safe_web import SafeFetcher
 from src.master.jobs import job_status, run_job
 from src.repository.write_backend import write_repositories_for
 
@@ -23,8 +24,12 @@ def classify_controller_error(exc):
     """Return temporary/ambiguous/fatal/non_network without exposing details."""
     text = str(exc).lower()
     sqlstate = str(getattr(exc, "sqlstate", "") or "")
-    if sqlstate.startswith("28") or any(word in text for word in ("authentication failed", "password authentication", "permission denied")):
+    if sqlstate.startswith(("28", "42", "23")) or sqlstate == "42501" or any(
+        word in text for word in ("authentication failed", "password authentication", "permission denied")
+    ):
         return "fatal"
+    if sqlstate.startswith("08"):
+        return "temporary"
     if isinstance(exc, socket.gaierror) or any(word in text for word in ("name or service not known", "nodename nor servname", "temporary failure in name resolution")):
         return "ambiguous"
     if isinstance(exc, (ConnectionError, TimeoutError)) or any(word in text for word in (
@@ -42,6 +47,8 @@ class AutoHpRunner:
         self.sleeper = sleeper
         self.backoffs = tuple(backoffs)
         self.controller_id = uuid.uuid4().hex
+        self.exit_reason = "not_started"
+        self.failure_category = ""
 
     def running(self):
         return bool(self.thread and self.thread.is_alive())
@@ -55,6 +62,13 @@ class AutoHpRunner:
             self.thread = Thread(target=self._run, args=(store,), daemon=True)
             self.thread.start()
             return True
+
+    def run_blocking(self, store):
+        """Run in a dedicated process without depending on the Streamlit thread."""
+        self.exit_reason = "running"
+        self.failure_category = ""
+        self._run(store)
+        return {"reason": self.exit_reason, "failure_category": self.failure_category}
 
     def _repo(self, store):
         repo = write_repositories_for(store).auto_hp
@@ -92,7 +106,8 @@ class AutoHpRunner:
 
         try:
             return run_job(
-                store, jid, TavilySearchProvider(), progress_callback=progress
+                store, jid, TavilySearchProvider(), fetcher=SafeFetcher(),
+                progress_callback=progress,
             )
         finally:
             stopped.set()
@@ -105,6 +120,11 @@ class AutoHpRunner:
                 repo = self._repo(store)
                 state = repo.acquire(self.controller_id)
                 if state is None:
+                    state = repo.get_state()
+                    if state.get("status") in {"RUNNING", "WAITING_NETWORK"}:
+                        self.sleeper(5)
+                        continue
+                    self.exit_reason = str(state.get("status", "IDLE")).lower()
                     return
                 if retry_count and state.get("status") == "RUNNING":
                     # Supabase may have been unreachable when the outage began. Persist the
@@ -119,16 +139,19 @@ class AutoHpRunner:
                 jid = state.get("current_job_id")
                 if not jid:
                     repo.set_controller_status(self.controller_id, "ERROR", "現在Jobを確認できません。")
+                    self.exit_reason = "error_missing_job"
                     return
                 current = job_status(store, jid)
                 if current["status"] == "COMPLETED":
                     next_state = repo.advance(self.controller_id)
                     if next_state.get("status") == "COMPLETED":
+                        self.exit_reason = "completed"
                         return
                     retry_count = 0
                     continue
                 if current["status"] == "RESET":
                     repo.set_controller_status(self.controller_id, "ERROR", "現在Jobがリセットされています。")
+                    self.exit_reason = "error_job_reset"
                     return
 
                 self._run_child(store, jid)
@@ -136,11 +159,13 @@ class AutoHpRunner:
                 if current["status"] == "COMPLETED":
                     next_state = self._repo(store).advance(self.controller_id)
                     if next_state.get("status") == "COMPLETED":
+                        self.exit_reason = "completed"
                         return
                     retry_count = 0
                     continue
                 latest = self._repo(store).get_state()
                 if latest.get("status") in {"PAUSED", "CANCELLED", "COMPLETED", "ERROR"}:
+                    self.exit_reason = str(latest["status"]).lower()
                     return
                 if current["status"] == "PAUSED" and latest.get("status") == "RUNNING":
                     # Resume may be requested while the old worker is still reaching its
@@ -153,6 +178,7 @@ class AutoHpRunner:
                 self._repo(store).set_controller_status(
                     self.controller_id, "ERROR", "現在Batchを継続できない状態です。"
                 )
+                self.exit_reason = "error_child_job_state"
                 return
             except Exception as exc:
                 kind = classify_controller_error(exc)
@@ -163,15 +189,21 @@ class AutoHpRunner:
                         )
                     except Exception:
                         pass
+                    self.failure_category = kind
+                    self.exit_reason = "error_controller"
                     return
                 retry_count += 1
-                if kind == "ambiguous" and retry_count > len(self.backoffs):
+                if retry_count > len(self.backoffs):
                     try:
                         self._repo(store).set_controller_status(
-                            self.controller_id, "ERROR", "DNS接続を確認できません。設定と通信環境を確認してください。"
+                            self.controller_id, "ERROR",
+                            "ネットワーク接続の再試行上限に達しました。設定と通信環境を確認してください。",
+                            retry_count,
                         )
                     except Exception:
                         pass
+                    self.failure_category = kind
+                    self.exit_reason = "error_network_retry_limit"
                     return
                 try:
                     self._repo(store).set_controller_status(
