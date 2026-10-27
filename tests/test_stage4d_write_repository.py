@@ -518,6 +518,17 @@ def test_supabase_jobs_runtime_methods_have_postgres_implementations(monkeypatch
     assert "pg_advisory_xact_lock" in statements[0]
     assert "queued_i.state IN ('PENDING','RUNNING')" in candidate_sql
 
+    for invoke, expected in [
+        (lambda r: r.complete_job_if_no_remaining_items("j"), "status='COMPLETED'"),
+        (lambda r: r.claim_specific_item("j", 1), "state='RUNNING'"),
+        (lambda r: r.requeue_item_for_budget_or_pause("j", 1, "stop", "PAUSED"), "state='PENDING'"),
+        (lambda r: r.finish_item("j", 1, "SUCCESS", ""), "state='DONE'"),
+    ]:
+        branch = FakeConn()
+        invoke(SupabaseJobsWriteRepository(branch))
+        assert any(expected in sql for sql, _ in branch.executed)
+        assert branch.committed == 1 and branch.rolled_back == 0
+
 
 @pytest.mark.parametrize("state", ["RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"])
 def test_supabase_hp_filter_job_refuses_while_auto_run_is_active(state):
@@ -544,17 +555,6 @@ def test_supabase_hp_filter_job_refuses_when_another_hp_job_is_running():
         )
     assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
     assert conn.committed == 0 and conn.rolled_back == 1
-
-    for invoke, expected in [
-        (lambda r: r.complete_job_if_no_remaining_items("j"), "status='COMPLETED'"),
-        (lambda r: r.claim_specific_item("j", 1), "state='RUNNING'"),
-        (lambda r: r.requeue_item_for_budget_or_pause("j", 1, "stop", "PAUSED"), "state='PENDING'"),
-        (lambda r: r.finish_item("j", 1, "SUCCESS", ""), "state='DONE'"),
-    ]:
-        branch = FakeConn()
-        invoke(SupabaseJobsWriteRepository(branch))
-        assert any(expected in sql for sql, _ in branch.executed)
-        assert branch.committed == 1 and branch.rolled_back == 0
 
 
 def test_supabase_recover_job_preserves_canonical_transition_order():
