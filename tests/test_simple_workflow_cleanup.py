@@ -226,9 +226,9 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
 
     assert "nav_options = NAV[:2] if nav_locked else NAV" in main
     assert "nav_locked = read_only or is_cloud_run_deployment()" in main
-    assert "if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():" in main
+    assert "and os.environ.get(\"CLINIC_NORMAL_MAC_RUNTIME\") != \"1\"" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main
-    assert "not read_only and not is_cloud_run_deployment() and auto_state.get" in simple
+    assert "auto_runner.start(store)" not in simple[:simple.index('"Auto Run Workerを開始・再開"')]
     assert "write_disabled = demo or read_only" in simple
     assert "READ ONLY画面確認中" in simple
 

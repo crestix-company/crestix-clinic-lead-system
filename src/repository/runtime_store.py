@@ -253,6 +253,74 @@ class SupabaseRuntimeStore:
             cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
             return cur.fetchone()[0]
 
+    @_retry_closed_read_connection
+    def hp_recent_jobs(self):
+        """Read HP job headers through the verified Reader connection."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM research.research_jobs WHERE status<>'RESET' "
+                "ORDER BY created_at DESC,id DESC LIMIT 20"
+            )
+            names = [item.name for item in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def hp_job_status(self, job_id):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT * FROM research.research_jobs WHERE id=%s", (job_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            result = dict(zip([item.name for item in cur.description], row))
+            cur.execute(
+                "SELECT state,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s GROUP BY state", (job_id,),
+            )
+            result["counts"] = dict(cur.fetchall())
+            cur.execute(
+                "SELECT result,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s AND state='DONE' GROUP BY result", (job_id,),
+            )
+            result["results"] = dict(cur.fetchall())
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    @_retry_closed_read_connection
+    def hp_auto_run_state(self):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT value FROM app_config.settings WHERE key=%s", ("hp_auto_run_state",))
+            row = cur.fetchone()
+        if not row:
+            return {"status": "IDLE"}
+        value = row[0]
+        return value if isinstance(value, dict) else json.loads(value)
+
+    @_retry_closed_read_connection
+    def hp_auto_run_cumulative_results(self, run_id):
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT COALESCE(i.result,''),count(*) "
+                "FROM research.research_jobs j JOIN research.research_job_items i ON i.job_id=j.id "
+                "WHERE j.kind='hp' AND j.options_json->>'auto_run_id'=%s AND i.state='DONE' "
+                "GROUP BY i.result", (run_id,),
+            )
+            return {str(key): int(value) for key, value in cur.fetchall()}
+
+    @_retry_closed_read_connection
+    def hp_auto_run_remaining_count(self, state):
+        predicate, args = _maps_hp_target_predicate(
+            state.get("prefecture", ""), state.get("medical_types"), state.get("force", False)
+        )
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
+            "JOIN research.research_jobs prior_j ON prior_j.id=prior_i.job_id "
+            "WHERE prior_i.clinic_id=c.id AND prior_j.options_json->>'auto_run_id'=%s)"
+        )
+        args.append(state.get("run_id", ""))
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
+            return int(cur.fetchone()[0])
+
     def mhlw_join_status(self):
         # The optional Navi sidecar never existed and was explicitly excluded from migration.
         return None

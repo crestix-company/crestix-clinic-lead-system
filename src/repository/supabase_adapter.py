@@ -21,7 +21,7 @@ from src.repository.errors import BackendNotSupportedError
 from src.repository import supabase_filters as sf
 
 
-def connect(url, *, connect_timeout=20, autocommit=False):
+def connect(url, *, connect_timeout=20, autocommit=False, read_only=False):
     """Opens a Postgres connection with the Stage3 root-caused float-readback fix applied
     (extra_float_digits=0 is this project's session default; raised to 3 here so float8 text
     output is shortest-round-trip-safe again -- see docs/supabase_migration root cause writeup).
@@ -37,7 +37,7 @@ def connect(url, *, connect_timeout=20, autocommit=False):
     import os
     import psycopg
     from src.safety.preview_mode import comdesk_preview_only_enabled
-    read_only_ui = (
+    read_only_ui = read_only or (
         os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
         or comdesk_preview_only_enabled()
     )

@@ -102,6 +102,7 @@ def runtime_store_cache_key():
         os.environ.get("CLINIC_DATA_BACKEND", ""),
         os.environ.get("CLINIC_WRITE_BACKEND", ""),
         os.environ.get("SUPABASE_RUNTIME_DB_URL", ""),
+        os.environ.get("SUPABASE_READONLY_DB_URL", ""),
         os.environ.get("CLINIC_COMDESK_PREVIEW_ONLY", ""),
     ]
     payload = json.dumps(values, separators=(",", ":")).encode("utf-8")
@@ -250,7 +251,10 @@ def treatment_quality_completed_count(web_counts):
 
 def _auto_hp_progress_snapshot(store, auto_repo):
     """Read one consistent-enough Auto HP progress snapshot for display only."""
-    state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
+    reader_runtime = getattr(store, "is_supabase_runtime", False)
+    state = store.hp_auto_run_state() if reader_runtime else (
+        auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
+    )
     auto_current = None
     if state.get("current_job_id"):
         try:
@@ -263,7 +267,10 @@ def _auto_hp_progress_snapshot(store, auto_repo):
     current_running = auto_current["counts"].get("RUNNING", 0) if auto_current else 0
     current_total = auto_current["total"] if auto_current else 0
 
-    cumulative = auto_repo.cumulative_results(state.get("run_id", "")) if auto_repo is not None and state.get("run_id") else {}
+    if reader_runtime and state.get("run_id"):
+        cumulative = store.hp_auto_run_cumulative_results(state["run_id"])
+    else:
+        cumulative = auto_repo.cumulative_results(state.get("run_id", "")) if auto_repo is not None and state.get("run_id") else {}
     initial_count = int(state.get("initial_count", 0) or 0)
     # 「処理済み」はこのRunに紐づくDONE(terminal result)の直接集計のみを根拠にする。
     # 開始時対象からの引き算にすると、開始後に新たにeligibleになった医院が
@@ -276,9 +283,10 @@ def _auto_hp_progress_snapshot(store, auto_repo):
     # そのため「残り」はinitial_countからの差分ではなく、現在Jobの未完了分＋
     # 次Batch以降で実際に取り込まれ得る候補数（future_remaining）で表す。
     current_remaining = current_pending + current_running
-    future_remaining = (
-        auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
-    )
+    if reader_runtime and state.get("run_id"):
+        future_remaining = store.hp_auto_run_remaining_count(state)
+    else:
+        future_remaining = auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
     total_remaining = current_remaining + future_remaining
     # このRunが現時点で対象にしている総数（processed + 未処理）。
     # 新規eligibleが増えれば分母も増えるのがdynamic Auto Runの仕様通りの挙動。
@@ -393,11 +401,10 @@ def _render_auto_hp_progress(snapshot, *, live=False):
 @st.fragment(run_every=f"{AUTO_HP_PROGRESS_REFRESH_SECONDS}s")
 def _live_auto_hp_progress(store):
     """Refresh only the Auto HP progress panel while a background run is active."""
-    auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
-    if auto_repo is None:
+    if not getattr(store, "is_supabase_runtime", False):
         st.warning("Auto HP Researchの進捗を取得できません。")
         return
-    snapshot = _auto_hp_progress_snapshot(store, auto_repo)
+    snapshot = _auto_hp_progress_snapshot(store, None)
     _render_auto_hp_progress(snapshot, live=True)
     if snapshot["state"].get("status") not in AUTO_HP_ACTIVE_STATUSES:
         # Refresh the whole page once when the run transitions to PAUSED/COMPLETED/ERROR.
@@ -1227,12 +1234,37 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     research_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
 
     force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
+    force_confirmed = True
+    if force:
+        force_confirmed = st.checkbox(
+            "過去のSUCCESS・ERROR・Human Review結果を再調査対象に含めることを確認しました",
+            value=False, key="simple_force_confirmed",
+        )
     available = _maps_hp_available_count(store, pref, force, research_medical_types)
     st.info(
         f"HP調査可能・未調査：{available:,}件",
         icon="ℹ️",
     )
-    st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・未調査（強制再調査時を除く）で、未完了jobにも入っていない医院です。上の参考件数とは分母が異なります。")
+    st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・HP調査履歴なし（通常時）で、未完了jobにも入っていない医院です。『調査済みもやり直す』は過去の成功・失敗・要確認も対象に含めます。")
+    if getattr(store, "is_supabase_runtime", False):
+        with st.expander("今回の条件に合う医院をプレビュー（先頭10件）", expanded=False):
+            candidate_ids = store.maps_hp_candidate_ids(
+                pref, research_medical_types, force, limit=min(10, max(1, int(available)))
+            ) if available else []
+            preview = []
+            for clinic_id in candidate_ids:
+                clinic = store.get(clinic_id)
+                preview.append({
+                    "ID": clinic_id,
+                    "医院名": clinic.get("clinic_name", ""),
+                    "住所": clinic.get("address", ""),
+                    "診療科": clinic.get("medical_type", ""),
+                    "Maps公式HP URL": clinic.get("maps_website_url", ""),
+                })
+            if preview:
+                st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
+            else:
+                st.caption("現在の条件に合う候補はありません。")
 
     hp_mode = hp_executor_mode()
     cloud_run_executor = hp_mode == "cloud_run"
@@ -1253,19 +1285,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         getattr(st, level)(text)
     runner = runner_for(str(store.path))
     auto_runner = auto_hp_runner_for(str(store.path))
-    auto_repo = write_repositories_for(store).auto_hp if getattr(store, "is_supabase_runtime", False) else None
-    auto_state = auto_repo.get_state() if auto_repo is not None else {"status": "IDLE"}
+    auto_state = store.hp_auto_run_state() if getattr(store, "is_supabase_runtime", False) else {"status": "IDLE"}
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
-    if (not read_only and not is_cloud_run_deployment() and auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"}
-            and not auto_runner.running() and not cloud_run_executor):
-        # Any PC may offer an executor, but the persisted lease allows only one controller.
-        # Cloud Run Web never self-elects as that executor: it must stay request-driven
-        # (min 0 / max 1), not an always-on background crawler charged to this service.
-        # is_cloud_run_deployment() is required here (not just not_cloud_run_executor,
-        # which only excludes the dedicated CLINIC_HP_EXECUTOR=cloud_run deployment):
-        # this call has no disable button, so it must also stay off for a Cloud Run
-        # Web deployment with CLINIC_READ_ONLY_UI=false and no CLINIC_HP_EXECUTOR set.
-        auto_runner.start(store)
+    # Loading/rerunning the UI never elects a local Auto Run worker. Worker start/resume
+    # always requires the explicit control below; the database lease remains the cross-host fence.
 
     hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
     def is_auto_child(job):
@@ -1290,8 +1313,8 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         actual = min(int(count), available)
         st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
         if st.button(
-            "HP自動調査を開始", type="primary",
-            disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0,
+            "HP調査Jobを作成", type="primary",
+            disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0 or not force_confirmed,
             key="simple_start", use_container_width=True,
         ):
             if cloud_run_executor:
@@ -1308,8 +1331,31 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             else:
                 jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
                 st.session_state["active_job"] = jid
-                runner.start(store, jid, TavilySearchProvider(""))
+                # Job creation and Worker start are separate operator actions.
             st.rerun()
+        active_job_id = st.session_state.get("active_job") or (single_jobs[0]["id"] if single_jobs else None)
+        active_single = next((job for job in single_jobs if job.get("id") == active_job_id), None)
+        if active_single:
+            active_status = job_status(store, active_single["id"])
+            created_in_session = st.session_state.get("active_job") == active_single["id"]
+            st.caption(f"作成済みHP Job：{active_single['id']}／状態：{active_status['status']}")
+            if st.button(
+                "このHP JobのWorkerを開始・再開", type="primary",
+                disabled=write_disabled or not created_in_session or runner.running() or active_status["status"] not in {"PAUSED", "BUDGET"}
+                    or active_status["counts"].get("PENDING", 0) == 0,
+                key="simple_single_worker_start", use_container_width=True,
+            ):
+                runner.start(store, active_single["id"], TavilySearchProvider())
+                st.rerun()
+            if st.button(
+                "このHP Jobを一時停止", disabled=write_disabled or not created_in_session or active_status["status"] != "RUNNING",
+                key="simple_single_worker_pause", use_container_width=True,
+            ):
+                write_repositories_for(store).jobs.pause_job(active_single["id"])
+                st.rerun()
+            show_job_progress(store, active_single["id"])
+            if not created_in_session:
+                st.caption("既存Jobの再開・停止は「詳細設定 > HP単発Job管理・復旧」から対象を選んで操作してください。")
     else:
         batch_size = st.number_input(
             "1Batch件数", min_value=1, max_value=500, value=500,
@@ -1319,34 +1365,38 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.write(f"Auto Run対象：{available:,}件")
         st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
         if st.button(
-            "未調査がなくなるまで自動調査を開始", type="primary",
-            disabled=write_disabled or auto_repo is None or auto_active or runner.running() or unfinished or available == 0,
+            "Auto Run Jobを登録", type="primary",
+            disabled=write_disabled or not getattr(store, "is_supabase_runtime", False) or auto_active or runner.running() or unfinished or available == 0 or not force_confirmed,
             key="simple_auto_start", use_container_width=True,
         ):
-            auto_repo.start(pref, research_medical_types, force, int(batch_size))
-            auto_runner.start(store)
+            write_repositories_for(store).auto_hp.start(pref, research_medical_types, force, int(batch_size))
             st.rerun()
 
     if auto_state.get("status") != "IDLE":
         if auto_state.get("status") in AUTO_HP_ACTIVE_STATUSES:
             _live_auto_hp_progress(store)
         else:
-            _render_auto_hp_progress(_auto_hp_progress_snapshot(store, auto_repo), live=False)
+            _render_auto_hp_progress(_auto_hp_progress_snapshot(store, None), live=False)
 
         auto_controls = st.columns(2)
+        if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
+            if st.button(
+                "Auto Run Workerを開始・再開", type="primary", disabled=write_disabled or cloud_run_executor,
+                key="simple_auto_worker_start", use_container_width=True,
+            ):
+                auto_runner.start(store)
+                st.rerun()
         if auto_controls[0].button(
             "自動調査を一時停止", disabled=write_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
             key="simple_auto_pause", use_container_width=True,
         ):
-            auto_repo.pause()
+            write_repositories_for(store).auto_hp.pause()
             st.rerun()
         if auto_controls[1].button(
-            "自動調査を再開", disabled=write_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
+            "Auto Run状態を再開", disabled=write_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
             key="simple_auto_resume", use_container_width=True,
         ):
-            auto_repo.resume()
-            if not cloud_run_executor:
-                auto_runner.start(store)
+            write_repositories_for(store).auto_hp.resume()
             st.rerun()
 
     if read_only:
@@ -1387,7 +1437,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}:
             st.warning("完全終了しても完了済み調査結果は削除されません。現在BatchはPAUSEDで保持されます。")
             if st.button("自動調査を終了", key="simple_auto_cancel", disabled=write_disabled):
-                auto_repo.cancel()
+                write_repositories_for(store).auto_hp.cancel()
                 st.rerun()
 
     st.caption(
@@ -2617,7 +2667,7 @@ def single_hp_job_recovery_ui(store, demo):
         if cloud_run_executor:
             _dispatch_cloud_hp_job(current["id"], clinic_count=0)
         else:
-            runner.start(store, current["id"], TavilySearchProvider(""))
+            runner.start(store, current["id"], TavilySearchProvider())
         st.rerun()
 
     if cloud_run_executor:
@@ -2880,13 +2930,19 @@ def main():
     else:
         path = None
     if not demo and (active_backend() == BACKEND_SUPABASE or active_write_backend() == WRITE_BACKEND_SUPABASE):
-        required_keys = ("CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL")
+        if os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1":
+            required_keys = ("CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND", "SUPABASE_READONLY_DB_URL", "SUPABASE_RUNTIME_DB_URL")
+        elif read_only:
+            required_keys = ("CLINIC_DATA_BACKEND", "SUPABASE_READONLY_DB_URL")
+        else:
+            required_keys = ("CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL")
         if any(not os.environ.get(key, "").strip() for key in required_keys):
             _show_supabase_startup_error(RuntimeError("Clinic runtime configuration is missing"))
     try:
         store = store_for(str(path) if path is not None else None, runtime_store_cache_key())
         from src.cloud_run.deployment_context import is_cloud_run_deployment
-        if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():
+        if (not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment()
+                and os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") != "1"):
             # refresh_age_model() is a general write unrelated to HP Job control.
             # CLINIC_HP_EXECUTOR=cloud_run is meant to run with a least-privilege
             # job-control-only DB role (see src.cloud_run.job_control); it must

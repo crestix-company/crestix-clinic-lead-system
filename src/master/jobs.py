@@ -9,6 +9,7 @@ from src.enrichment.search_provider import CachedSearch,BudgetReached,SearchErro
 from src.enrichment.researcher import Researcher,Stopped,empty_hp_result
 from src.enrichment.hp_analysis import host
 from src.enrichment.safe_web import _host_key
+from src.enrichment.safe_web import WebError
 
 # HP調査を同時に進める医院数。最初は2並列固定（4並列は2並列の安全性確認後）。
 # 同じサイトの医院は必ず同じ処理がclinic_id順に続けて調べるため、サイトごとの
@@ -34,11 +35,15 @@ def create_job(store,filters,kind="hp",limit=100,max_searches=100,force=False,ma
 
 
 def job_status(store,jid):
+    if getattr(store, "is_supabase_runtime", False):
+        return store.hp_job_status(jid)
     from src.repository.write_backend import write_repositories_for
     return write_repositories_for(store).jobs.job_status(jid)
 
 
 def recent_jobs(store):
+    if getattr(store, "is_supabase_runtime", False):
+        return store.hp_recent_jobs()
     from src.repository.write_backend import write_repositories_for
     return write_repositories_for(store).jobs.recent_jobs()
 
@@ -253,7 +258,7 @@ def _research_one(store,jid,job,options,researcher,cid,claim_token=None):
             return True
         # 接続の秘密や生Tracebackを画面/DBへ残さない。
         status = "ERROR"
-        note = str(exc) if isinstance(exc,SearchError) else "この医院の調査でエラーが発生しました。再調査または手動確認を行ってください。"
+        note = str(exc) if isinstance(exc, (SearchError, WebError)) else "この医院の調査でエラーが発生しました。再調査または手動確認を行ってください。"
         safe_result = {"research_status":"ERROR","research_error":note}
         if job["kind"]=="hp":
             safe_result.update(empty_hp_result("ERROR",record))

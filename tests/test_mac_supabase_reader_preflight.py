@@ -61,7 +61,7 @@ def successful_answers():
     answers = [("clinic_preview_reader", False, False, False, False, False),
                (False,), (False,), (False,)]
     for name in reader.REQUIRED_TABLES:
-        answers += [(name,), (True,)]
+        answers += [(True,), (name,), (True,)]
     return answers + [(164201,)]
 
 
@@ -74,7 +74,7 @@ class ReaderSafetyTests(unittest.TestCase):
     def test_reader_file_requires_private_permissions(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "reader.env"
-            p.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://example.invalid/db\n")
+            p.write_text("SUPABASE_READONLY_DB_URL=postgresql://example.invalid/db\n")
             p.chmod(0o644)
             with self.assertRaisesRegex(RuntimeError, "600"):
                 reader.load_reader_dsn(p)
@@ -94,6 +94,14 @@ class ReaderSafetyTests(unittest.TestCase):
             (False,), (True,),
         ])
         with self.assertRaisesRegex(RuntimeError, "書き込み権限"):
+            reader.verify_reader("fake-url", connect=lambda *a, **kw: conn)
+
+    def test_schema_without_usage_is_rejected(self):
+        conn = Connection([
+            ("clinic_preview_reader", False, False, False, False, False),
+            (False,), (False,), (False,), (False,),
+        ])
+        with self.assertRaisesRegex(RuntimeError, "スキーマの参照権限"):
             reader.verify_reader("fake-url", connect=lambda *a, **kw: conn)
 
     def test_valid_reader_is_accepted(self):

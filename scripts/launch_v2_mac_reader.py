@@ -21,6 +21,11 @@ REQUIRED_TABLES = (
     "email_research.clinic_email_status",
     "email_research.email_candidates",
 )
+HP_REQUIRED_TABLES = (
+    "research.research_jobs",
+    "research.research_job_items",
+    "app_config.settings",
+)
 WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
@@ -40,15 +45,15 @@ def load_reader_dsn(path=READER_FILE):
         if len(parts) != 1 or "=" not in parts[0]:
             raise RuntimeError("Reader設定の形式が不正です。")
         key, value = parts[0].split("=", 1)
-        if key != "SUPABASE_RUNTIME_DB_URL" or key in values:
-            raise RuntimeError("Reader設定はSUPABASE_RUNTIME_DB_URLの1行だけにしてください。")
+        if key != "SUPABASE_READONLY_DB_URL" or key in values:
+            raise RuntimeError("Reader設定はSUPABASE_READONLY_DB_URLの1行だけにしてください。")
         values[key] = value
-    if not values.get("SUPABASE_RUNTIME_DB_URL"):
+    if not values.get("SUPABASE_READONLY_DB_URL"):
         raise RuntimeError("Reader接続URLが未設定です。")
-    return values["SUPABASE_RUNTIME_DB_URL"]
+    return values["SUPABASE_READONLY_DB_URL"]
 
 
-def verify_reader(dsn, *, connect=None):
+def verify_reader(dsn, *, connect=None, required_tables=None):
     if connect is None:
         import psycopg
         connect = psycopg.connect
@@ -104,7 +109,11 @@ def verify_reader(dsn, *, connect=None):
             """)
             if cur.fetchone()[0]:
                 raise RuntimeError("シーケンス更新権限があります。起動を停止しました。")
-            for table in REQUIRED_TABLES:
+            for table in (required_tables if required_tables is not None else REQUIRED_TABLES):
+                schema, _name = table.split(".", 1)
+                cur.execute("SELECT has_schema_privilege(current_user, %s, 'USAGE')", (schema,))
+                if not cur.fetchone()[0]:
+                    raise RuntimeError(f"必要なスキーマの参照権限がありません: {schema}")
                 cur.execute("SELECT to_regclass(%s)", (table,))
                 if cur.fetchone()[0] is None:
                     raise RuntimeError(f"必要なテーブルがありません: {table}")
@@ -130,12 +139,12 @@ def main():
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     for key in (
-        "SUPABASE_RUNTIME_DB_URL", "CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND",
+        "SUPABASE_RUNTIME_DB_URL", "SUPABASE_READONLY_DB_URL", "CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND",
         "CLINIC_DB_PATH", "CLINIC_DEMO_DB_PATH",
     ):
         env.pop(key, None)
     env.update({
-        "SUPABASE_RUNTIME_DB_URL": dsn,
+        "SUPABASE_READONLY_DB_URL": dsn,
         "CLINIC_DATA_BACKEND": "supabase",
         "CLINIC_WRITE_BACKEND": "supabase",
         "CLINIC_COMDESK_PREVIEW_ONLY": "1",

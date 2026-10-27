@@ -92,7 +92,7 @@ class AutoHpRunner:
 
         try:
             return run_job(
-                store, jid, TavilySearchProvider(""), progress_callback=progress
+                store, jid, TavilySearchProvider(), progress_callback=progress
             )
         finally:
             stopped.set()

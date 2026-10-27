@@ -15,7 +15,8 @@ def _clean_runtime_env(monkeypatch):
             "CLINIC_WRITE_BACKEND", "SUPABASE_RUNTIME_DB_URL",
             "CLINIC_DATA_BACKEND", "CLINIC_COMMON_IDENTITY_ENABLED",
             "CLINIC_COMDESK_PREVIEW_ONLY", "CLINIC_READ_ONLY_UI",
-            "OUTREACH_GMAIL_DRAFTS_ENABLED")
+            "OUTREACH_GMAIL_DRAFTS_ENABLED", "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
+            "SUPABASE_READONLY_DB_URL", "CLINIC_RUNTIME_ENV_FILE", "CLINIC_NORMAL_MAC_RUNTIME")
     original = {key: os.environ.get(key) for key in keys}
     for key in keys:
         monkeypatch.delenv(key, raising=False)
@@ -37,6 +38,26 @@ def _write_email_env(root: Path, body: str) -> Path:
     path.write_text(body, encoding="utf-8")
     path.chmod(0o600)
     return path
+
+
+def test_runtime_env_can_be_loaded_from_external_private_writer_file(tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=supabase\nCLINIC_WRITE_BACKEND=supabase\n", encoding="utf-8"
+    )
+    external = tmp_path / "private" / "runtime-writer.env"
+    external.parent.mkdir()
+    external.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://external-writer.invalid/db\n", encoding="utf-8")
+    external.chmod(0o600)
+    monkeypatch.setenv("CLINIC_RUNTIME_ENV_FILE", str(external))
+    local = tmp_path / ".supabase-runtime.env.local"
+    local.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://repo-local.invalid/db\n", encoding="utf-8")
+    local.chmod(0o600)
+
+    launch_v2.load_runtime_env(tmp_path)
+
+    assert os.environ["SUPABASE_RUNTIME_DB_URL"] == "postgresql://external-writer.invalid/db"
 
 
 def test_serpapi_api_key_loads_from_local_env(tmp_path):
@@ -159,13 +180,38 @@ def test_preview_only_skips_email_secret_file_and_forces_safe_flags(tmp_path, mo
     runtime.chmod(0o600)
     _write_email_env(tmp_path, "UNRELATED_EMAIL_SECRET=never-read\n")
     monkeypatch.setenv("CLINIC_COMDESK_PREVIEW_ONLY", "1")
+    monkeypatch.setenv("SUPABASE_READONLY_DB_URL", "postgresql://fixture-reader.invalid/db")
+    monkeypatch.delenv("SUPABASE_RUNTIME_DB_URL", raising=False)
 
     launch_v2.load_runtime_env(tmp_path)
 
     assert os.environ["CLINIC_READ_ONLY_UI"] == "1"
+    assert "SUPABASE_RUNTIME_DB_URL" not in os.environ
     assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
     assert os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] == "false"
     assert "UNRELATED_EMAIL_SECRET" not in os.environ
+
+
+def test_normal_mac_hp_runtime_skips_email_and_gmail_credentials(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=supabase\nCLINIC_WRITE_BACKEND=supabase\n", encoding="utf-8"
+    )
+    writer = tmp_path / "writer.env"
+    writer.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://writer.invalid/db\n", encoding="utf-8")
+    writer.chmod(0o600)
+    monkeypatch.setenv("CLINIC_NORMAL_MAC_RUNTIME", "1")
+    monkeypatch.setenv("CLINIC_RUNTIME_ENV_FILE", str(writer))
+    monkeypatch.setenv("SUPABASE_READONLY_DB_URL", "postgresql://reader.invalid/db")
+    _write_email_env(tmp_path, "SERPAPI_API_KEY=must-not-load\nOUTREACH_GMAIL_OAUTH_TOKEN_JSON=must-not-load\n")
+
+    launch_v2.load_runtime_env(tmp_path)
+
+    assert os.environ["EMAIL_AUTO_RUN_ENABLED"] == "false"
+    assert os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] == "false"
+    assert "SERPAPI_API_KEY" not in os.environ
+    assert "OUTREACH_GMAIL_OAUTH_TOKEN_JSON" not in os.environ
 
 
 @pytest.mark.parametrize("value", ["true", "yes", "on", "enabled", "2"])
@@ -182,5 +228,6 @@ def test_preview_only_requires_supabase_reader_url(tmp_path, monkeypatch):
         "CLINIC_DATA_BACKEND=sqlite\n", encoding="utf-8"
     )
     monkeypatch.setenv("CLINIC_COMDESK_PREVIEW_ONLY", "1")
+    monkeypatch.delenv("SUPABASE_READONLY_DB_URL", raising=False)
     with pytest.raises(RuntimeError, match="専用Reader"):
         launch_v2.load_runtime_env(tmp_path)
