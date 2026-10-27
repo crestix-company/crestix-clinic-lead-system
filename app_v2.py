@@ -1471,7 +1471,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     hp_mode = hp_executor_mode()
     cloud_run_executor = hp_mode == "cloud_run"
     mode_options = ["指定件数だけ調査"]
-    if allow_unlimited_auto_run(hp_mode) and not mac_normal:
+    if allow_unlimited_auto_run(hp_mode):
         mode_options.append("未調査がなくなるまで自動調査")
     mode = st.radio(
         "調査モード",
@@ -1487,11 +1487,19 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
         getattr(st, level)(text)
     runner = runner_for(str(store.path))
     auto_runner = auto_hp_runner_for(str(store.path))
-    auto_state = (
-        {"status": "IDLE"} if mac_normal
-        else store.hp_auto_run_state() if getattr(store, "is_supabase_runtime", False)
-        else {"status": "IDLE"}
-    )
+    auto_state_available = True
+    try:
+        auto_state = (
+            store.hp_auto_run_state() if getattr(store, "is_supabase_runtime", False)
+            else {"status": "IDLE"}
+        )
+    except Exception as exc:
+        category = connection_error_category(exc)
+        sqlstate = str(getattr(exc, "sqlstate", "") or "")
+        logging.warning("HP Auto Run state read failed category=%s sqlstate=%s", category, sqlstate)
+        st.warning(safe_connection_message(exc, service="Clinic/HP Auto Run"))
+        auto_state = {"status": "UNAVAILABLE"}
+        auto_state_available = False
     auto_active = auto_state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
     # Loading/rerunning the UI never elects a local Auto Run worker. Worker start/resume
     # always requires the explicit control below; the database lease remains the cross-host fence.
@@ -1511,7 +1519,36 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
                else job_status(store, single_jobs[0]["id"])) if single_jobs else None
     unfinished = bool(current and current["status"] in {"RUNNING", "PAUSED", "BUDGET"})
 
-    if mode == "指定件数だけ調査":
+    if mode == "未調査がなくなるまで自動調査" and mac_normal:
+        auto_prefecture, auto_medical_types, auto_force = "", ["医科", "歯科"], False
+        available = store.hp_auto_run_eligible_count(auto_prefecture, auto_medical_types)
+        batch_size = st.number_input(
+            "1Batch件数", min_value=1, max_value=50, value=50,
+            key="simple_auto_batch_size",
+        )
+        estimated = (available + int(batch_size) - 1) // int(batch_size) if available else 0
+        st.write(f"Auto Run対象：{available:,}件")
+        st.caption(
+            "対象条件：active=true・未統合・Maps公式HP URLあり・HP調査履歴なし・"
+            "過去SUCCESSなし・既存Job予約なし。ERROR／要確認の再調査はしません。"
+        )
+        st.caption(f"対象は医科・歯科／全都道府県、1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
+        auto_confirmed = st.checkbox(
+            f"上記 {available:,}件を最大{estimated:,} Batchで自動調査することを確認",
+            key="simple_auto_confirm",
+        )
+        if st.button(
+            "Auto Run Jobを登録", type="primary",
+            disabled=(hp_control_disabled or not getattr(store, "is_supabase_runtime", False)
+                      or not auto_state_available or auto_active or runner.running() or unfinished
+                      or available == 0 or not auto_confirmed),
+            key="simple_auto_start", use_container_width=True,
+        ):
+            write_repositories_for(store).auto_hp.start(
+                auto_prefecture, auto_medical_types, auto_force, int(batch_size)
+            )
+            st.rerun()
+    elif mode == "指定件数だけ調査":
         count_cap = max_single_job_count(hp_mode)
         default_count = min(50, available) if available > 0 else 50
         count = st.number_input(
@@ -1580,7 +1617,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
                 st.caption("既存Jobの再開・停止は「詳細設定 > HP単発Job管理・復旧」から対象を選んで操作してください。")
     else:
         batch_size = st.number_input(
-            "1Batch件数", min_value=1, max_value=500, value=500,
+            "1Batch件数", min_value=1, max_value=50, value=50,
             key="simple_auto_batch_size",
         )
         estimated = (available + int(batch_size) - 1) // int(batch_size) if available else 0
@@ -1588,13 +1625,15 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
         st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
         if st.button(
             "Auto Run Jobを登録", type="primary",
-            disabled=mac_normal or hp_control_disabled or not getattr(store, "is_supabase_runtime", False) or auto_active or runner.running() or unfinished or available == 0 or not force_confirmed,
+            disabled=hp_control_disabled or not getattr(store, "is_supabase_runtime", False)
+                or not auto_state_available or auto_active or runner.running() or unfinished
+                or available == 0 or not force_confirmed,
             key="simple_auto_start", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.start(pref, research_medical_types, force, int(batch_size))
             st.rerun()
 
-    if not mac_normal and auto_state.get("status") != "IDLE":
+    if auto_state.get("status") not in {"IDLE", "UNAVAILABLE"}:
         if auto_state.get("status") in AUTO_HP_ACTIVE_STATUSES:
             _live_auto_hp_progress(store)
         else:
@@ -1609,20 +1648,20 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
                 auto_runner.start(store)
                 st.rerun()
         if auto_controls[0].button(
-            "自動調査を一時停止", disabled=mac_normal or hp_control_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
+            "自動調査を一時停止", disabled=hp_control_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
             key="simple_auto_pause", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.pause()
             st.rerun()
         if auto_controls[1].button(
-            "Auto Run状態を再開", disabled=mac_normal or hp_control_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
+            "Auto Run状態を再開", disabled=hp_control_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
             key="simple_auto_resume", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.resume()
             st.rerun()
 
     if mac_normal:
-        st.info("Email専用接続での手動調査・Human Reviewを利用できます。Auto RunとGmail操作は無効です。Clinicマスターの反映は機能別Writer設定時だけ明示操作で利用できます。")
+        st.info("Email専用接続での手動調査・Human Reviewを利用できます。Gmail操作は無効です。Clinicマスターの反映は機能別Writer設定時だけ明示操作で利用できます。")
     elif read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
     elif is_cloud_run_deployment():
@@ -3396,10 +3435,14 @@ if __name__=="__main__":
     except sqlite3.OperationalError:
         st.error("データファイルが使用中か、保存先に書き込めません。別ウィンドウの処理が終わってから再操作してください。")
     except Exception as exc:
+        category = connection_error_category(exc)
+        sqlstate = str(getattr(exc, "sqlstate", "") or "")
+        # Only a stable category and SQLSTATE enter logs; never log the driver
+        # message, DSN, username, or host.
+        logging.warning("Clinic/HP operation failed category=%s sqlstate=%s", category, sqlstate)
         if is_database_connection_exception(exc):
             st.error(safe_connection_message(exc, service="Clinic/HP"))
         else:
             # Driver exceptions may embed host, user, or credential fragments. Do not
             # print tracebacks or interpolate raw errors into the Streamlit page.
-            category = connection_error_category(exc)
             st.error(f"処理を完了できませんでした（{category}）。接続状態と操作内容を確認してください。")

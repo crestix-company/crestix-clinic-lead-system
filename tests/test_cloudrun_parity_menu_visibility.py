@@ -77,10 +77,11 @@ def test_mac_hp_controls_stay_in_original_step5_and_use_explicit_selection():
     assert "store.maps_hp_status_candidates" in simple
     assert "create_selected_hp_job" in simple
     assert '"SUCCESS": "SUCCESS（閲覧のみ）"' in simple
-    assert 'if allow_unlimited_auto_run(hp_mode) and not mac_normal:' in simple
-    assert "disabled=mac_normal or hp_control_disabled" in simple
-    assert '{"status": "IDLE"} if mac_normal' in simple
-    assert "if not mac_normal and auto_state.get(\"status\") != \"IDLE\":" in simple
+    assert 'if allow_unlimited_auto_run(hp_mode):' in simple
+    assert 'if mode == "未調査がなくなるまで自動調査" and mac_normal:' in simple
+    assert "max_value=50, value=50" in simple
+    assert '"自動調査を一時停止"' in simple
+    assert '"Auto Run状態を再開"' in simple
 
 
 def test_read_only_step_overview_is_static_text_with_no_write_calls():

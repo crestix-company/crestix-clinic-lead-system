@@ -20,6 +20,7 @@ from src.repository.hp_targets import maps_hp_target_predicate
 
 AUTO_RUN_KEY = "hp_auto_run_state"
 AUTO_RUN_LOCK = "crestix:hp_auto_run:v1"
+MAX_AUTO_BATCH_SIZE = 50
 ACTIVE_AUTO_STATUSES = frozenset({"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"})
 LEASE_SECONDS = 120
 
@@ -82,6 +83,12 @@ class SupabaseHpAutoRunRepository:
     @staticmethod
     def _candidate_ids(cur, prefecture, medical_types, force, limit, auto_run_id=None):
         predicate, args = maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
+            "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
+            "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
+            "AND success_i.result::text ILIKE '%%SUCCESS%%' AND success_j.kind='hp')"
+        )
         if auto_run_id:
             predicate += (
                 " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
@@ -92,13 +99,19 @@ class SupabaseHpAutoRunRepository:
         cur.execute(
             "SELECT c.id FROM public.clinics c WHERE " + predicate
             + " ORDER BY c.is_new DESC,c.id LIMIT %s FOR UPDATE OF c SKIP LOCKED",
-            (*args, min(500, max(1, int(limit)))),
+            (*args, min(MAX_AUTO_BATCH_SIZE, max(1, int(limit)))),
         )
         return [row[0] for row in cur.fetchall()]
 
     @staticmethod
     def _available_count(cur, prefecture, medical_types, force, auto_run_id=None):
         predicate, args = maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
+            "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
+            "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
+            "AND success_i.result::text ILIKE '%%SUCCESS%%' AND success_j.kind='hp')"
+        )
         if auto_run_id:
             predicate += (
                 " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
@@ -268,7 +281,7 @@ class SupabaseHpAutoRunRepository:
 
     def start(self, prefecture, medical_types, force, batch_size):
         """Create state and Batch 1 in one transaction; concurrent starts serialize."""
-        batch_size = min(500, max(1, int(batch_size)))
+        batch_size = min(MAX_AUTO_BATCH_SIZE, max(1, int(batch_size)))
         try:
             with self._conn.cursor() as cur:
                 self._lock(cur)

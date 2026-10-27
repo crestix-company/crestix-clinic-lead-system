@@ -53,6 +53,21 @@ def test_connection_error_categories_are_safe_and_retry_policy_is_read_only(exc,
     assert "secret" not in message and "password" not in message and "private-host" not in message
 
 
+def test_permission_denial_is_not_misreported_as_a_connection_failure():
+    from src.repository.connection_diagnostics import (
+        connection_error_category, is_database_connection_exception, safe_connection_message,
+    )
+
+    class PermissionDenied(Exception):
+        sqlstate = "42501"
+
+    exc = PermissionDenied("permission denied for table settings")
+    assert connection_error_category(exc) == "permission"
+    assert is_database_connection_exception(exc) is True
+    assert "接続しましたが" in safe_connection_message(exc)
+    assert "settings" not in safe_connection_message(exc)
+
+
 def test_runtime_store_cache_key_changes_when_runtime_credentials_change(monkeypatch):
     import app_v2
 

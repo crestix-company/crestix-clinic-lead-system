@@ -17,6 +17,11 @@ def connection_error_category(exc: BaseException) -> str:
         current = current.__cause__ or current.__context__
     message = " ".join(chain)
 
+    # A permission error means the DB connection succeeded. Keep it distinct from
+    # transport failures so UI messages and safe logs point to the real issue.
+    if "42501" in states or any(item in message for item in ("permission denied", "insufficient privilege")):
+        return "permission"
+
     if any(state.startswith("28") for state in states) or any(
         item in message for item in (
             "password authentication failed", "authentication failed", "invalid password",
@@ -70,13 +75,14 @@ def retryable_read_connection_error(exc: BaseException) -> bool:
 
 
 def is_database_connection_exception(exc: BaseException) -> bool:
-    if connection_error_category(exc) == "configuration":
+    category = connection_error_category(exc)
+    if category in {"configuration", "permission"}:
         return True
     try:
         import psycopg
     except ImportError:
         return isinstance(exc, TimeoutError)
-    return isinstance(exc, (psycopg.Error, TimeoutError))
+    return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError, TimeoutError))
 
 
 def safe_connection_message(exc: BaseException, *, service="Clinic/HP") -> str:
@@ -85,6 +91,7 @@ def safe_connection_message(exc: BaseException, *, service="Clinic/HP") -> str:
     messages = {
         "authentication": f"{service} DB認証に失敗しました。正式ランチャーで読み込む接続資格情報を確認してください。",
         "configuration": f"{service} DB接続設定がありません。正式ランチャーから起動し、接続設定を確認してください。",
+        "permission": f"{service} DBには接続しましたが、必要なReader権限がありません。管理者に権限設定を確認してください。",
         "query_timeout": f"{service} DBの読取がタイムアウトしました。時間をおいて再試行してください。",
         "timeout": f"{service} DB接続がタイムアウトしました。ネットワーク状態を確認してください。",
         "disconnected": f"{service} DB接続が切断されました。読取は最大1回だけ再接続して再試行します。",

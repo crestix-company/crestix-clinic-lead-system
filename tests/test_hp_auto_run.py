@@ -43,9 +43,9 @@ def _state(total=1159, force=False):
     )
 
 
-def test_a_b_h_500_batch_chain_1159_completes_without_extra_job():
+def test_auto_batch_chain_is_capped_at_50_and_completes_without_extra_job():
     state = _state()
-    assert state["batch_size"] == 500 and state["current_batch"] == 1
+    assert state["batch_size"] == 50 and state["current_batch"] == 1
     state = advance_completed_batch(
         state, remaining=659, next_job_id="job-2", timestamp="2026-10-08T01:00:00+00:00"
     )
@@ -61,12 +61,12 @@ def test_a_b_h_500_batch_chain_1159_completes_without_extra_job():
     assert state["current_job_id"] == "job-3"  # no fourth child was created
 
 
-def test_batch_size_is_always_capped_at_500():
+def test_batch_size_is_always_capped_at_50():
     state = initial_auto_state(
         run_id="r", prefecture="", medical_types=["医科", "歯科"], force=False,
         batch_size=6000, initial_count=6000, current_job_id="j", timestamp="t",
     )
-    assert state["batch_size"] == 500
+    assert state["batch_size"] == 50
 
 
 def test_i_j_force_only_removes_ledger_exclusion_not_active_job_guard():
@@ -134,7 +134,7 @@ def test_k_stale_process_cannot_finish_item_after_new_claim(tmp_path):
 def test_k_supabase_start_serializes_state_and_batch_creation():
     from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
 
-    ids = [(i,) for i in range(1, 501)]
+    ids = [(i,) for i in range(1, 51)]
     conn = _Connection([
         None, None, ('{"status":"IDLE"}',), None, (1159,), ids,
     ])
@@ -142,8 +142,11 @@ def test_k_supabase_start_serializes_state_and_batch_creation():
     statements = [sql for sql, _params in conn.executed]
     assert "pg_advisory_xact_lock" in statements[0]
     assert any("FOR UPDATE" in sql and "app_config.settings" in sql for sql in statements)
-    assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 500
-    assert state["initial_count"] == 1159 and state["batch_size"] == 500
+    assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 50
+    assert state["initial_count"] == 1159 and state["batch_size"] == 50
+    candidate_sql = next(sql for sql in statements if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "success_i.state='DONE'" in candidate_sql
+    assert "success_i.result::text ILIKE '%%SUCCESS%%'" in candidate_sql
     assert state["current_job_id"] and conn.committed == 1 and conn.rolled_back == 0
 
 

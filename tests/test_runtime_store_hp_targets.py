@@ -268,3 +268,22 @@ def test_sqlite_projection_is_not_used_to_guess_step4_research_completion():
         is_supabase_runtime = False
 
     assert app_v2._maps_hp_available_count(LocalStore(), "東京都", False, ["医科"]) == 0
+
+
+def test_auto_run_read_counts_use_reader_projection_and_exclude_historical_success():
+    store, conn = _store([(17,), (9,)])
+
+    assert store.hp_auto_run_eligible_count("", ["医科", "歯科"]) == 17
+    assert store.hp_auto_run_remaining_count({
+        "prefecture": "", "medical_types": ["医科", "歯科"], "force": False, "run_id": "r1",
+    }) == 9
+
+    eligible_sql, eligible_args = conn.calls[0]
+    remaining_sql, remaining_args = conn.calls[1]
+    assert "FROM public.clinic_cloudrun_readonly c" in eligible_sql
+    assert "FROM public.clinic_cloudrun_readonly c" in remaining_sql
+    assert "prior_i.state='DONE'" in eligible_sql and "prior_i.result::text ILIKE '%%SUCCESS%%'" in eligible_sql
+    assert "success_i.state='DONE'" in remaining_sql and "success_i.result::text ILIKE '%%SUCCESS%%'" in remaining_sql
+    assert "public.clinics" not in eligible_sql + remaining_sql
+    assert eligible_args == (["医科", "歯科"],)
+    assert remaining_args == (["医科", "歯科"], "r1")

@@ -466,16 +466,40 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def hp_auto_run_remaining_count(self, state):
         predicate, args = _maps_hp_target_predicate(
-            state.get("prefecture", ""), state.get("medical_types"), state.get("force", False)
+            state.get("prefecture", ""), state.get("medical_types"), state.get("force", False),
+            clinic_relation="public.clinic_cloudrun_readonly",
         )
         predicate += (
             " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
             "JOIN research.research_jobs prior_j ON prior_j.id=prior_i.job_id "
             "WHERE prior_i.clinic_id=c.id AND prior_j.options_json->>'auto_run_id'=%s)"
         )
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
+            "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
+            "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
+            "AND success_i.result::text ILIKE '%%SUCCESS%%' AND success_j.kind='hp')"
+        )
         args.append(state.get("run_id", ""))
         with self._conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
+            return int(cur.fetchone()[0])
+
+    @_retry_closed_read_connection
+    def hp_auto_run_eligible_count(self, prefecture="", medical_types=None):
+        """Count fresh Auto Run targets, excluding historical successful HP Jobs."""
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, False,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
+            "JOIN research.research_jobs prior_j ON prior_j.id=prior_i.job_id "
+            "WHERE prior_i.clinic_id=c.id AND prior_i.state='DONE' "
+            "AND prior_i.result::text ILIKE '%%SUCCESS%%' AND prior_j.kind='hp')"
+        )
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
             return int(cur.fetchone()[0])
 
     def mhlw_join_status(self):
