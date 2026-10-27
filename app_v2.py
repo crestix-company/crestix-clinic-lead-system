@@ -1314,8 +1314,8 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
 
     st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
     if mac_normal:
-        st.caption("このRuntimeにはComdesk取込専用Writerが未設定のため、アップロードとDB反映は停止しています。")
-    import_ui_comdesk_step(store, write_disabled)
+        st.caption("取込前プレビューを確認できます。DB反映にはComdesk取込専用Writerが必要です。")
+    import_ui_comdesk_step(store, write_disabled, mac_normal=mac_normal)
 
     st.subheader("現在のデータ状況")
     show_web_research_metrics(store, read_only=mac_normal, compact=True)
@@ -1331,7 +1331,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
 
     st.subheader("Step2：厚生局データを取り込む")
     if mac_normal:
-        st.caption("厚生局取込はClinic Masterの更新権限を必要とします。専用Writerが未設定のため停止しています。")
+        mac_kouseikyoku_import_ui()
     cloud_kouseikyoku_import_ui(store)
 
     st.subheader("Step3：Google Maps Collector")
@@ -1346,20 +1346,22 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
 
     st.subheader("Step4：Google Maps結果を取り込む")
     if mac_normal:
-        st.caption("Maps取込は既存Clinicとの照合・provenance登録を行う専用Writerが未設定のため停止しています。")
+        st.caption("CSV内容を確認できます。DB照合・反映にはMaps取込専用Writerが必要です。")
 
     maps_upload = st.file_uploader(
         "③ Google Maps収集結果CSVをアップロード",
         type=["csv"],
         key="simple_maps_results",
-        disabled=write_disabled,
+        disabled=write_disabled and not mac_normal,
     )
     if maps_upload:
         maps_table = load_table(maps_upload.getvalue(), maps_upload.name)
         maps_frame = maps_table.data.copy()
         maps_frame.columns = maps_table.headers
 
-        if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", disabled=write_disabled, use_container_width=True):
+        if mac_normal:
+            mac_maps_import_controls(maps_upload, maps_frame)
+        elif st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import", disabled=write_disabled, use_container_width=True):
             with st.spinner("Google Maps結果を取り込んでいます…"):
                 result = write_repositories_for(store).provenance.import_maps_results(maps_frame)
             st.success(
@@ -1620,7 +1622,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
             st.rerun()
 
     if mac_normal:
-        st.info("Email専用接続での手動調査・Human Reviewを利用できます。Auto RunとGmail操作は無効です。Clinicマスターの取込・同期は専用Writer整備まで停止しています。")
+        st.info("Email専用接続での手動調査・Human Reviewを利用できます。Auto RunとGmail操作は無効です。Clinicマスターの反映は機能別Writer設定時だけ明示操作で利用できます。")
     elif read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
     elif is_cloud_run_deployment():
@@ -1640,19 +1642,29 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
 
     st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
     st.caption("件数ごとに母集団を明記しています。URL・調査完了は全HP URL登録済み母集団、UUID・除外・同期対象は最新のHP成功医院母集団です。各除外件数は優先順で重複を除いています。")
+    export_store = None
     try:
-        breakdown = comdesk_sync_breakdown(store, metrics)
+        if mac_normal:
+            from src.repository.mac_feature_access import comdesk_reader_store
+            export_store = comdesk_reader_store()
+        else:
+            export_store = store
+        breakdown = comdesk_sync_breakdown(export_store, metrics)
         st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
-    except Exception as exc:
-        st.warning(f"Step6の内訳を確認できません：{exc}")
-    render_comdesk_sync_export(store, demo)
+        render_comdesk_sync_export(export_store, demo)
+    except Exception:
+        st.metric("Comdesk同期対象", "未確定")
+        st.warning("Step6専用Readerの権限・接続を確認できないため、Comdesk同期用CSV出力を停止しました。")
+    finally:
+        if mac_normal and export_store is not None:
+            export_store._conn.close()
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
     if mac_normal:
-        st.caption("Step7のUUID照合プレビューにはComdesk Export Reader、反映にはClinic Sync専用Writerが必要です。権限未設定のため停止しています。")
-    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
-    render_comdesk_clinic_sync(store, write_disabled)
+        st.caption("Step7のUUID照合プレビューにはComdesk Export Reader、反映にはClinic Sync専用Writerが必要です。設定された操作だけ利用できます。")
+    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む", mac_normal=mac_normal)
+    render_comdesk_clinic_sync(store, write_disabled, mac_normal=mac_normal)
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1669,8 +1681,85 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     )
 
 
-def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
-    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled)
+def mac_kouseikyoku_import_ui():
+    """Existing master parser with an explicit, scoped Mac apply action."""
+    from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
+    from src.master.kouseikyoku_cloud_import import (
+        kouseikyoku_import_idempotency_key, preview_kouseikyoku_import,
+    )
+
+    upload = st.file_uploader("更新用の厚生局CSV・Excel", type=["csv", "xlsx", "xls"], key="mac_master_upload")
+    if not upload:
+        return
+    mode_label = st.selectbox("データ形式", ["標準CSV/Excel", "関東信越厚生局の帳票Excel"], key="mac_master_mode")
+    mode = "kanto_excel" if "帳票" in mode_label else "standard"
+    prefecture = st.text_input("都道府県（帳票Excel用）", "東京都", key="mac_master_pref")
+    names = sheet_names(upload.getvalue(), upload.name)
+    sheet = st.selectbox("厚生局シート", names, key="mac_master_sheet") if names else None
+    try:
+        frame = load_master(upload.getvalue(), upload.name, mode, prefecture, sheet)
+        preview = preview_kouseikyoku_import(frame)
+    except (ValueError, OSError) as exc:
+        st.error(f"厚生局ファイルを確認できません：{exc}")
+        return
+    st.caption(f"取込前プレビュー：{preview['row_count']:,}行。新規・更新・重複の内訳は反映時に確定します。")
+    st.dataframe(preview["preview"], hide_index=True)
+    fingerprint = kouseikyoku_import_idempotency_key(upload.getvalue(), mode=mode, prefecture=prefecture, sheet=sheet)
+    confirmed = st.checkbox("内容を確認しました", key="mac_master_confirm_" + fingerprint)
+    if st.button("厚生局データを統合する", type="primary", key="mac_master_apply",
+                 disabled=not confirmed or not feature_writer_configured("kouseikyoku_import")
+                          or st.session_state.get("mac_master_applied") == fingerprint):
+        try:
+            repository = feature_writer_repositories("kouseikyoku_import").clinics
+            result = repository.import_master(frame)
+            st.session_state["mac_master_applied"] = fingerprint
+            report_import(result)
+        except Exception:
+            st.error("厚生局専用Writerの接続または取込結果を確認できません。DB状態を照合してから再操作してください。")
+
+
+def mac_maps_import_controls(upload, frame):
+    """Keep the Step4 uploader and make preview/apply separate explicit actions."""
+    from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
+    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+
+    st.dataframe(frame.head(10), hide_index=True, use_container_width=True)
+    fingerprint = maps_import_idempotency_key(upload.getvalue())
+    configured = feature_writer_configured("maps_import")
+    if st.button("DB照合プレビュー", key="simple_maps_preview", disabled=not configured):
+        try:
+            repository = feature_writer_repositories("maps_import").provenance
+            preview = preview_maps_import(repository, frame)
+            st.session_state["simple_maps_preview_result"] = (fingerprint, preview["counts"])
+        except Exception:
+            st.session_state.pop("simple_maps_preview_result", None)
+            st.error("Maps専用WriterでのREAD ONLY照合を確認できません。")
+    cached = st.session_state.get("simple_maps_preview_result")
+    valid = bool(cached and cached[0] == fingerprint)
+    if valid:
+        st.dataframe(pd.DataFrame([cached[1]]), hide_index=True, use_container_width=True)
+    confirmed = valid and st.checkbox("照合結果を確認しました", key="simple_maps_confirm_" + fingerprint)
+    if st.button("Google Maps結果を取り込む", type="primary", key="simple_maps_import",
+                 disabled=not configured or not confirmed or st.session_state.get("simple_maps_applied") == fingerprint,
+                 use_container_width=True):
+        try:
+            repository = feature_writer_repositories("maps_import").provenance
+            result = repository.import_maps_results(frame)
+            st.session_state["simple_maps_applied"] = fingerprint
+            st.success(
+                f"取込 {result.get('TOTAL',0):,}件／HP取得 {result.get('WEBSITE',0):,}件／"
+                f"HPなし {result.get('NO_WEBSITE',0):,}件／要確認 {result.get('AMBIGUOUS',0):,}件／"
+                f"エラー {result.get('ERROR',0):,}件"
+            )
+        except Exception:
+            st.error("Maps専用Writerの接続または取込結果を確認できません。DB状態を照合してから再操作してください。")
+
+
+def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録", mac_normal=False):
+    from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
+    from src.master.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
+    feature = "comdesk_sync" if key_prefix == "simple_comdesk_reimport" else "comdesk_import"
+    upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled and not mac_normal)
     if upload:
         table = upload_table(upload, key_prefix)
         inferred = infer_comdesk_columns(table)
@@ -1688,10 +1777,28 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview, hide_index=True)
-        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=write_disabled, use_container_width=True):
-            with st.spinner("Comdeskデータを照合・登録しています…"):
-                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
-            report_import(result)
+        confirmed = True
+        if mac_normal:
+            summary = preview_comdesk_import(table, mapping)
+            st.caption(f"取込前プレビュー：{summary['row_count']:,}行。DB照合結果は反映時に確定します。")
+            confirmed = st.checkbox("取込対象と列対応を確認しました", key=key_prefix+"_mac_confirm")
+            fingerprint = comdesk_import_idempotency_key(upload.getvalue(), mapping)
+        can_write = feature_writer_configured(feature) if mac_normal else not write_disabled
+        if st.button(button_label, type="primary", key=key_prefix+"_submit",
+                     disabled=not can_write or not confirmed or (mac_normal and st.session_state.get(key_prefix+"_mac_applied") == fingerprint),
+                     use_container_width=True):
+            try:
+                repositories = feature_writer_repositories(feature) if mac_normal else write_repositories_for(store)
+                with st.spinner("Comdeskデータを照合・登録しています…"):
+                    result = repositories.clinics.import_comdesk(table, mapping)
+                if mac_normal:
+                    st.session_state[key_prefix+"_mac_applied"] = fingerprint
+                report_import(result)
+            except Exception:
+                if mac_normal:
+                    st.error("Comdesk専用Writerの接続または取込結果を確認できません。DB状態を照合してから再操作してください。")
+                else:
+                    raise
     # These are independent, separately-gated panels -- they must render
     # regardless of whether the legacy uploader above has a file selected.
     # (Review fix: previously the `if not upload: return` above exited the
@@ -1709,7 +1816,7 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     cloud_comdesk_import_ui(store, key_prefix=key_prefix)
 
 
-def render_comdesk_clinic_sync(store, write_disabled):
+def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
     """Step7's separate preview/apply path for formal Comdesk return files."""
     import pandas as pd
     from src.master.comdesk_sync import plan_sync, apply_sync
@@ -1722,14 +1829,23 @@ def render_comdesk_clinic_sync(store, write_disabled):
     }
     st.markdown("**医院情報の差分同期（30列形式）**")
     st.caption("CSV取込とDB反映を分けています。完全一致したUUIDだけを照合し、反映前に差分を確認できます。")
-    upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=write_disabled)
+    from src.repository.mac_feature_access import comdesk_reader_configured, comdesk_reader_store
+    from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
+    preview_disabled = write_disabled and not (mac_normal and comdesk_reader_configured())
+    apply_disabled = write_disabled and not (mac_normal and feature_writer_configured("comdesk_sync"))
+    upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=preview_disabled)
     if not upload:
         return
     table = upload_table(upload, "step7_clinic_sync")
-    if st.button("CSVを照合して差分プレビュー", key="step7_clinic_sync_preview", disabled=write_disabled):
+    if st.button("CSVを照合して差分プレビュー", key="step7_clinic_sync_preview", disabled=preview_disabled):
         try:
-            repo = write_repositories_for(store).clinics
-            plan = plan_sync(table, repo)
+            reader = comdesk_reader_store() if mac_normal else None
+            try:
+                repo = reader.repositories.clinics if reader else write_repositories_for(store).clinics
+                plan = plan_sync(table, repo)
+            finally:
+                if reader:
+                    reader._conn.close()
             st.session_state["step7_clinic_sync_plan"] = plan
             st.session_state["step7_clinic_sync_name"] = upload.name
         except Exception as exc:
@@ -1760,17 +1876,24 @@ def render_comdesk_clinic_sync(store, write_disabled):
             if str(change["after"]).lower().startswith(("https://", "http://")):
                 st.link_button("変更後URLを開く", change["after"], key=f"step7_url_link_{row['row_number']}")
             if (str(change["after"]).lower().startswith(("https://", "http://"))
-                    and st.checkbox("このURLが対象医院の公式ホームページであることを確認", key=f"step7_url_review_{row['row_number']}", disabled=write_disabled)):
+                    and st.checkbox("このURLが対象医院の公式ホームページであることを確認", key=f"step7_url_review_{row['row_number']}", disabled=apply_disabled)):
                 reviewed_url_rows.append(row["row_number"])
     auto_count = plan["counts"]["AUTO_UPDATE"]
     apply_enabled = bool(auto_count or reviewed_url_rows)
     if st.button("プレビューの更新候補をDBへ反映", type="primary", key="step7_clinic_sync_apply",
-                 disabled=write_disabled or not apply_enabled):
+                 disabled=apply_disabled or not apply_enabled):
         try:
-            repository = write_repositories_for(store).clinics
-            fresh_plan = plan_sync(table, repository)
+            reader = comdesk_reader_store() if mac_normal else None
+            try:
+                read_repo = reader.repositories.clinics if reader else write_repositories_for(store).clinics
+                fresh_plan = plan_sync(table, read_repo)
+            finally:
+                if reader:
+                    reader._conn.close()
             if fresh_plan != plan:
                 raise ValueError("CSVまたは医院データがプレビュー後に変わりました。最新差分を再確認してください。")
+            repository = (feature_writer_repositories("comdesk_sync").clinics
+                          if mac_normal else write_repositories_for(store).clinics)
             result = apply_sync(repository, fresh_plan, reviewed_url_rows=reviewed_url_rows)
             st.success(f"反映完了：{result.get('updated', 0):,}件")
             st.session_state.pop("step7_clinic_sync_plan", None)
@@ -2624,7 +2747,9 @@ def comdesk_sync_breakdown(store, master_metrics):
     if hp_counts is None:
         raise ValueError("HP URL母集団の集計を取得できません。")
     return [
-        {"項目": "厚生局全件", "件数": f"{int(master_metrics.get('厚生局取込レコード', 0)):,}件", "母集団・条件": "厚生局 source_records の取込元レコード数（医院数ではありません）"},
+        {"項目": "厚生局全件", "件数": (f"{int(master_metrics['厚生局取込レコード']):,}件"
+          if master_metrics.get("厚生局取込レコード") is not None else "—"),
+         "母集団・条件": "厚生局 source_records の取込元レコード数（医院数ではありません）。Reader権限外なら非表示"},
         {"項目": "HP URL取得済み", "件数": f"{int(hp_counts.get('url_acquired', 0)):,}件", "母集団・条件": "hp_url または Maps WebサイトURL 登録済み医院"},
         {"項目": "HP調査完了", "件数": f"{int(hp_counts.get('researched', 0)):,}件", "母集団・条件": "上記URL母集団のうち fetch_status=OK（取得・公式HP検証完了）"},
         {"項目": "HP成功医院（同期候補の母集団）", "件数": f"{len(clinics):,}件", "母集団・条件": "現行同期処理と同じ最新完了HP Job（SQLiteはhp_status=VERIFIEDかつURLあり）"},
@@ -2928,7 +3053,7 @@ def advanced_ui(store, demo, *, mac_normal=False):
     )
 
     if mac_normal:
-        st.caption("Mac通常版では、既存の専用Email接続による手動調査・Human Reviewを利用できます。Email Auto RunとGmail操作は無効です。Clinicマスター更新は専用Writer整備まで停止しています。")
+        st.caption("Mac通常版では、既存の専用Email接続による手動調査・Human Reviewを利用できます。Email Auto RunとGmail操作は無効です。Clinicマスター更新は機能別Writer設定時だけ明示操作で利用できます。")
         if section == "ダッシュボード":
             metrics = store.metrics(read_only_ui=True)
             columns = st.columns(5)
@@ -3175,7 +3300,7 @@ def main():
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
     elif hp_normal_runtime:
-        st.info("Mac通常版です。データ準備・Google Maps・営業出力はREAD ONLY、HP Job操作だけ明示操作で利用できます。")
+        st.info("Mac通常版です。画面閲覧は専用Reader、HP JobはHP専用Writerを使用します。取込・同期は機能別接続が設定された場合だけ明示操作で利用できます。")
     elif nav_locked:
         st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
 

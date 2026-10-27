@@ -133,6 +133,10 @@ def test_step6_breakdown_matches_sync_exclusion_order_and_labels_populations():
     ))
     assert exclusions == 4
     assert "hp_url" in rows["HP URL取得済み"]["母集団・条件"]
+    readonly_rows = {row["項目"]: row for row in app_v2.comdesk_sync_breakdown(
+        FixtureStore(), {"厚生局取込レコード": None},
+    )}
+    assert readonly_rows["厚生局全件"]["件数"] == "—"
     assert "最新完了HP Job" in rows["HP成功医院（同期候補の母集団）"]["母集団・条件"]
 
 
