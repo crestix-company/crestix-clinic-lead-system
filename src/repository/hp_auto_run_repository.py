@@ -142,6 +142,25 @@ class SupabaseHpAutoRunRepository:
         )
         return jid
 
+    @staticmethod
+    def _accumulate_completed_job_results(cur, state):
+        """Fold one finished child Job into the JSON checkpoint for Reader-only progress."""
+        cur.execute(
+            "SELECT COALESCE(result,''),count(*) FROM research.research_job_items "
+            "WHERE job_id=%s AND state='DONE' GROUP BY result",
+            (state.get("current_job_id"),),
+        )
+        totals = {str(result): int(count) for result, count in cur.fetchall()}
+        cumulative = dict(state.get("cumulative_results") or {})
+        for result, count in totals.items():
+            cumulative[result] = int(cumulative.get(result, 0) or 0) + count
+        state["cumulative_results"] = cumulative
+        # Existing checkpoints predating this field cannot account for their already
+        # completed child Jobs. Keep that limitation explicit through the first resume.
+        state["cumulative_history_complete"] = bool(
+            state.get("cumulative_history_complete", False)
+        )
+
     def get_state(self):
         try:
             with self._conn.cursor() as cur:
@@ -383,6 +402,7 @@ class SupabaseHpAutoRunRepository:
                 if not row or row[0] != "COMPLETED":
                     self._conn.commit()
                     return state
+                self._accumulate_completed_job_results(cur, state)
                 remaining = self._available_count(
                     cur, state.get("prefecture", ""), state.get("medical_types"), state.get("force", False),
                     state.get("run_id"),

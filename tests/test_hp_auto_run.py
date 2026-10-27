@@ -69,6 +69,27 @@ def test_batch_size_is_always_capped_at_50():
     assert state["batch_size"] == 50
 
 
+def test_completed_batch_results_are_checkpointed_for_reader_only_progress():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+
+    state = {
+        "current_job_id": "job-1", "cumulative_results": {"SUCCESS": 4},
+        "cumulative_history_complete": True,
+    }
+    conn = _Connection([[ ("SUCCESS", 3), ("ERROR", 2) ]])
+    SupabaseHpAutoRunRepository._accumulate_completed_job_results(_Cursor(conn), state)
+
+    assert state["cumulative_results"] == {"SUCCESS": 7, "ERROR": 2}
+    assert state["cumulative_history_complete"] is True
+    assert "GROUP BY result" in conn.executed[0][0]
+
+    legacy = {"current_job_id": "job-legacy"}
+    legacy_conn = _Connection([[ ("NOT_FOUND", 5) ]])
+    SupabaseHpAutoRunRepository._accumulate_completed_job_results(_Cursor(legacy_conn), legacy)
+    assert legacy["cumulative_results"] == {"NOT_FOUND": 5}
+    assert legacy["cumulative_history_complete"] is False
+
+
 def test_i_j_force_only_removes_ledger_exclusion_not_active_job_guard():
     normal, _ = maps_hp_target_predicate("東京都", ["医科"], force=False)
     forced, _ = maps_hp_target_predicate("東京都", ["医科"], force=True)

@@ -184,3 +184,48 @@ def test_estimated_total_tracks_current_batch_plus_future_batches(monkeypatch):
     repo = FakeAutoRepo(_state(current_batch=3), cumulative, remaining_count=501)
     snapshot = app_v2._auto_hp_progress_snapshot(store=None, auto_repo=repo)
     assert snapshot["estimated_total"] == 5
+
+
+def test_reader_progress_uses_state_checkpoint_and_current_job_results(monkeypatch):
+    state = {
+        "status": "RUNNING", "run_id": "r1", "current_job_id": "j2",
+        "initial_count": 55, "batch_size": 50, "current_batch": 2,
+        "completed_batches": 1, "cumulative_results": {"SUCCESS": 40, "ERROR": 5},
+        "cumulative_history_complete": True,
+    }
+    class ReaderStore:
+        is_supabase_runtime = True
+        def hp_auto_run_state(self): return dict(state)
+        def hp_auto_run_cumulative_results(self, run_id): return dict(state["cumulative_results"])
+        def hp_auto_run_remaining_count(self, _state): return 0
+
+    monkeypatch.setattr(app_v2, "job_status", lambda *_args: {
+        "status": "RUNNING", "counts": {"DONE": 2, "PENDING": 3}, "total": 5,
+        "results": {"SUCCESS": 1, "NOT_FOUND": 1},
+    })
+    snapshot = app_v2._auto_hp_progress_snapshot(ReaderStore(), None)
+    assert snapshot["cumulative"] == {"SUCCESS": 41, "ERROR": 5, "NOT_FOUND": 1}
+    assert snapshot["processed"] == 47
+    assert snapshot["current_pending"] == 3
+    assert snapshot["future_remaining"] == 0
+    assert snapshot["legacy_breakdown_unavailable"] is False
+
+
+def test_legacy_completed_reader_checkpoint_does_not_require_job_options_select(monkeypatch):
+    class ReaderStore:
+        is_supabase_runtime = True
+        def hp_auto_run_state(self):
+            return {"status": "COMPLETED", "run_id": "old", "current_job_id": "j1",
+                    "initial_count": 2617, "batch_size": 500, "current_batch": 6}
+        def hp_auto_run_cumulative_results(self, _run_id): return {}
+        def hp_auto_run_remaining_count(self, _state):
+            raise AssertionError("completed runs do not need a future target count")
+
+    monkeypatch.setattr(app_v2, "job_status", lambda *_args: {
+        "status": "COMPLETED", "counts": {"DONE": 5}, "total": 5,
+        "results": {"SUCCESS": 3, "ERROR": 2},
+    })
+    snapshot = app_v2._auto_hp_progress_snapshot(ReaderStore(), None)
+    assert snapshot["processed"] == snapshot["current_scope_total"] == 2617
+    assert snapshot["legacy_breakdown_unavailable"] is True
+    assert snapshot["future_remaining"] == 0

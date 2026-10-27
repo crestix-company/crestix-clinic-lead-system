@@ -293,21 +293,26 @@ def _auto_hp_progress_snapshot(store, auto_repo):
 
     if reader_runtime and state.get("run_id"):
         cumulative = store.hp_auto_run_cumulative_results(state["run_id"])
+        history_complete = bool(state.get("cumulative_history_complete", False))
+        if auto_current and state.get("status") in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}:
+            for result, count in (auto_current.get("results") or {}).items():
+                cumulative[result] = int(cumulative.get(result, 0) or 0) + int(count or 0)
     else:
         cumulative = auto_repo.cumulative_results(state.get("run_id", "")) if auto_repo is not None and state.get("run_id") else {}
+        history_complete = True
     initial_count = int(state.get("initial_count", 0) or 0)
-    # 「処理済み」はこのRunに紐づくDONE(terminal result)の直接集計のみを根拠にする。
-    # 開始時対象からの引き算にすると、開始後に新たにeligibleになった医院が
-    # remaining_count()経由で混入して処理済みが0にクランプされてしまう。
     processed = sum(cumulative.values())
+    # Existing completed checkpoints predate the cumulative-results field. Their
+    # terminal state and initial cohort still support an overall completion total,
+    # while the per-result breakdown was not persisted for Reader access.
+    legacy_breakdown_unavailable = reader_runtime and not history_complete
+    if legacy_breakdown_unavailable and state.get("status") == "COMPLETED":
+        processed = initial_count
 
-    # Auto Runは固定コホートではない: hp_auto_run_repository.advance()はBatch完了の
-    # たびに_available_count(..., auto_run_id)を再実行し、その時点で新たにeligibleに
-    # なった医院も同じRunの次Batchへ取り込む（candidate selectionはここでは変更しない）。
-    # そのため「残り」はinitial_countからの差分ではなく、現在Jobの未完了分＋
-    # 次Batch以降で実際に取り込まれ得る候補数（future_remaining）で表す。
     current_remaining = current_pending + current_running
-    if reader_runtime and state.get("run_id"):
+    if state.get("status") in {"COMPLETED", "IDLE", "CANCELLED"}:
+        future_remaining = 0
+    elif reader_runtime and state.get("run_id"):
         future_remaining = store.hp_auto_run_remaining_count(state)
     else:
         future_remaining = auto_repo.remaining_count(state) if auto_repo is not None and state.get("run_id") else 0
@@ -339,6 +344,7 @@ def _auto_hp_progress_snapshot(store, auto_repo):
         "current_running": current_running,
         "current_total": current_total,
         "cumulative": cumulative,
+        "legacy_breakdown_unavailable": legacy_breakdown_unavailable,
         "estimated_total": estimated_total,
         "last_updated": (
             (auto_current or {}).get("updated_at")
@@ -381,14 +387,15 @@ def _render_auto_hp_progress(snapshot, *, live=False):
         batch_ratio = min(1.0, max(0.0, current_done / current_total))
         batch_pct = batch_ratio * 100
     result = snapshot["cumulative"]
+    result_value = lambda key: "—" if snapshot.get("legacy_breakdown_unavailable") else f"{result.get(key, 0):,}件"
     metrics_cols = st.columns(6)
     headline_metrics = [
         ("開始時対象", f"{initial_count:,}件"),
         ("処理済み", f"{processed:,}件"),
         ("現在残り候補", f"{total_remaining:,}件"),
-        ("HP取得成功", f"{result.get('SUCCESS', 0):,}件"),
-        ("要確認", f"{result.get('REVIEW', 0):,}件"),
-        ("エラー", f"{result.get('ERROR', 0):,}件"),
+        ("HP取得成功", result_value("SUCCESS")),
+        ("要確認", result_value("REVIEW")),
+        ("エラー", result_value("ERROR")),
     ]
     for column, (label, value) in zip(metrics_cols, headline_metrics):
         with column.container(border=True):
@@ -397,6 +404,8 @@ def _render_auto_hp_progress(snapshot, *, live=False):
         f"全体進捗 {processed:,}/{current_scope_total:,}件（{overall_pct:.1f}%）"
         + (f"／現在Batch {current_done:,}/{current_total:,}件（{batch_pct:.1f}%、処理中 {snapshot['current_running']:,}件）" if current_total else "")
     )
+    if snapshot.get("legacy_breakdown_unavailable"):
+        st.caption("この完了済みAuto Runは結果内訳が保存される前の実行のため、総件数のみ表示しています。")
 
     current = snapshot["current"]
     if current:
@@ -411,7 +420,7 @@ def _render_auto_hp_progress(snapshot, *, live=False):
     future_remaining = snapshot.get("future_remaining", 0)
     with st.expander("進捗の補足（未発見・Batch・Runの定義）", expanded=False):
         detail_cols = st.columns(4)
-        detail_cols[0].metric("未発見", f"{cumulative.get('NOT_FOUND', 0):,}件", help="候補URLを発見できなかった結果です。エラーには含めません。")
+        detail_cols[0].metric("未発見", result_value("NOT_FOUND"), help="候補URLを発見できなかった結果です。エラーには含めません。")
         detail_cols[1].metric("現在Batch", f"{current_done:,}/{current_total:,}件")
         detail_cols[2].metric("Batch番号", f"{int(state.get('current_batch', 0) or 0)} / 推定{snapshot['estimated_total']}")
         detail_cols[3].metric("次Batch以降の候補", f"{future_remaining:,}件")

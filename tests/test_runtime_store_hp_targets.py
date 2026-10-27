@@ -285,5 +285,18 @@ def test_auto_run_read_counts_use_reader_projection_and_exclude_historical_succe
     assert "prior_i.state='DONE'" in eligible_sql and "prior_i.result::text ILIKE '%%SUCCESS%%'" in eligible_sql
     assert "success_i.state='DONE'" in remaining_sql and "success_i.result::text ILIKE '%%SUCCESS%%'" in remaining_sql
     assert "public.clinics" not in eligible_sql + remaining_sql
+    assert "options_json" not in remaining_sql
     assert eligible_args == (["医科", "歯科"],)
-    assert remaining_args == (["医科", "歯科"], "r1")
+    assert remaining_args == (["医科", "歯科"],)
+
+
+def test_auto_run_cumulative_results_come_from_the_rls_scoped_state_row():
+    import json
+
+    state = {"run_id": "r1", "cumulative_results": {"SUCCESS": 12, "ERROR": 2}}
+    store, conn = _store([(json.dumps(state),)])
+
+    assert store.hp_auto_run_cumulative_results("r1") == {"SUCCESS": 12, "ERROR": 2}
+    sql, args = conn.calls[0]
+    assert "app_config.settings" in sql and "research_jobs" not in sql
+    assert args == ("hp_auto_run_state",)
