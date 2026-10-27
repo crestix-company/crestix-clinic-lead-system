@@ -8,7 +8,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scripts.launch_v2_mac_reader import NORMAL_HP_REQUIRED_TABLES, load_reader_dsn, verify_reader
+from scripts.launch_v2_mac_reader import (
+    NORMAL_HP_REQUIRED_TABLES, NORMAL_READER_FILE, load_reader_dsn, verify_reader,
+)
 
 WRITER_FILE = Path.home() / ".config/clinic-lead/runtime-writer.env"
 PROVIDER_FILE = Path.home() / ".config/clinic-lead/hp-provider.env"
@@ -50,7 +52,7 @@ def configure_normal_runtime(root, *, reader_file=None):
     writer = (os.environ.get("SUPABASE_RUNTIME_DB_URL") or "").strip()
     if not writer:
         raise RuntimeError("HP Writer設定がありません。既存の非公開runtime設定を確認してください。")
-    reader = load_reader_dsn(reader_file) if reader_file else load_reader_dsn()
+    reader = load_reader_dsn(reader_file or NORMAL_READER_FILE)
     tavily_key = load_tavily_key()
     if reader == writer:
         raise RuntimeError("ReaderとWriterの接続設定が同一です。別々の最小権限接続を設定してください。")
