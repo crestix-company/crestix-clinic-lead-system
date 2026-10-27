@@ -1,9 +1,7 @@
 #!/bin/bash
-# Mac用のSupabase-only起動スクリプト。
-# Production routingは `config/production_runtime.env`、credentialはgit-ignore済み
-# `.supabase-runtime.env.local` に保存する。secret値は表示しない。
-#
-# SQLite DB pathやsidecarは設定・検査・openしない。
+# Mac用：Supabase専用Readerでの安全なプレビュー起動。
+# SQLite / runtime writer / 未確認の権限にはfallbackしない。
+# launch_v2_mac_reader.py が権限を検証した後に launch_v2.py を起動する。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,8 +9,10 @@ if [ -x "$REPO_ROOT/.venv/bin/python3" ]; then
     PYTHON="$REPO_ROOT/.venv/bin/python3"
 elif [ -x "$REPO_ROOT/.venv_mac/bin/python3" ]; then
     PYTHON="$REPO_ROOT/.venv_mac/bin/python3"
+elif [ -x "$HOME/ClinicLeadRuntime/.venv/bin/python3" ]; then
+    PYTHON="$HOME/ClinicLeadRuntime/.venv/bin/python3"
 else
-    echo "エラー: .venv または .venv_mac が見つかりません。先にセットアップしてください。" >&2
+    echo "エラー: Python環境がありません。最新版に.venvを作成してください。" >&2
     exit 1
 fi
 
@@ -22,8 +22,7 @@ for ARG in "$@"; do
         --port|--port=*) HAS_PORT=true ;;
     esac
 done
-
 if [ "$HAS_PORT" = true ]; then
-    exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2.py" "$@"
+    exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2_mac_reader.py" "$@"
 fi
-exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2.py" --port 8502 --strict-port "$@"
+exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2_mac_reader.py" --port 8502 --strict-port "$@"
