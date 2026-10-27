@@ -224,8 +224,8 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple_end = source.index("def import_ui_comdesk_step", simple_start)
     simple = source[simple_start:simple_end]
 
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
-    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
+    assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
     assert "and os.environ.get(\"CLINIC_NORMAL_MAC_RUNTIME\") != \"1\"" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main
     assert "auto_runner.start(store)" not in simple[:simple.index('"Auto Run Workerを開始・再開"')]
@@ -264,8 +264,8 @@ def test_cloud_run_deployment_blocks_human_review_sidebar_and_dialogs_in_main():
     source = _app_source()
     main_start = source.index("def main():")
     main_body = source[main_start:source.index("\ndef ", main_start + 10)]
-    assert "if not read_only and not is_cloud_run_deployment():" in main_body
-    guard_pos = main_body.index("if not read_only and not is_cloud_run_deployment():")
+    assert "if not read_only and not is_cloud_run_deployment() and not hp_normal_runtime:" in main_body
+    guard_pos = main_body.index("if not read_only and not is_cloud_run_deployment() and not hp_normal_runtime:")
     sidebar_pos = main_body.index("hp_human_review_sidebar(store)")
     dialog_pos = main_body.index("hp_human_review_dialog(store)")
     assert guard_pos < sidebar_pos < dialog_pos

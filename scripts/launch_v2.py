@@ -101,13 +101,16 @@ def load_runtime_env(root):
         raise RuntimeError(f"{PREVIEW_ONLY_ENV_VAR}は1または0で指定してください。")
     preview_only = preview_setting == "1"
     normal_mac = os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1"
+    read_only_ui = os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
     parsed = _parse_env_file(root / PRODUCTION_ENV_FILE)
-    # Preview has no Writer path and must not even load the local Writer secret.
+    # Preview and dedicated READ ONLY launches must not even load a Writer secret.
     runtime_file = Path(os.environ.get(RUNTIME_ENV_PATH_VAR) or (root / RUNTIME_ENV_FILE))
-    if not preview_only:
+    if not (preview_only or read_only_ui):
         parsed.update(_parse_env_file(runtime_file, require_private=True))
-    # Preview-only boot never reads the broad Email/Gmail settings file.
-    email_db_config = {} if (preview_only or normal_mac) else _parse_env_file(
+    else:
+        parsed.pop("SUPABASE_RUNTIME_DB_URL", None)
+    # Preview, READ ONLY, and HP-only boot never read the broad Email/Gmail settings file.
+    email_db_config = {} if (preview_only or read_only_ui or normal_mac) else _parse_env_file(
         root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
     )
     if "EMAIL_AUTO_RUN_ENABLED" in email_db_config:
@@ -127,7 +130,7 @@ def load_runtime_env(root):
     parsed.update(email_db_config)
     selected_write = (os.environ.get("CLINIC_WRITE_BACKEND") or parsed.get("CLINIC_WRITE_BACKEND", "sqlite")).strip()
     runtime_url = (os.environ.get("SUPABASE_RUNTIME_DB_URL") or parsed.get("SUPABASE_RUNTIME_DB_URL", "")).strip()
-    if not preview_only and selected_write.strip().lower() == "supabase" and not runtime_url:
+    if not (preview_only or read_only_ui) and selected_write.strip().lower() == "supabase" and not runtime_url:
         raise RuntimeError("Supabase WRITEにはSUPABASE_RUNTIME_DB_URLが必要です。admin URLへのfallbackは行いません。")
     for key, value in parsed.items():
         if key == "EMAIL_AUTO_RUN_ENABLED":
@@ -136,10 +139,10 @@ def load_runtime_env(root):
         elif not (os.environ.get(key) or "").strip():
             # An explicitly exported but empty variable must not shadow the private config.
             os.environ[key] = value
-    if preview_only:
+    if preview_only or read_only_ui:
         if (os.environ.get("CLINIC_DATA_BACKEND", "").strip().casefold() != "supabase"
                 or not os.environ.get("SUPABASE_READONLY_DB_URL", "").strip()):
-            raise RuntimeError("Preview専用起動にはSupabaseの専用Reader接続設定が必要です。")
+            raise RuntimeError("Preview/READ ONLY起動にはSupabaseの専用Reader接続設定が必要です。")
         os.environ.pop("SUPABASE_RUNTIME_DB_URL", None)
         # Defense in depth: existing read-only connection setup is also enabled, while
         # the dedicated role and server-side guards remain the actual write boundary.

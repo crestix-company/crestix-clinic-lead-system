@@ -241,11 +241,12 @@ def test_all_windows_batch_files_are_ascii_crlf():
         assert b"\n" not in payload.replace(b"\r\n", b""), path.name
 
 
-def test_launch_v2_disables_streamlit_first_run_email_prompt(monkeypatch):
+def test_launch_v2_disables_streamlit_first_run_email_prompt(monkeypatch, tmp_path):
     from scripts import launch_v2
 
     calls = []
     monkeypatch.setattr(launch_v2, "load_runtime_env", lambda root: True)
+    monkeypatch.setattr(launch_v2.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(launch_v2, "choose_port", lambda preferred: 8507)
     monkeypatch.setattr(launch_v2.subprocess, "call", lambda command, cwd: calls.append(command) or 0)
     monkeypatch.setattr(launch_v2.sys, "argv", ["launch_v2.py"])

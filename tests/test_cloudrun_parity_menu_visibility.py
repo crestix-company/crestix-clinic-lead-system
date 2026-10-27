@@ -44,8 +44,8 @@ def _simple_workflow_read_only_block():
 
 def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
-    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
+    assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 

@@ -192,6 +192,26 @@ def test_preview_only_skips_email_secret_file_and_forces_safe_flags(tmp_path, mo
     assert "UNRELATED_EMAIL_SECRET" not in os.environ
 
 
+def test_readonly_ui_never_opens_writer_or_email_files(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / "production_runtime.env").write_text(
+        "CLINIC_DATA_BACKEND=supabase\nCLINIC_WRITE_BACKEND=supabase\n", encoding="utf-8"
+    )
+    writer = tmp_path / ".supabase-runtime.env.local"
+    writer.write_text("NOT_A_RUNTIME_KEY=must-not-be-parsed\n", encoding="utf-8")
+    writer.chmod(0o600)
+    _write_email_env(tmp_path, "UNRELATED_EMAIL_SECRET=must-not-be-parsed\n")
+    monkeypatch.setenv("CLINIC_READ_ONLY_UI", "1")
+    monkeypatch.setenv("SUPABASE_READONLY_DB_URL", "postgresql://fixture-reader.invalid/db")
+
+    launch_v2.load_runtime_env(tmp_path)
+
+    assert os.environ["SUPABASE_READONLY_DB_URL"].startswith("postgresql://fixture-reader")
+    assert "SUPABASE_RUNTIME_DB_URL" not in os.environ
+    assert "UNRELATED_EMAIL_SECRET" not in os.environ
+
+
 def test_normal_mac_hp_runtime_skips_email_and_gmail_credentials(tmp_path, monkeypatch):
     config_dir = tmp_path / "config"
     config_dir.mkdir()

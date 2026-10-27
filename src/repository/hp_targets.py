@@ -10,7 +10,9 @@ HP ledger yet.
 UNFINISHED_HP_JOB_STATUSES = ("RUNNING", "PAUSED", "BUDGET")
 
 
-def maps_hp_target_predicate(prefecture="", medical_types=None, force=False):
+def maps_hp_target_predicate(prefecture="", medical_types=None, force=False, *, clinic_relation="public.clinics"):
+    if clinic_relation not in {"public.clinics", "public.clinic_cloudrun_readonly"}:
+        raise ValueError("Unsupported clinic relation for HP target selection")
     conditions = [
         "c.merged_into IS NULL",
         "c.merge_hold=false",

@@ -56,10 +56,25 @@ def test_hp_target_count_and_candidates_share_the_exact_eligibility_predicate():
     count_predicate = count_sql.split(" WHERE ", 1)[1]
     assert candidate_predicate == count_predicate
     assert candidate_args[:-1] == count_args == ("東京都", ["医科"])
+    assert "FROM public.clinic_cloudrun_readonly c WHERE" in candidate_sql
+    assert "FROM public.clinic_cloudrun_readonly c WHERE" in count_sql
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h WHERE h.clinic_id=c.id)" in candidate_sql
     assert "hp_status" not in candidate_sql
     assert "hp_status" not in count_sql
     assert "uuid" not in candidate_sql.lower()
+    assert "email_candidates" not in candidate_sql.lower()
+
+
+def test_hp_candidate_preview_uses_projected_reader_relation_and_safe_columns():
+    store, conn = _store([[ (101, "Clinic", "Tokyo", "医科", "https://example.test") ]])
+    rows = store.maps_hp_candidate_preview("東京都", ["医科"], False, limit=10)
+
+    assert rows == [{"id": 101, "clinic_name": "Clinic", "address": "Tokyo",
+                     "medical_type": "医科", "maps_website_url": "https://example.test"}]
+    sql, _args = conn.calls[0]
+    assert "FROM public.clinic_cloudrun_readonly c" in sql
+    assert "public.clinics" not in sql
+    assert "email_candidates" not in sql
 
 
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():

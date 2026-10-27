@@ -33,8 +33,8 @@ def test_nav_hides_outreach_pages_when_read_only():
     CLINIC_READ_ONLY_UI=true alone still guarantees NAV[:2] exactly as
     before this change."""
     text = _app_source()
-    assert "nav_locked = read_only or is_cloud_run_deployment()" in text
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in text
+    assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in text
+    assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in text
     nav_start = text.index("NAV = [")
     nav_line = text[nav_start:text.index("]", nav_start) + 1]
     assert "メール送付文章" in nav_line

@@ -240,6 +240,25 @@ def show_email_research_metrics(store):
         column.metric(label, f"{values[key]:,}件", help=definition)
 
 
+def show_read_only_email_research_metrics(store):
+    """Display counts from a reviewed status projection without opening Email writers."""
+    st.subheader("Email調査状況（READ ONLY）")
+    try:
+        counts = store.email_research_status_metrics()
+    except Exception:
+        st.warning("Email調査状況を参照できません。専用ReaderのSELECT/RLS設定を確認してください。")
+        return
+    labels = [
+        ("未調査", "NOT_RESEARCHED"), ("調査中", "RUNNING"),
+        ("候補あり", "FOUND"), ("候補なし", "NO_EMAIL_FOUND"),
+        ("要確認", "REVIEW"), ("エラー", "ERROR"),
+    ]
+    columns = st.columns(len(labels))
+    for column, (label, status) in zip(columns, labels):
+        column.metric(label, f"{counts.get(status, 0):,}件")
+    st.caption("状態別件数のみを集計します。候補メール本文・未承認アドレス・調査根拠は表示しません。")
+
+
 AUTO_HP_PROGRESS_REFRESH_SECONDS = 5
 AUTO_HP_ACTIVE_STATUSES = {"RUNNING", "WAITING_NETWORK"}
 
@@ -1121,7 +1140,82 @@ def cloud_email_human_review_ui(store, *, read_only=False):
             email_human_review_dialog(store)
 
 
+def hp_normal_research_ui(store):
+    """HP-only Mac operator surface; all other mutating UI is intentionally absent."""
+    st.header("HP Auto Research")
+    st.caption("対象検索・状態確認はReader、HP Jobの登録とWorker操作は専用Writerを使用します。起動だけでは調査を開始しません。")
+    if not getattr(store, "is_supabase_runtime", False):
+        st.error("HP通常版はSupabase Reader/Writer接続が必要です。")
+        return
+
+    pref_options = ["すべて"] + store.prefectures(read_only_ui=True)
+    pref_label = st.selectbox("都道府県", pref_options, key="normal_hp_prefecture")
+    pref = "" if pref_label == "すべて" else pref_label
+    med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], key="normal_hp_medical_type")
+    medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
+    available = _maps_hp_available_count(store, pref, False, medical_types)
+    st.metric("未調査対象", f"{available:,}件")
+    st.caption("active・未統合・Maps公式HP URLあり・HP調査履歴なし。進行中または一時停止中のHP Jobに予約済みの医院は除外します。")
+    with st.expander("対象医院を確認（先頭10件）", expanded=True):
+        rows = store.maps_hp_candidate_preview(pref, medical_types, False, limit=10) if available else []
+        if rows:
+            st.dataframe(pd.DataFrame([{
+                "ID": r["id"], "医院名": r.get("clinic_name", ""), "住所": r.get("address", ""),
+                "診療科": r.get("medical_type", ""), "Maps公式HP URL": r.get("maps_website_url", ""),
+            } for r in rows]), hide_index=True, use_container_width=True)
+        else:
+            st.caption("現在の条件に合う候補はありません。")
+
+    jobs = [job for job in recent_jobs(store) if job.get("kind") == "hp"]
+    current_id = st.session_state.get("normal_hp_active_job")
+    runner = runner_for(str(store.path))
+    max_count = min(50, available)
+    count = st.number_input("今回の最大件数", min_value=1, max_value=50, value=max(1, max_count), key="normal_hp_count")
+    if st.button("HP調査Jobを作成", type="primary", disabled=available < 1 or runner.running(), key="normal_hp_create_job"):
+        jid = _create_maps_hp_job(store, pref, int(count), False, medical_types)
+        st.session_state["normal_hp_active_job"] = jid
+        st.rerun()
+
+    if current_id:
+        try:
+            status = job_status(store, current_id)
+        except (ValueError, KeyError):
+            status = None
+        if status:
+            st.subheader(f"HP Job {current_id} · {JOB_LABELS.get(status['status'], status['status'])}")
+            if status.get("total"):
+                show_job_progress(store, current_id)
+            if st.button(
+                "このJobのWorkerを開始", type="primary",
+                disabled=runner.running() or status["status"] not in {"PAUSED", "BUDGET"}
+                    or status.get("counts", {}).get("PENDING", 0) < 1,
+                key="normal_hp_worker_start",
+            ):
+                runner.start(store, current_id, TavilySearchProvider())
+                st.rerun()
+            if st.button(
+                "このJobを一時停止", disabled=not runner.running() or status["status"] != "RUNNING",
+                key="normal_hp_worker_pause",
+            ):
+                write_repositories_for(store).jobs.pause_job(current_id)
+                st.rerun()
+    st.subheader("最近のHP調査Job")
+    if jobs:
+        st.dataframe(pd.DataFrame([{
+            "Job ID": job.get("id"), "状態": JOB_LABELS.get(job.get("status"), job.get("status")),
+            "作成": job.get("created_at"), "対象": job.get("total_count", job.get("total")),
+        } for job in jobs]), hide_index=True, use_container_width=True)
+        with st.expander("既存Jobの進捗を表示"):
+            selected = st.selectbox("Job", [job["id"] for job in jobs], key="normal_hp_status_job")
+            show_job_progress(store, selected)
+    else:
+        st.caption("HP Job履歴はありません。")
+
+
 def simple_workflow_ui(store, demo, *, read_only=False):
+    if os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1":
+        hp_normal_research_ui(store)
+        return
     if read_only:
         st.header("クリニック営業マスター")
         st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
@@ -1139,6 +1233,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             help="左の母集団のうちUUIDが紐付いている件数です。「既存営業リスト」（全国展開前のレガシーコホート）とは別の定義・別の件数です。",
         )
         show_web_research_metrics(store, read_only=True)
+        show_read_only_email_research_metrics(store)
         with st.expander("ローカル版の処理順序（参考・READ ONLYでは操作不可）", expanded=False):
             st.caption("①データ準備（Comdesk・厚生局取込） → ②Google Maps収集・取込 → ③HP・Email自動調査 → ④営業対象検索・Comdesk出力")
             st.caption("①〜③はデータ更新を伴うため、READ ONLY版では状態の表示のみで操作ボタンは提供していません。④は「営業対象・出力」メニューから閲覧・検索・CSV/Excel出力のみ利用できます。")
@@ -1248,19 +1343,15 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・HP調査履歴なし（通常時）で、未完了jobにも入っていない医院です。『調査済みもやり直す』は過去の成功・失敗・要確認も対象に含めます。")
     if getattr(store, "is_supabase_runtime", False):
         with st.expander("今回の条件に合う医院をプレビュー（先頭10件）", expanded=False):
-            candidate_ids = store.maps_hp_candidate_ids(
-                pref, research_medical_types, force, limit=min(10, max(1, int(available)))
+            candidates = store.maps_hp_candidate_preview(
+                pref, research_medical_types, force,
+                limit=min(10, max(1, int(available))),
             ) if available else []
-            preview = []
-            for clinic_id in candidate_ids:
-                clinic = store.get(clinic_id)
-                preview.append({
-                    "ID": clinic_id,
-                    "医院名": clinic.get("clinic_name", ""),
-                    "住所": clinic.get("address", ""),
-                    "診療科": clinic.get("medical_type", ""),
-                    "Maps公式HP URL": clinic.get("maps_website_url", ""),
-                })
+            preview = [{
+                "ID": row["id"], "医院名": row.get("clinic_name", ""),
+                "住所": row.get("address", ""), "診療科": row.get("medical_type", ""),
+                "Maps公式HP URL": row.get("maps_website_url", ""),
+            } for row in candidates]
             if preview:
                 st.dataframe(pd.DataFrame(preview), hide_index=True, use_container_width=True)
             else:
@@ -2896,14 +2987,15 @@ def main():
     # see the write_disabled comment in simple_workflow_ui for the full
     # reasoning. nav_locked, not read_only alone, decides nav visibility.
     from src.cloud_run.deployment_context import is_cloud_run_deployment
-    nav_locked = read_only or is_cloud_run_deployment()
+    hp_normal_runtime = os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1"
+    nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime
     with st.sidebar:
-        nav_options = NAV[:2] if nav_locked else NAV
+        nav_options = ([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
             with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
-                st.caption("ローカル版は以下の5メニューを順に使います。この画面では①②のみ操作でき、③〜⑤はボタン自体を表示していません。")
+                st.caption("READ ONLYまたはHP専用ローカル実行では、許可されたメニューだけを表示します。")
                 for name in NAV:
                     if name in nav_options:
                         st.caption(f"✅ {name}：利用可能")
@@ -2912,7 +3004,7 @@ def main():
         else:
             with st.expander("開発・確認用", expanded=False):
                 demo = st.toggle("サンプルモード", key="sample_mode")
-        st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
+        st.caption("HP専用実行はHP Job操作だけを表示します。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
     elif nav_locked:
@@ -2956,7 +3048,7 @@ def main():
             _show_supabase_startup_error(exc)
         raise
 
-    if not read_only and not is_cloud_run_deployment():
+    if not read_only and not is_cloud_run_deployment() and not hp_normal_runtime:
         # Same write-trigger concern as the simple_workflow_ui human-review
         # cards above: these sidebar/dialog widgets write via their own
         # write_repositories_for(store) calls with no Cloud Run awareness.
@@ -2975,7 +3067,7 @@ def main():
     if nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
-        simple_sales_ui(store, demo, read_only=read_only)
+        simple_sales_ui(store, demo, read_only=(read_only or hp_normal_runtime))
     elif nav == "Email調査":
         email_research_page(store)
     elif nav == "メール送付文章":

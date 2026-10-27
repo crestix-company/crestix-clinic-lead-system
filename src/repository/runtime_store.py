@@ -156,6 +156,17 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def web_research_metrics(self, *, read_only_ui=False):
         return self.repositories.hp_research.batch_metrics(read_only_ui=read_only_ui)
+
+    @_retry_closed_read_connection
+    def email_research_status_metrics(self):
+        """Aggregate the allowlisted Email status projection; never read candidate addresses."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT research_status,count(*) FROM email_research.clinic_email_status_readonly "
+                "GROUP BY research_status ORDER BY research_status"
+            )
+            rows = cur.fetchall()
+        return {str(status): int(count) for status, count in rows}
     @_retry_closed_read_connection
     def history(self, clinic_id, limit=30):
         return self.repositories.provenance.history_for_clinic(clinic_id, limit)
@@ -237,21 +248,46 @@ class SupabaseRuntimeStore:
 
     @_retry_closed_read_connection
     def maps_hp_candidate_ids(self, prefecture="", medical_types=None, force=False, limit=500):
-        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
         args.append(min(500, max(1, int(limit))))
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT c.id FROM public.clinics c WHERE " + predicate +
+                "SELECT c.id FROM public.clinic_cloudrun_readonly c WHERE " + predicate +
                 " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
             )
             return [r[0] for r in cur.fetchall()]
 
     @_retry_closed_read_connection
     def maps_hp_available_count(self, prefecture="", medical_types=None, force=False):
-        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
         with self._conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
             return cur.fetchone()[0]
+
+    @_retry_closed_read_connection
+    def maps_hp_candidate_preview(self, prefecture="", medical_types=None, force=False, limit=10):
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        args.append(min(10, max(1, int(limit))))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.id,c.clinic_name,c.address,c.medical_type,c.maps_website_url "
+                "FROM public.clinic_cloudrun_readonly c WHERE " + predicate +
+                " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
+            )
+            return [
+                {"id": row[0], "clinic_name": row[1], "address": row[2],
+                 "medical_type": row[3], "maps_website_url": row[4]}
+                for row in cur.fetchall()
+            ]
 
     @_retry_closed_read_connection
     def hp_recent_jobs(self):
