@@ -1,6 +1,7 @@
 #!/bin/bash
 # Mac用：Supabase専用Readerでの安全なプレビュー起動。
 # SQLite / runtime writer / 未確認の権限にはfallbackしない。
+# launch_v2_mac_reader.py が権限を検証した後に launch_v2.py を起動する。
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
