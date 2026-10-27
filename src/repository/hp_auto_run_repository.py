@@ -110,11 +110,13 @@ class SupabaseHpAutoRunRepository:
         return int(cur.fetchone()[0])
 
     @staticmethod
-    def _insert_job(cur, clinic_ids, *, force, auto_run_id=None):
+    def _insert_job(cur, clinic_ids, *, force, auto_run_id=None, extra_options=None):
         jid = uuid.uuid4().hex
         options = {"force": bool(force), "max_pages": 20}
         if auto_run_id:
             options["auto_run_id"] = auto_run_id
+        if extra_options:
+            options.update(extra_options)
         ts = now()
         cur.execute(
             "INSERT INTO research.research_jobs(id,kind,options_json,max_searches,created_at,updated_at) "
@@ -146,10 +148,64 @@ class SupabaseHpAutoRunRepository:
                 state = self._locked_state(cur)
                 if state and state.get("status") in ACTIVE_AUTO_STATUSES:
                     raise ValueError("Auto Runが進行中です。完了または終了してから単発調査を開始してください。")
+                cur.execute(
+                    "SELECT 1 FROM research.research_jobs WHERE kind='hp' AND status='RUNNING' LIMIT 1"
+                )
+                if cur.fetchone():
+                    raise ValueError("実行中HP Jobがあります。完了または一時停止を確認してから開始してください。")
                 ids = self._candidate_ids(cur, prefecture, medical_types, force, limit)
                 if not ids:
                     raise ValueError("現在の条件でHP調査できる医院がありません。")
                 jid = self._insert_job(cur, ids, force=force)
+            self._conn.commit()
+            return jid
+        except Exception:
+            self._conn.rollback()
+            raise
+
+    def create_error_canary_job(self, clinic_ids):
+        """Atomically reserve up to ten current ERROR targets as a one-shot HP job.
+
+        This intentionally excludes successful and Human Review rows. It does not start a
+        worker; the caller must separately invoke the existing local JobRunner after the
+        operator has reviewed and approved the exact candidate list.
+        """
+        requested = [int(value) for value in clinic_ids]
+        if not requested or len(requested) > 10:
+            raise ValueError("Canaryは1〜10医院にしてください。")
+        if len(set(requested)) != len(requested) or any(value <= 0 for value in requested):
+            raise ValueError("医院IDの重複または不正値があります。")
+        try:
+            with self._conn.cursor() as cur:
+                self._lock(cur)
+                state = self._locked_state(cur)
+                if state and state.get("status") in ACTIVE_AUTO_STATUSES:
+                    raise ValueError("Auto Runが未完了です。Canary Jobを作成できません。")
+                cur.execute(
+                    "SELECT 1 FROM research.research_jobs WHERE kind='hp' AND status='RUNNING' LIMIT 1"
+                )
+                if cur.fetchone():
+                    raise ValueError("実行中HP Jobがあります。Canary Jobを作成できません。")
+                predicate, args = maps_hp_target_predicate(force=True)
+                predicate += (
+                    " AND c.id=ANY(%s::bigint[]) "
+                    "AND EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h "
+                    "WHERE h.clinic_id=c.id AND h.fetch_status='ERROR')"
+                )
+                cur.execute(
+                    "SELECT c.id FROM public.clinics c WHERE " + predicate
+                    + " ORDER BY c.id FOR UPDATE OF c SKIP LOCKED",
+                    (*args, requested),
+                )
+                eligible = [int(row[0]) for row in cur.fetchall()]
+                if set(eligible) != set(requested) or len(eligible) != len(requested):
+                    raise ValueError(
+                        "候補がERROR状態でない、または未完了Jobのclaim対象です。最新候補を再確認してください。"
+                    )
+                jid = self._insert_job(
+                    cur, requested, force=True,
+                    extra_options={"phase1_error_canary": True},
+                )
             self._conn.commit()
             return jid
         except Exception:

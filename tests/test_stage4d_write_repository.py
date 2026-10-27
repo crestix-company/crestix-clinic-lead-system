@@ -504,13 +504,46 @@ def test_supabase_jobs_runtime_methods_have_postgres_implementations(monkeypatch
     import src.repository.supabase_filters as pg_filters
 
     monkeypatch.setattr(pg_filters, "where", lambda filters: ("merged_into IS NULL", []))
-    conn = FakeConn(script=[[(1_000_000_000,), (1_000_000_001,)]])
+    conn = FakeConn(script=[
+        None, ('{"status":"IDLE"}',), None,
+        [(1_000_000_000,), (1_000_000_001,)],
+    ])
     repo = SupabaseJobsWriteRepository(conn)
     job_id = repo.create_job_from_filters(Filters(active_only=False, hp_only=False), limit=2)
     assert isinstance(job_id, str) and len(job_id) == 32
     statements = [sql for sql, _ in conn.executed]
     assert any("INSERT INTO research.research_jobs" in sql for sql in statements)
     assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 2
+    candidate_sql = next(sql for sql in statements if "FOR UPDATE OF clinics SKIP LOCKED" in sql)
+    assert "pg_advisory_xact_lock" in statements[0]
+    assert "queued_i.state IN ('PENDING','RUNNING')" in candidate_sql
+
+
+@pytest.mark.parametrize("state", ["RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"])
+def test_supabase_hp_filter_job_refuses_while_auto_run_is_active(state):
+    from src.master.filters import Filters
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+
+    conn = FakeConn([None, (json.dumps({"status": state}),)])
+    with pytest.raises(ValueError, match="Auto Runが未完了"):
+        SupabaseJobsWriteRepository(conn).create_job_from_filters(
+            Filters(active_only=False, hp_only=False), limit=2
+        )
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
+def test_supabase_hp_filter_job_refuses_when_another_hp_job_is_running():
+    from src.master.filters import Filters
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+
+    conn = FakeConn([None, ('{"status":"COMPLETED"}',), ("running-job",)])
+    with pytest.raises(ValueError, match="実行中HP Job"):
+        SupabaseJobsWriteRepository(conn).create_job_from_filters(
+            Filters(active_only=False, hp_only=False), limit=2
+        )
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
 
     for invoke, expected in [
         (lambda r: r.complete_job_if_no_remaining_items("j"), "status='COMPLETED'"),

@@ -2256,9 +2256,39 @@ class SupabaseJobsWriteRepository:
         jid = uuid.uuid4().hex
         try:
             with self._conn.cursor() as cur:
+                if kind == "hp":
+                    from src.repository.hp_auto_run_repository import (
+                        ACTIVE_AUTO_STATUSES, AUTO_RUN_KEY, SupabaseHpAutoRunRepository,
+                    )
+                    SupabaseHpAutoRunRepository._lock(cur)
+                    cur.execute(
+                        "SELECT value FROM app_config.settings WHERE key=%s FOR UPDATE",
+                        (AUTO_RUN_KEY,),
+                    )
+                    auto_state = SupabaseHpAutoRunRepository._decode(cur.fetchone())
+                    if auto_state and auto_state.get("status") in ACTIVE_AUTO_STATUSES:
+                        raise ValueError("Auto Runが未完了です。HP Jobを作成できません。")
+                    cur.execute(
+                        "SELECT 1 FROM research.research_jobs "
+                        "WHERE kind='hp' AND status='RUNNING' LIMIT 1"
+                    )
+                    if cur.fetchone():
+                        raise ValueError("実行中HP Jobがあります。別のJobを作成できません。")
+                    sql += (
+                        " AND NOT EXISTS (SELECT 1 FROM research.research_job_items queued_i "
+                        "JOIN research.research_jobs queued_j ON queued_j.id=queued_i.job_id "
+                        "WHERE queued_i.clinic_id=clinics.id "
+                        "AND queued_i.state IN ('PENDING','RUNNING') "
+                        "AND queued_j.kind='hp' AND queued_j.status IN ('RUNNING','PAUSED','BUDGET'))"
+                    )
+                    from_sql = "public.clinics AS clinics"
+                    lock_sql = " FOR UPDATE OF clinics SKIP LOCKED"
+                else:
+                    from_sql = "public.clinics"
+                    lock_sql = ""
                 cur.execute(
-                    "SELECT id FROM public.clinics WHERE " + sql
-                    + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s",
+                    "SELECT id FROM " + from_sql + " WHERE " + sql
+                    + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s" + lock_sql,
                     (*args, limit),
                 )
                 ids = [row[0] for row in cur.fetchall()]

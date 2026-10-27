@@ -159,6 +159,55 @@ def test_k_second_controller_cannot_start_an_active_auto_run():
     assert conn.rolled_back == 1 and conn.committed == 0
 
 
+def test_error_canary_job_atomically_accepts_only_reviewed_error_ids():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+
+    requested = [133, 147, 149]
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None,
+        [(clinic_id,) for clinic_id in requested],
+    ])
+    job_id = SupabaseHpAutoRunRepository(conn).create_error_canary_job(requested)
+    inserts = [(sql, params) for sql, params in conn.executed if "INSERT INTO research.research_jobs" in sql]
+    assert len(inserts) == 1
+    assert inserts[0][1][1].obj == {
+        "force": True, "max_pages": 20, "phase1_error_canary": True,
+    }
+    candidate_sql = next(sql for sql, _ in conn.executed if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "fetch_status='ERROR'" in candidate_sql
+    assert "queued_i.state IN ('PENDING','RUNNING')" in candidate_sql
+    queued = [params for sql, params in conn.executed if "INSERT INTO research.research_job_items" in sql]
+    assert [params[1] for params in queued] == requested
+    assert job_id and conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_error_canary_job_rolls_back_if_any_candidate_is_stale_or_claimed():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None, [(133,), (147,)],
+    ])
+    with pytest.raises(ValueError, match="ERROR状態でない"):
+        SupabaseHpAutoRunRepository(conn).create_error_canary_job([133, 147, 149])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
+def test_error_canary_job_refuses_while_auto_run_is_unfinished():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    conn = _Connection([None, (json.dumps({"status": "PAUSED"}),)])
+    with pytest.raises(ValueError, match="Auto Runが未完了"):
+        SupabaseHpAutoRunRepository(conn).create_error_canary_job([133])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
 def test_k_unexpired_database_clock_lease_rejects_second_pc():
     from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
     import json
