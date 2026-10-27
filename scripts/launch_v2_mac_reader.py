@@ -89,6 +89,7 @@ def verify_reader(
         connect = psycopg.connect
     with connect(dsn, connect_timeout=10) as conn:
         with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION READ ONLY")
             cur.execute("""
                 SELECT current_user, r.rolsuper, r.rolbypassrls, r.rolcreatedb,
                        r.rolcreaterole, has_database_privilege(current_user, current_database(), 'CREATE')

@@ -30,7 +30,7 @@ done
 
 ## Readerの最小参照範囲
 
-2026-10-27に対象`clinic-lead-shadow`のカタログをSupabase管理接続からSELECTのみで監査しました。Writer DSNをReader接続として使用していません。
+2026-10-27に対象`clinic-lead-shadow`のカタログをSupabase管理接続からSELECTのみで監査しました。Macの`runtime-writer.env`は接続先プロジェクト識別子の一致確認にだけ使い、そのDSNでは接続していません。接続先は`clinic-lead-shadow`と一致しました。Reader接続には使っていません。
 
 READ ONLY閲覧画面は投影relationを使用します。Comdesk Previewは別ReaderとPreview固有relationを使用します。HP通常版の対象検索・結果・Job進捗で実際に使うrelationは次の4つです。監査対象として確認した`app_config.settings`は現行HP専用画面から参照されないため、権限要件から除外しています。
 
@@ -55,8 +55,13 @@ READ ONLYカタログ監査では`clinic_cloudrun_reader`が医院投影ViewのS
 
 不足するのは`research` schema USAGE、Job一覧・進捗に必要な列SELECT、および両Job relationのHP限定SELECT policyです。`app_config.settings`は現行画面で参照せず、権限を追加しません。下記は既存`clinic_cloudrun_reader`へ足す案で、実行してはいけません。`research_jobs`はHP Jobだけ、`research_job_items`はHP Jobに属するitemだけを可視にします。
 
+適用前に、対象role/relation、現行RLS、policy名の衝突がないことを管理者が再確認します。現在は両research tableでRLS有効、FORCE RLS無効、既存policyは`clinic_runtime`のALL policyのみで、`clinic_cloudrun_reader`用policy名はありません。VIEW所有者・医院projectionのGRANT/RLSは変更対象外です。`clinic_cloudrun_reader`は既存ログインroleのため、下記変更は同じroleを使う他プロセスにもHP Jobの列・行参照を追加します。Cloud Runにも当該資格情報を使っている場合、このスコープ追加をDBAが確認してから判断してください。
+
+変更案を適用する場合は一つのtransactionで実行し、失敗時は全体をrollbackします。現時点では実行禁止です。
+
 ```sql
 -- 例示のみ。実行禁止。医院投影ViewとHP台帳の既存権限は変更しない。
+BEGIN;
 GRANT USAGE ON SCHEMA research TO clinic_cloudrun_reader;
 GRANT SELECT (id, kind, status, created_at)
   ON research.research_jobs TO clinic_cloudrun_reader;
@@ -71,6 +76,35 @@ CREATE POLICY clinic_cloudrun_reader_hp_items_select
     SELECT 1 FROM research.research_jobs j
     WHERE j.id = research_job_items.job_id AND j.kind = 'hp'
   ));
+-- DBAレビュー・承認後の適用時だけ次を有効化: COMMIT;
+-- 現在は実行しない。
 ```
 
-既存Reader roleの監査は管理接続からSELECTのみで実施しました。これはMac Reader資格情報によるpreflight成功を意味しません。上記不足権限は未適用で、`reader.env`も未作成のためMac起動preflightは未完了です。本番DB変更は行っていません。
+ロールバック案も実行禁止です。適用前に不足権限だったことを確認し、この変更で作成したpolicyとgrantだけを戻します。
+
+```sql
+BEGIN;
+DROP POLICY IF EXISTS clinic_cloudrun_reader_hp_items_select
+  ON research.research_job_items;
+DROP POLICY IF EXISTS clinic_cloudrun_reader_hp_jobs_select
+  ON research.research_jobs;
+REVOKE SELECT (job_id, clinic_id, state, result)
+  ON research.research_job_items FROM clinic_cloudrun_reader;
+REVOKE SELECT (id, kind, status, created_at)
+  ON research.research_jobs FROM clinic_cloudrun_reader;
+REVOKE USAGE ON SCHEMA research FROM clinic_cloudrun_reader;
+-- DBA確認・承認後のrollback時だけ次を有効化: COMMIT;
+-- 現在は実行しない。
+```
+
+## Reader受入検査
+
+DBAが別途権限変更を承認・適用し、Reader専用DSNを外部の`reader.env`へ設定した後、Streamlitを起動せずに次の検査を実行します。コードはReaderでread-only transactionを開き、preflight、医院投影の可視件数、HP Job件数、HP Job item件数をSELECTだけで確認します。Job IDや個別医院情報は表示しません。
+
+```sh
+.venv/bin/python scripts/check_mac_hp_reader.py
+```
+
+検査が通った後の画面起動は`./scripts/launch_v2_mac_normal.sh --headless`です。Readerファイルがない、または権限/RLSが不足する場合は検査でfail-closedします。
+
+既存Reader roleの監査はSupabase管理接続からSELECTのみで実施しました。これはMac Reader資格情報によるpreflight成功を意味しません。上記不足権限は未適用で、`reader.env`も未作成のためMac起動preflightは未完了です。本番DB変更は行っていません。
