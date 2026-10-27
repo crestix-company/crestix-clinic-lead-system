@@ -44,6 +44,16 @@ def test_cache_persists_force_only_and_cap(store):
     assert p.calls==2
 
 
+def test_cached_search_construction_does_not_read_reader_settings():
+    class ReaderOnlyStore:
+        def setting(self, *_args, **_kwargs):
+            raise AssertionError("Researcher construction must not require app_config Reader access")
+
+    search = CachedSearch(ReaderOnlyStore(), Provider())
+    assert search.monthly_limit == 900
+    assert search.used == 0
+
+
 def test_failed_search_counts_and_reserve_and_month_boundary(store):
     p=Provider(fail=True);s=CachedSearch(store,p)
     store.set_setting("monthly_limit",2)
