@@ -1141,6 +1141,20 @@ def cloud_email_human_review_ui(store, *, read_only=False):
             email_human_review_dialog(store)
 
 
+def _show_hp_normal_job_results(store, job_id):
+    if not hasattr(store, "hp_normal_job_results"):
+        return
+    result_rows = store.hp_normal_job_results(job_id)
+    if result_rows:
+        st.dataframe(pd.DataFrame([{
+            "医院ID": row["clinic_id"], "医院名": row.get("clinic_name", ""),
+            "住所": row.get("address", ""), "Job状態": row.get("item_state", ""),
+            "Job結果": row.get("item_result", ""), "HP状態": row.get("fetch_status", ""),
+            "公開ランク": row.get("published_hp_rank", ""),
+            "最終HP URL": row.get("final_url") or row.get("hp_url", ""),
+        } for row in result_rows]), hide_index=True, use_container_width=True)
+
+
 def hp_normal_research_ui(store):
     """Mac HP operator surface: Reader previews, explicit selection, isolated Writer actions."""
     st.header("HP Auto Research")
@@ -1218,16 +1232,7 @@ def hp_normal_research_ui(store):
             st.subheader(f"HP Job {current_id} · {JOB_LABELS.get(status['status'], status['status'])}")
             if status.get("total"):
                 show_job_progress(store, current_id, hp_only=True)
-                if hasattr(store, "hp_normal_job_results"):
-                    result_rows = store.hp_normal_job_results(current_id)
-                    if result_rows:
-                        st.dataframe(pd.DataFrame([{
-                            "医院ID": row["clinic_id"], "医院名": row.get("clinic_name", ""),
-                            "住所": row.get("address", ""), "Job状態": row.get("item_state", ""),
-                            "Job結果": row.get("item_result", ""), "HP状態": row.get("fetch_status", ""),
-                            "公開ランク": row.get("published_hp_rank", ""),
-                            "最終HP URL": row.get("final_url") or row.get("hp_url", ""),
-                        } for row in result_rows]), hide_index=True, use_container_width=True)
+                _show_hp_normal_job_results(store, current_id)
             if st.button(
                 "このJobのWorkerを開始", type="primary",
                 disabled=current_id not in st.session_state.get("normal_hp_created_jobs", [])
@@ -1252,6 +1257,7 @@ def hp_normal_research_ui(store):
         with st.expander("既存Jobの進捗を表示"):
             selected = st.selectbox("Job", [job["id"] for job in jobs], key="normal_hp_status_job")
             show_job_progress(store, selected, hp_only=True)
+            _show_hp_normal_job_results(store, selected)
     else:
         st.caption("HP Job履歴はありません。")
 
