@@ -75,7 +75,7 @@ def verify_reader(dsn, *, connect=None):
             cur.execute("""
                 SELECT EXISTS (
                     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-                    WHERE c.relkind IN ('r','p','v','m','f','S')
+                    WHERE c.relkind IN ('r','p','v','m','f')
                       AND n.nspname NOT LIKE 'pg_%'
                       AND n.nspname <> 'information_schema'
                       AND (
@@ -90,6 +90,20 @@ def verify_reader(dsn, *, connect=None):
             """)
             if cur.fetchone()[0]:
                 raise RuntimeError("DBオブジェクトに書き込み権限があります。起動を停止しました。")
+            cur.execute("""
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                    WHERE c.relkind='S'
+                      AND n.nspname NOT LIKE 'pg_%'
+                      AND n.nspname <> 'information_schema'
+                      AND (
+                        has_sequence_privilege(current_user,c.oid,'UPDATE')
+                        OR has_sequence_privilege(current_user,c.oid,'USAGE')
+                      )
+                )
+            """)
+            if cur.fetchone()[0]:
+                raise RuntimeError("シーケンス更新権限があります。起動を停止しました。")
             for table in REQUIRED_TABLES:
                 cur.execute("SELECT to_regclass(%s)", (table,))
                 if cur.fetchone()[0] is None:
