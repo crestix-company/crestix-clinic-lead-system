@@ -31,8 +31,16 @@ END $guard$;
 CREATE ROLE clinic_comdesk_export_reader LOGIN NOINHERIT NOBYPASSRLS;
 GRANT CONNECT ON DATABASE postgres TO clinic_comdesk_export_reader;
 GRANT USAGE ON SCHEMA public,research,hp_research,provenance TO clinic_comdesk_export_reader;
+-- The Supabase SQL executor is postgres, an ADMIN member of the View owner role
+-- but with SET FALSE. Temporarily add a non-admin SET membership, grant as the
+-- actual owner, then remove only this transaction's membership.
+GRANT clinic_cloudrun_projection_owner TO postgres
+  WITH ADMIN FALSE, INHERIT FALSE, SET TRUE;
+SET LOCAL ROLE clinic_cloudrun_projection_owner;
 GRANT SELECT (id,hp_url,maps_website_url) ON TABLE public.clinic_cloudrun_readonly
   TO clinic_comdesk_export_reader;
+RESET ROLE;
+REVOKE clinic_cloudrun_projection_owner FROM postgres GRANTED BY postgres;
 
 -- Column grants follow COMDESK_READER_COLUMNS in src/repository/mac_feature_access.py.
 -- effective_json/base_json and result_json contain broad source data. The dedicated

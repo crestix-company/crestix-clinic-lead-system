@@ -1,6 +1,7 @@
 # Mac Step1–7 dedicated connections — approval package
 
-Status: code and SQL review only. No production role, GRANT, policy or DML was applied.
+Status: Step6 role/RLS and the missing three View column grants are applied in
+Supabase. No production data, UUID, or Job was changed.
 
 ## Step6 production findings (2026-10-27, READ ONLY)
 
@@ -40,14 +41,36 @@ limits the new role's `source_records` and `match_reviews` rows to Comdesk,
 `clinic_email_enrichment` to verified official Email, and Job items to HP.
 No direct Email-candidate relation is granted. No role receives DML from this SQL.
 
-The SQL intentionally contains no password. After approval and application,
-the operator sets a new credential through the approved secret channel and
-creates `~/.config/clinic-lead/comdesk-reader.env` with a single line named
-`SUPABASE_COMDESK_EXPORT_READER_DB_URL`; set mode `600`. The URL must use the
-new role and the same Supabase project as the existing Clinic Runtime. The
-application verifies the actual PostgreSQL role, absence of DML/DDL privileges,
-required column grants and visible Clinic count before Step6/7 reads. It never
-uses the HP Writer as a Reader.
+The SQL intentionally contains no password. This Mac does not have a DB
+administrator password, and the SQL execution tool would expose SQL text to
+database logs. Set a fresh password from an approved local interactive `psql`
+admin connection using `\password clinic_comdesk_export_reader`; `psql`
+does not echo the entered value. Then run
+`./.venv/bin/python scripts/configure_mac_comdesk_reader.py` locally and enter
+the same password at its hidden prompt. The helper uses the existing project
+endpoint with the new role/password, performs the strict READ ONLY preflight,
+and creates `~/.config/clinic-lead/comdesk-reader.env` with mode 600 only after
+success. It refuses to overwrite an existing file and never prints DSNs or
+driver exception text. Do not put the password in SQL, shell arguments, logs,
+chat, or GitHub.
+
+### View grant incident and correction
+
+The first `GRANT SELECT (id,hp_url,maps_website_url)` attempt logged
+`no privileges were granted` for all three columns. Catalog and PostgreSQL log
+audits showed the View owner was `clinic_cloudrun_projection_owner`; the SQL
+database session was `postgres`. Its membership from `supabase_admin` had
+`ADMIN TRUE`, `INHERIT FALSE`, `SET FALSE`, so the session could not act as the
+owner when issuing `GRANT`. The migration record identifies the submitting
+account; the PostgreSQL executor was `postgres`. Existing View ACL entries were
+granted by the View owner.
+
+The correction temporarily added a non-admin `SET TRUE` membership from
+`postgres` to the owner role in one transaction, issued the three-column GRANT
+as the owner, and revoked only that temporary membership before commit. Catalog
+verification confirms all three SELECT checks now pass, while the original
+`supabase_admin` membership remains unchanged. The repeatable repair is
+[step6_view_owner_grant.sql](step6_view_owner_grant.sql).
 
 ## Import and sync Writers
 
