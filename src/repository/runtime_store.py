@@ -145,7 +145,10 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def funnel(self, filters, as_of=None): return self.repositories.clinics.funnel(filters, as_of)
     @_retry_closed_read_connection
-    def metrics(self): return self.repositories.clinics.metrics()
+    def metrics(self, *, read_only_ui=False):
+        if read_only_ui:
+            return self.repositories.clinics.metrics(read_only_ui=True)
+        return self.repositories.clinics.metrics()
     @_retry_closed_read_connection
     def treatment_status_for_ids(self, ids): return self.repositories.treatment.status_for_ids(ids)
     @_retry_closed_read_connection
@@ -302,9 +305,11 @@ class SupabaseRuntimeStore:
         predicate, args = _maps_hp_target_predicate(
             prefecture, medical_types, True,
             clinic_relation="public.clinic_cloudrun_readonly",
+            include_verified=True,
         )
-        status_expr = ("CASE WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
-                       "WHEN h.fetch_status='OK' THEN 'SUCCESS' WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+        status_expr = ("CASE WHEN c.hp_status='VERIFIED' OR h.fetch_status='OK' THEN 'SUCCESS' "
+                       "WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
                        "ELSE 'ERROR' END")
         predicate += f" AND ({status_expr})=ANY(%s::text[])"
         args.append(statuses)
@@ -329,9 +334,11 @@ class SupabaseRuntimeStore:
         predicate, args = _maps_hp_target_predicate(
             prefecture, medical_types, True,
             clinic_relation="public.clinic_cloudrun_readonly",
+            include_verified=True,
         )
-        status_expr = ("CASE WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
-                       "WHEN h.fetch_status='OK' THEN 'SUCCESS' WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+        status_expr = ("CASE WHEN c.hp_status='VERIFIED' OR h.fetch_status='OK' THEN 'SUCCESS' "
+                       "WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
                        "ELSE 'ERROR' END")
         predicate += f" AND ({status_expr})=ANY(%s::text[])"
         args.append(statuses)

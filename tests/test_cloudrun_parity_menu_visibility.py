@@ -45,40 +45,40 @@ def _simple_workflow_read_only_block():
 def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
     assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
-    assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in main
-    assert "if hp_normal_runtime:\n            nav_options = NORMAL_MAC_NAV" in main
+    assert "nav_options = NAV if hp_normal_runtime else NAV[:2] if nav_locked else NAV" in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 
-def test_sidebar_shows_full_local_menu_structure_as_static_text_only():
+def test_mac_normal_restores_original_sidebar_and_cloud_read_only_stays_locked():
     main = _main_source()
-    expander_start = main.index("ローカル版のメニュー構成（参考）")
-    block_start = main.rindex("with st.expander(", 0, expander_start)
-    block_end = main.index("else:", block_start)
-    block = main[block_start:block_end]
-
-    # Mac normal mode exposes exactly four reviewed pages; Cloud/read-only retains its old set.
-    assert "for name in (NORMAL_MAC_NAV if hp_normal_runtime else NAV):" in block
-    assert "st.radio" not in block
-    assert "st.button" not in block
-    assert "st.file_uploader" not in block
-
-
-def test_mac_normal_menu_restores_four_pages_without_unlocking_other_local_pages():
     source = _app_source()
-    assert 'NORMAL_MAC_NAV = ["データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力"]' in source
-    main = _main_source()
-    for label in NORMAL_MAC_NAV_LABELS:
-        assert f'nav == "{label}"' in main
+    assert 'NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]' in source
+    assert 'nav == "かんたん操作"' in main
+    assert 'nav == "営業対象・出力"' in main
+    assert 'nav == "Email調査"' in main
+    assert 'nav == "メール送付文章"' in main
     assert "simple_sales_ui(store, demo, read_only=True)" in main
-
-
-NORMAL_MAC_NAV_LABELS = ("データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力")
+    assert "mac_normal=True" in main
+    assert "read_only=read_only" in main
 
 
 def test_locked_menu_items_are_labeled_as_requiring_separate_authorization():
     main = _main_source()
     assert "未有効・別権限が必要" in main
+
+
+def test_mac_hp_controls_stay_in_original_step5_and_use_explicit_selection():
+    source = _app_source()
+    start = source.index("def simple_workflow_ui")
+    end = source.index("def simple_sales_ui", start)
+    simple = source[start:end]
+    assert 'st.subheader("Step5：HP・Email自動調査")' in simple
+    assert "store.maps_hp_status_count" in simple
+    assert "store.maps_hp_status_candidates" in simple
+    assert "create_selected_hp_job" in simple
+    assert '"SUCCESS": "SUCCESS（閲覧のみ）"' in simple
+    assert 'if allow_unlimited_auto_run(hp_mode) and not mac_normal:' in simple
+    assert "disabled=mac_normal or hp_control_disabled" in simple
 
 
 def test_read_only_step_overview_is_static_text_with_no_write_calls():

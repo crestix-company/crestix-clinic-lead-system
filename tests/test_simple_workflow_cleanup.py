@@ -224,7 +224,7 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple_end = source.index("def import_ui_comdesk_step", simple_start)
     simple = source[simple_start:simple_end]
 
-    assert "([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV" in main
+    assert "nav_options = NAV if hp_normal_runtime else NAV[:2] if nav_locked else NAV" in main
     assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
     assert "and os.environ.get(\"CLINIC_NORMAL_MAC_RUNTIME\") != \"1\"" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main

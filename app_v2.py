@@ -59,7 +59,6 @@ from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL
 from src.master.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]
-NORMAL_MAC_NAV = ["データ準備", "Google Maps", "HP調査", "営業対象・Comdesk出力"]
 READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
 _STORE_CACHE_SALT = secrets.token_bytes(32)
 HP_LABELS = {"UNRESEARCHED":"未調査","VERIFIED":"HP確認済み","REVIEW":"要確認","NOT_FOUND":"HP未発見","ERROR":"取得エラー"}
@@ -177,12 +176,16 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         ("厚生局全件", None, "厚生局から取り込んだ元レコード数です。ユニーク医院数とは限りません。"),
         ("既存UUIDあり", None, "現在の医院マスターでComdesk UUIDが登録されている医院数です。"),
     ]
-    metrics = store.metrics() if compact else {}
+    metrics = (
+        store.metrics(read_only_ui=True)
+        if compact and read_only and getattr(store, "is_supabase_runtime", False)
+        else store.metrics() if compact else {}
+    )
     columns = st.columns(4)
     for column, (label, key, help_text) in zip(columns, primary):
         value = counts[key] if key else metrics.get("厚生局取込レコード" if label == "厚生局全件" else "既存UUIDあり", 0)
         with column.container(border=True):
-            st.metric(label, f"{value:,}件", help=help_text)
+            st.metric(label, f"{value:,}件" if value is not None else "—", help=help_text)
     details = [
         ("URL取得済み", "url_acquired"), ("調査完了", "researched"),
         ("取得・解析失敗", "failed"), ("URLあり・未調査", "not_researched"),
@@ -1262,7 +1265,7 @@ def hp_normal_research_ui(store):
         st.caption("HP Job履歴はありません。")
 
 
-def simple_workflow_ui(store, demo, *, read_only=False):
+def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     if read_only:
         st.header("クリニック営業マスター")
         st.caption("READ ONLYで医院マスターとHP調査状況を確認します。営業対象の検索・CSV/Excel出力は「営業対象・出力」をご利用ください。")
@@ -1300,8 +1303,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     # cloud_comdesk_import_ui, which does NOT use write_disabled) can run
     # there. On Mac (no K_SERVICE) this changes nothing.
     from src.cloud_run.deployment_context import is_cloud_run_deployment
-    write_disabled = demo or read_only or is_cloud_run_deployment()
-    metrics = store.metrics()
+    write_disabled = demo or read_only or is_cloud_run_deployment() or mac_normal
+    hp_control_disabled = demo or read_only or is_cloud_run_deployment() or (
+        mac_normal and not getattr(store, "is_supabase_runtime", False)
+    )
+    metrics = store.metrics(read_only_ui=True) if mac_normal else store.metrics()
 
     st.header("上から順に進めるだけ")
     st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
@@ -1310,7 +1316,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     import_ui_comdesk_step(store, write_disabled)
 
     st.subheader("現在のデータ状況")
-    show_web_research_metrics(store, compact=True)
+    show_web_research_metrics(store, read_only=mac_normal, compact=True)
 
     if metrics.get("厚生局取込レコード", 0) == 0:
         st.warning("厚生局データがまだありません。最初に東京都マスターを取り込んでください。")
@@ -1362,7 +1368,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
     st.subheader("Step5：HP・Email自動調査")
     if getattr(store, "is_supabase_runtime", False):
-        prefs = store.prefectures()
+        prefs = store.prefectures(read_only_ui=mac_normal)
     else:
         with store.connect() as c:
             prefs = [r[0] for r in c.execute(
@@ -1375,20 +1381,68 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     med_label = st.selectbox("医科・歯科", ["医科", "歯科", "両方"], index=0, key="simple_research_medical_type")
     research_medical_types = ["医科", "歯科"] if med_label == "両方" else [med_label]
 
-    force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
+    force = False
+    selected_hp_ids = []
+    selected_hp_statuses = []
     force_confirmed = True
-    if force:
-        force_confirmed = st.checkbox(
-            "過去のSUCCESS・ERROR・Human Review結果を再調査対象に含めることを確認しました",
-            value=False, key="simple_force_confirmed",
+    if mac_normal:
+        status_labels = {
+            "UNRESEARCHED": "未調査", "ERROR": "ERROR", "REVIEW": "要確認",
+            "SUCCESS": "SUCCESS（閲覧のみ）",
+        }
+        selected_labels = st.multiselect(
+            "HP調査状態", list(status_labels.values()), default=[status_labels["UNRESEARCHED"]],
+            key="simple_hp_statuses",
         )
-    available = _maps_hp_available_count(store, pref, force, research_medical_types)
-    st.info(
-        f"HP調査可能・未調査：{available:,}件",
-        icon="ℹ️",
-    )
-    st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・HP調査履歴なし（通常時）で、未完了jobにも入っていない医院です。『調査済みもやり直す』は過去の成功・失敗・要確認も対象に含めます。")
-    if getattr(store, "is_supabase_runtime", False):
+        selected_hp_statuses = [key for key, label in status_labels.items()
+                                if label in selected_labels]
+        status_counts = {
+            status: store.maps_hp_status_count(pref, research_medical_types, [status])
+            for status in selected_hp_statuses
+        }
+        if status_counts:
+            cols = st.columns(len(status_counts))
+            for col, (status, status_count) in zip(cols, status_counts.items()):
+                col.metric(status_labels[status], f"{status_count:,}件")
+        candidate_rows = (store.maps_hp_status_candidates(
+            pref, research_medical_types, selected_hp_statuses, limit=100
+        ) if selected_hp_statuses else [])
+        if candidate_rows:
+            st.dataframe(pd.DataFrame([{
+                "医院ID": row["id"], "医院名": row.get("clinic_name", ""),
+                "住所": row.get("address", ""), "HP URL": row.get("maps_website_url", ""),
+                "HP調査状態": status_labels.get(row.get("hp_status"), row.get("hp_status", "")),
+            } for row in candidate_rows]), hide_index=True, use_container_width=True)
+        eligible_rows = [row for row in candidate_rows
+                         if row.get("hp_status") in {"UNRESEARCHED", "ERROR", "REVIEW"}]
+        rows_by_id = {int(row["id"]): row for row in eligible_rows}
+        selected_hp_ids = [int(value) for value in st.multiselect(
+            "Job対象の医院（最大50件・SUCCESSは選択不可）", list(rows_by_id),
+            format_func=lambda value: f"{value} · {rows_by_id[value].get('clinic_name', '')}",
+            max_selections=50, key="simple_hp_selected_ids",
+        ) if int(value) in rows_by_id]
+        force_confirmed = bool(selected_hp_ids) and st.checkbox(
+            "選択した医院だけをHP調査Jobに登録することを確認",
+            key="simple_hp_confirm_selected",
+        )
+        available = len(selected_hp_ids)
+        force = any(rows_by_id[value].get("hp_status") in {"ERROR", "REVIEW"}
+                    for value in selected_hp_ids)
+    else:
+        force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
+        if force:
+            force_confirmed = st.checkbox(
+                "過去のSUCCESS・ERROR・Human Review結果を再調査対象に含めることを確認しました",
+                value=False, key="simple_force_confirmed",
+            )
+        available = _maps_hp_available_count(store, pref, force, research_medical_types)
+    count_label = "選択済みHP調査対象" if mac_normal else "HP調査可能・未調査"
+    st.info(f"{count_label}：{available:,}件", icon="ℹ️")
+    if mac_normal:
+        st.caption("active=true・未統合・Maps公式HP URLあり。進行中/一時停止中/予算停止Jobの予約医院と過去SUCCESSは除外。Job登録は選択医院だけを対象にします。")
+    else:
+        st.caption("active=true・未統合・Google MapsでWebサイトURL取得済み・HP調査履歴なし（通常時）で、未完了jobにも入っていない医院です。『調査済みもやり直す』は過去の成功・失敗・要確認も対象に含めます。")
+    if getattr(store, "is_supabase_runtime", False) and not mac_normal:
         with st.expander("今回の条件に合う医院をプレビュー（先頭10件）", expanded=False):
             candidates = store.maps_hp_candidate_preview(
                 pref, research_medical_types, force,
@@ -1407,7 +1461,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     hp_mode = hp_executor_mode()
     cloud_run_executor = hp_mode == "cloud_run"
     mode_options = ["指定件数だけ調査"]
-    if allow_unlimited_auto_run(hp_mode):
+    if allow_unlimited_auto_run(hp_mode) and not mac_normal:
         mode_options.append("未調査がなくなるまで自動調査")
     mode = st.radio(
         "調査モード",
@@ -1428,7 +1482,8 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     # Loading/rerunning the UI never elects a local Auto Run worker. Worker start/resume
     # always requires the explicit control below; the database lease remains the cross-host fence.
 
-    hp_jobs = [j for j in recent_jobs(store) if j.get("kind") == "hp"]
+    hp_jobs = (store.hp_normal_recent_jobs() if mac_normal
+               else [j for j in recent_jobs(store) if j.get("kind") == "hp"])
     def is_auto_child(job):
         options = job.get("options_json") or {}
         if isinstance(options, str):
@@ -1438,7 +1493,8 @@ def simple_workflow_ui(store, demo, *, read_only=False):
                 options = {}
         return bool(options.get("auto_run_id")) if isinstance(options, dict) else False
     single_jobs = [job for job in hp_jobs if not is_auto_child(job)]
-    current = job_status(store, single_jobs[0]["id"]) if single_jobs else None
+    current = (store.hp_normal_job_status(single_jobs[0]["id"]) if mac_normal
+               else job_status(store, single_jobs[0]["id"])) if single_jobs else None
     unfinished = bool(current and current["status"] in {"RUNNING", "PAUSED", "BUDGET"})
 
     if mode == "指定件数だけ調査":
@@ -1449,10 +1505,11 @@ def simple_workflow_ui(store, demo, *, read_only=False):
             value=max(1, min(default_count, count_cap)), key="simple_count",
         )
         actual = min(int(count), available)
+        selected_for_job = selected_hp_ids[:actual] if mac_normal else []
         st.caption(f"今回のウェブサイト調査件数：{actual:,}件。設定が50件でも対象が34件なら34件だけ調査します。")
         if st.button(
             "HP調査Jobを作成", type="primary",
-            disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0 or not force_confirmed,
+            disabled=hp_control_disabled or runner.running() or unfinished or auto_active or actual == 0 or not force_confirmed,
             key="simple_start", use_container_width=True,
         ):
             if cloud_run_executor:
@@ -1467,31 +1524,44 @@ def simple_workflow_ui(store, demo, *, read_only=False):
                     st.session_state["active_job"] = jid
                     _dispatch_cloud_hp_job(jid, clinic_count=actual)
             else:
-                jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
+                if mac_normal:
+                    if int(count) != len(selected_hp_ids):
+                        selected_for_job = selected_hp_ids[:int(count)]
+                    jid = write_repositories_for(store).auto_hp.create_selected_hp_job(
+                        selected_for_job,
+                        [rows_by_id[value]["hp_status"] for value in selected_for_job],
+                    )
+                    st.session_state.setdefault("mac_created_hp_jobs", []).append(jid)
+                else:
+                    jid = _create_maps_hp_job(store, pref, int(count), force, research_medical_types)
                 st.session_state["active_job"] = jid
                 # Job creation and Worker start are separate operator actions.
             st.rerun()
         active_job_id = st.session_state.get("active_job") or (single_jobs[0]["id"] if single_jobs else None)
         active_single = next((job for job in single_jobs if job.get("id") == active_job_id), None)
         if active_single:
-            active_status = job_status(store, active_single["id"])
-            created_in_session = st.session_state.get("active_job") == active_single["id"]
+            active_status = (store.hp_normal_job_status(active_single["id"]) if mac_normal
+                             else job_status(store, active_single["id"]))
+            created_in_session = (
+                active_single["id"] in st.session_state.get("mac_created_hp_jobs", [])
+                if mac_normal else st.session_state.get("active_job") == active_single["id"]
+            )
             st.caption(f"作成済みHP Job：{active_single['id']}／状態：{active_status['status']}")
             if st.button(
                 "このHP JobのWorkerを開始・再開", type="primary",
-                disabled=write_disabled or not created_in_session or runner.running() or active_status["status"] not in {"PAUSED", "BUDGET"}
+                disabled=hp_control_disabled or not created_in_session or runner.running() or active_status["status"] not in {"PAUSED", "BUDGET"}
                     or active_status["counts"].get("PENDING", 0) == 0,
                 key="simple_single_worker_start", use_container_width=True,
             ):
                 runner.start(store, active_single["id"], TavilySearchProvider())
                 st.rerun()
             if st.button(
-                "このHP Jobを一時停止", disabled=write_disabled or not created_in_session or active_status["status"] != "RUNNING",
+                "このHP Jobを一時停止", disabled=hp_control_disabled or not created_in_session or active_status["status"] != "RUNNING",
                 key="simple_single_worker_pause", use_container_width=True,
             ):
                 write_repositories_for(store).jobs.pause_job(active_single["id"])
                 st.rerun()
-            show_job_progress(store, active_single["id"])
+            show_job_progress(store, active_single["id"], hp_only=mac_normal)
             if not created_in_session:
                 st.caption("既存Jobの再開・停止は「詳細設定 > HP単発Job管理・復旧」から対象を選んで操作してください。")
     else:
@@ -1504,7 +1574,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.caption(f"1Batch：{int(batch_size):,}件／予想Batch数：{estimated:,}")
         if st.button(
             "Auto Run Jobを登録", type="primary",
-            disabled=write_disabled or not getattr(store, "is_supabase_runtime", False) or auto_active or runner.running() or unfinished or available == 0 or not force_confirmed,
+            disabled=mac_normal or hp_control_disabled or not getattr(store, "is_supabase_runtime", False) or auto_active or runner.running() or unfinished or available == 0 or not force_confirmed,
             key="simple_auto_start", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.start(pref, research_medical_types, force, int(batch_size))
@@ -1519,25 +1589,27 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         auto_controls = st.columns(2)
         if auto_state.get("status") in {"RUNNING", "WAITING_NETWORK"} and not auto_runner.running():
             if st.button(
-                "Auto Run Workerを開始・再開", type="primary", disabled=write_disabled or cloud_run_executor,
+                "Auto Run Workerを開始・再開", type="primary", disabled=hp_control_disabled or cloud_run_executor,
                 key="simple_auto_worker_start", use_container_width=True,
             ):
                 auto_runner.start(store)
                 st.rerun()
         if auto_controls[0].button(
-            "自動調査を一時停止", disabled=write_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
+            "自動調査を一時停止", disabled=mac_normal or hp_control_disabled or auto_state.get("status") not in {"RUNNING", "WAITING_NETWORK"},
             key="simple_auto_pause", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.pause()
             st.rerun()
         if auto_controls[1].button(
-            "Auto Run状態を再開", disabled=write_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
+            "Auto Run状態を再開", disabled=mac_normal or hp_control_disabled or auto_state.get("status") not in {"PAUSED", "ERROR"},
             key="simple_auto_resume", use_container_width=True,
         ):
             write_repositories_for(store).auto_hp.resume()
             st.rerun()
 
-    if read_only:
+    if mac_normal:
+        st.info("Email調査・Human Reviewは表示のみです。HP以外のJob・個別Writer操作は無効です。")
+    elif read_only:
         st.info("READ ONLY画面確認中のため、HP・Email JobおよびHuman Review操作は無効です。")
     elif is_cloud_run_deployment():
         # hp_human_review_card/email_human_review_card call write_repositories_for(store)
@@ -2832,7 +2904,7 @@ def single_hp_job_recovery_ui(store, demo):
     show_job_progress(store, current["id"])
 
 
-def advanced_ui(store, demo):
+def advanced_ui(store, demo, *, mac_normal=False):
     st.header("詳細設定")
     st.caption("普段は使わない設定・確認機能です。")
     section = st.selectbox(
@@ -2840,6 +2912,33 @@ def advanced_ui(store, demo):
         ["マスター管理", "自動情報収集（詳細）", "HP単発Job管理・復旧", "メール調査", "営業対象フィルター（詳細）", "要確認・設定", "HP Human Review", "Email Human Review", "歯科営業タグ", "ダッシュボード"],
         key="advanced_section",
     )
+
+    if mac_normal:
+        st.caption("Mac通常版では、HP調査以外のWriter操作・既存Job変更・Email/Gmail処理を無効にしています。")
+        if section == "ダッシュボード":
+            metrics = store.metrics(read_only_ui=True)
+            columns = st.columns(5)
+            for i, (label, value) in enumerate(metrics.items()):
+                columns[i % 5].metric(label, f"{value:,}" if value is not None else "—")
+            show_web_research_metrics(store, read_only=True)
+        elif section == "営業対象フィルター（詳細）":
+            simple_sales_ui(store, demo, read_only=True)
+        elif section == "HP単発Job管理・復旧":
+            jobs = store.hp_normal_recent_jobs()
+            if not jobs:
+                st.info("HP Job履歴はありません。")
+            else:
+                st.dataframe(pd.DataFrame([{
+                    "Job ID": job["id"], "状態": JOB_LABELS.get(job["status"], job["status"]),
+                    "作成": job.get("created_at"),
+                } for job in jobs]), hide_index=True, use_container_width=True)
+                selected = st.selectbox("進捗を表示するHP Job", [job["id"] for job in jobs],
+                                        key="mac_read_only_hp_job")
+                show_job_progress(store, selected, hp_only=True)
+                _show_hp_normal_job_results(store, selected)
+        else:
+            st.info("この画面は元のメニュー構成を維持しています。Mac通常版では承認済みのHP調査以外の更新操作を停止しています。")
+        return
 
     if section == "マスター管理":
         import_ui(store, demo)
@@ -3037,23 +3136,24 @@ def main():
     hp_normal_runtime = os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1"
     nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime
     with st.sidebar:
-        nav_options = ([NAV[0]] if hp_normal_runtime else NAV[:2]) if nav_locked else NAV
-        if hp_normal_runtime:
-            nav_options = NORMAL_MAC_NAV
+        nav_options = NAV if hp_normal_runtime else NAV[:2] if nav_locked else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
-            with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
-                st.caption("READ ONLYまたはHP専用ローカル実行では、許可されたメニューだけを表示します。")
-                for name in (NORMAL_MAC_NAV if hp_normal_runtime else NAV):
-                    if name in nav_options:
-                        st.caption(f"✅ {name}：利用可能")
-                    else:
-                        st.caption(f"🔒 {name}：未有効・別権限が必要（データ更新/送信を含むため非表示）")
+            if not hp_normal_runtime:
+                with st.expander("ローカル版のメニュー構成（参考）", expanded=False):
+                    st.caption("READ ONLY画面では、操作できるメニューを制限しています。")
+                    for name in NAV:
+                        if name in nav_options:
+                            st.caption(f"✅ {name}：利用可能")
+                        else:
+                            st.caption(f"🔒 {name}：未有効・別権限が必要（データ更新/送信を含むため非表示）")
         else:
             with st.expander("開発・確認用", expanded=False):
                 demo = st.toggle("サンプルモード", key="sample_mode")
-        st.caption("Mac通常版はReader画面と、明示操作のHP専用Writerを分離しています。")
+        st.caption("普段は「かんたん操作」を上から順に進めればOKです。")
+        if hp_normal_runtime:
+            st.caption("Reader画面と明示操作のHP専用Writerを分離しています。")
     if read_only:
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
     elif hp_normal_runtime:
@@ -3115,25 +3215,18 @@ def main():
         load_demo(store)
         st.info("架空サンプル4医院を表示しています。実データとは別に保存されます。")
 
-    if hp_normal_runtime and nav == "データ準備":
-        simple_workflow_ui(store, demo, read_only=True)
-    elif hp_normal_runtime and nav == "Google Maps":
-        st.header("Google Maps")
-        st.caption("この画面はREAD ONLYです。Google Maps取込・更新操作は提供しません。Mapsに登録済みの公式HP URLを確認できます。")
-        map_count = store.maps_hp_available_count("", ["医科", "歯科"], False)
-        st.metric("Maps公式HP URLあり・未調査（予約除外）", f"{map_count:,}件")
-        map_rows = store.maps_hp_candidate_preview("", ["医科", "歯科"], False, limit=10)
-        if map_rows:
-            st.dataframe(pd.DataFrame([{
-                "ID": row["id"], "医院名": row.get("clinic_name", ""), "住所": row.get("address", ""),
-                "HP URL": row.get("maps_website_url", ""),
-            } for row in map_rows]), hide_index=True, use_container_width=True)
-        else:
-            st.caption("現在、未調査候補はありません。")
-    elif hp_normal_runtime and nav == "HP調査":
-        hp_normal_research_ui(store)
-    elif hp_normal_runtime and nav == "営業対象・Comdesk出力":
+    if hp_normal_runtime and nav == "かんたん操作":
+        simple_workflow_ui(store, demo, mac_normal=True)
+    elif hp_normal_runtime and nav == "営業対象・出力":
         simple_sales_ui(store, demo, read_only=True)
+    elif hp_normal_runtime and nav == "Email調査":
+        st.header("メール調査")
+        st.caption("元の画面構成を維持しています。Mac通常版ではEmail候補の直接参照・Job操作を無効にしています。")
+        show_read_only_email_research_metrics(store)
+        st.info("Email Researchの詳細・候補住所・Job操作は、このReader権限の範囲外です。")
+    elif hp_normal_runtime and nav == "メール送付文章":
+        from src.outreach_ui import outreach_email_page
+        outreach_email_page(store, demo, read_only=True)
     elif nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
     elif nav == "営業対象・出力":
@@ -3143,6 +3236,8 @@ def main():
     elif nav == "メール送付文章":
         from src.outreach_ui import outreach_email_page
         outreach_email_page(store, demo, read_only=read_only)
+    elif hp_normal_runtime:
+        advanced_ui(store, demo, mac_normal=True)
     else:
         advanced_ui(store, demo)
 

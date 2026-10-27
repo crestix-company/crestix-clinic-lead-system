@@ -239,6 +239,15 @@ class SupabaseHpAutoRunRepository:
                     "WHEN h.fetch_status='OK' THEN 'SUCCESS' "
                     "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' ELSE 'ERROR' END)=ANY(%s::text[])"
                 )
+                # This column-scoped historical check belongs on the Writer
+                # transaction only; Reader candidate queries must stay within
+                # the granted HP projections.
+                predicate += (
+                    " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
+                    "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
+                    "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
+                    "AND success_i.result::text ILIKE '%SUCCESS%' AND success_j.kind='hp')"
+                )
                 cur.execute(
                     "SELECT c.id FROM public.clinics c LEFT JOIN hp_research.clinic_hp_research h "
                     "ON h.clinic_id=c.id WHERE " + predicate +

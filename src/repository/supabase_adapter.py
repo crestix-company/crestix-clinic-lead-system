@@ -701,7 +701,41 @@ class SupabaseClinicRepository:
         output.append(("最終営業対象", output[-1][1]))
         return output
 
-    def metrics(self):
+    def metrics(self, *, read_only_ui=False):
+        if read_only_ui:
+            # Keep the dashboard's original metric layout on a least-privilege
+            # Reader connection. The allowlisted projection intentionally does
+            # not include age estimates or provenance/import tables.
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT count(*),
+                      count(*) FILTER (WHERE uuid<>''),
+                      count(*) FILTER (WHERE uuid=''),
+                      count(*) FILTER (WHERE active),
+                      count(*) FILTER (WHERE hp_status='VERIFIED'),
+                      count(*) FILTER (WHERE hp_status='NOT_FOUND'),
+                      count(*) FILTER (WHERE false),
+                      count(*) FILTER (WHERE hp_status IN ('REVIEW','ERROR')),
+                      count(*) FILTER (WHERE signal_count>=2),
+                      count(*) FILTER (WHERE signal_count>=3),
+                      count(*) FILTER (WHERE maps_presence_status IN ('MAPS_MATCHED_WEBSITE','MAPS_MATCHED_NO_WEBSITE')),
+                      count(*) FILTER (WHERE maps_presence_status='MAPS_MATCHED_WEBSITE' AND maps_website_url<>''),
+                      count(*) FILTER (WHERE maps_presence_status='MAPS_NOT_FOUND')
+                    FROM public.clinic_cloudrun_readonly WHERE merged_into IS NULL
+                    """
+                )
+                row = cur.fetchone()
+            labels = (
+                "全マスター", "既存UUIDあり", "新規医院（UUIDなし）", "現存クリニック", "HP確認済み", "HP未発見",
+                "年齢推定済み", "HP要確認", "アツい（2個以上）", "かなりアツい",
+                "Google Maps掲載確認", "Google Maps HP取得", "Google Maps未発見",
+            )
+            result = dict(zip(labels, row))
+            result["年齢推定済み"] = None
+            result["要確認重複（保留レコード）"] = None
+            result["厚生局取込レコード"] = None
+            return result
         # P0-3: 15 independent round trips -> 1. The 10 per-clinics-item counts become FILTER
         # aggregates over a single scan; the 2 provenance-schema counts (different tables, can't
         # join into the same FROM) become scalar subqueries in the same SELECT; the 3 Google Maps

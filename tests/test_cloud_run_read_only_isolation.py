@@ -29,12 +29,13 @@ def _single_hp_job_recovery_source():
     return source[start:end]
 
 
-def test_hp_start_button_disabled_includes_write_disabled():
+def test_hp_start_button_uses_hp_writer_gate_not_general_writer_gate():
     simple = _simple_workflow_ui_source()
     start_button = simple.index('key="simple_start"')
     button_call_start = simple.rindex("if st.button(", 0, start_button)
     button_call = simple[button_call_start:start_button]
-    assert "write_disabled" in button_call
+    assert "hp_control_disabled" in button_call
+    assert "runner.running() or unfinished or auto_active" in button_call
 
 
 def test_cloud_run_dispatch_branch_is_nested_inside_the_start_button_block():

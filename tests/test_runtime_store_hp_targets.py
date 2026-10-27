@@ -59,8 +59,8 @@ def test_hp_target_count_and_candidates_share_the_exact_eligibility_predicate():
     assert "FROM public.clinic_cloudrun_readonly c WHERE" in candidate_sql
     assert "FROM public.clinic_cloudrun_readonly c WHERE" in count_sql
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h WHERE h.clinic_id=c.id)" in candidate_sql
-    assert "hp_status" not in candidate_sql
-    assert "hp_status" not in count_sql
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in candidate_sql
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in count_sql
     assert "uuid" not in candidate_sql.lower()
     assert "email_candidates" not in candidate_sql.lower()
 
@@ -87,8 +87,10 @@ def test_status_candidates_use_hp_ledger_reader_and_always_exclude_reserved_jobs
     sql, args = conn.calls[0]
     assert "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in sql
     assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in sql
+    assert "success_i.result::text ILIKE '%SUCCESS%'" not in sql
     assert "public.clinic_cloudrun_readonly c" in sql
     assert "public.clinics" not in sql and "email_candidates" not in sql.lower()
+    assert "success_i.result::text ILIKE '%SUCCESS%'" not in sql
     assert args[-2:] == (["ERROR"], 100)
 
 
@@ -96,6 +98,15 @@ def test_status_candidate_query_rejects_unknown_states():
     store, _conn = _store([])
     with pytest.raises(ValueError, match="Unsupported"):
         store.maps_hp_status_candidates(statuses=["SUCCESS_WITH_WRITE"])
+
+
+def test_status_candidate_query_can_show_success_read_only():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "医科", "https://clinic.test", "SUCCESS", "OK")]])
+    rows = store.maps_hp_status_candidates(statuses=["SUCCESS"], limit=10)
+    assert rows[0]["hp_status"] == "SUCCESS"
+    sql, _args = conn.calls[0]
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" not in sql
+    assert "h.fetch_status='OK' THEN 'SUCCESS'" in sql
 
 
 def test_hp_job_result_preview_reads_only_reader_visible_projection_and_ledger():
@@ -182,11 +193,11 @@ def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
     assert args == ["東京都", ["医科"]]
 
 
-def test_force_includes_researched_rows_without_using_projection_hp_status():
+def test_force_includes_researched_rows_but_excludes_published_success():
     predicate, args = _maps_hp_target_predicate("東京都", ["医科"], force=True)
 
     assert "hp_research.clinic_hp_research" not in predicate
-    assert "hp_status" not in predicate
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in predicate
     assert "c.prefecture=%s" in predicate
     assert "c.medical_type=ANY(%s::text[])" in predicate
     assert args == ["東京都", ["医科"]]
@@ -210,7 +221,7 @@ def test_empty_optional_filters_are_supported_and_force_off_uses_hp_research_sot
     assert "c.prefecture=%s" not in predicate
     assert "c.medical_type=ANY" not in predicate
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research" in predicate
-    assert "hp_status" not in predicate
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in predicate
 
 
 def test_ui_count_wrapper_delegates_the_selected_scope_to_supabase_ledger():
