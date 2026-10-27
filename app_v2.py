@@ -431,17 +431,9 @@ def _render_auto_hp_progress(snapshot, *, live=False):
     st.caption(f"通信状態：{network}／最終DB更新：{updated}")
 
 
-def _start_mac_auto_hp_worker(store, run_state):
-    """Start/recover the detached per-user LaunchAgent after the Writer commits state."""
-    from src.master.hp_auto_worker_process import start_launch_agent
-
-    return start_launch_agent(
-        ROOT, sys.executable, expected_run_id=str(run_state.get("run_id") or "")
-    )
-
-
 def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
     """One-click Auto Run surface; all legacy single-Job controls stay in Details."""
+    auto_runner = auto_hp_runner_for(str(store.path))
     from src.master.hp_auto_worker_process import local_worker_running, read_worker_status, worker_paths
 
     try:
@@ -479,8 +471,9 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
             writer_conn.close()
 
     paths = worker_paths()
-    worker_active = local_worker_running(paths)
+    detached_worker_active = local_worker_running(paths)
     local_status = read_worker_status(paths)
+    worker_active = auto_runner.running() or detached_worker_active
     run_status = str(state.get("status") or "IDLE")
     active_run = run_status in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
     snapshot = _auto_hp_progress_snapshot(store, None) if state.get("run_id") else None
@@ -525,11 +518,14 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
         if snapshot.get("legacy_breakdown_unavailable"):
             st.caption("既存の完了Runは結果内訳を保存する前の実行のため、成功・要確認・エラー内訳は表示できません。")
     if worker_active:
-        st.caption(
-            f"MacローカルWorker稼働中（PID {local_status.get('pid', '確認中')}／"
-            f"最終heartbeat {local_status.get('heartbeat_at', '確認中')}）。"
-            "ブラウザを閉じても処理を継続します。"
-        )
+        if auto_runner.running():
+            st.caption("旧AutoHpRunner方式で稼働中です。ブラウザを閉じても続きますが、Mac通常版のStreamlitプロセスは起動状態を保ってください。")
+        else:
+            st.caption(
+                f"既存のMacローカルWorker稼働中（PID {local_status.get('pid', '確認中')}／"
+                f"最終heartbeat {local_status.get('heartbeat_at', '確認中')}）。"
+                "重複Workerは起動しません。"
+            )
     elif run_status in {"RUNNING", "WAITING_NETWORK"}:
         st.warning("DB上のRunは継続中ですが、MacローカルWorkerが停止しています。既存Runを復旧できます。")
     elif local_status.get("status") == "ERROR":
@@ -540,9 +536,11 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
         )
     st.caption("Macがスリープすると処理は止まり、復帰後にRun状態から再開できます。夜間は電源接続とスリープ抑制が必要です。")
 
-    def launch_worker(run_state):
+    def start_worker(run_state):
         try:
-            _start_mac_auto_hp_worker(store, run_state)
+            if auto_runner.start(store) or auto_runner.running():
+                return True
+            raise RuntimeError("AutoHpRunner thread did not start")
         except Exception as exc:
             failure_repo = None
             try:
@@ -555,18 +553,11 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
                 if failure_repo is not None:
                     failure_repo._conn.close()
             logging.warning(
-                "HP Auto Run launch agent failed exception_type=%s category=%s stage=%s code=%s returncode=%s",
+                "HP Auto Run thread start failed exception_type=%s category=%s",
                 type(exc).__name__, connection_error_category(exc),
-                str(getattr(exc, "stage", "unknown")), str(getattr(exc, "code", "unknown")),
-                str(getattr(exc, "returncode", "") or ""),
             )
-            reason = (
-                f"（{exc.stage}: {exc.code}）"
-                if hasattr(exc, "stage") and hasattr(exc, "code") else ""
-            )
-            st.error(f"バックグラウンドWorkerを起動できませんでした{reason}。RunとJobは再開できる状態で保持しました。")
+            st.error("Auto Run Worker threadを起動できませんでした。既存RunとJobは再開できる状態で保持しました。")
             return False
-        return True
 
     can_start = (
         state_available and not controls_disabled and not active_run
@@ -591,12 +582,13 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
                 )
                 st.error(safe_connection_message(exc, service="Clinic/HP"))
             else:
-                launch_worker(new_state)
+                start_worker(new_state)
                 auto_repo._conn.close()
                 st.rerun()
     elif run_status in {"PAUSED", "ERROR"}:
         if actions[0].button(
-            "HP自動調査を再開", type="primary", disabled=controls_disabled or not state_available or not writer_available,
+            "HP自動調査を再開", type="primary",
+            disabled=controls_disabled or not state_available or not writer_available or worker_active,
             key="mac_hp_auto_resume", use_container_width=True,
         ):
             try:
@@ -612,7 +604,7 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
                 )
                 st.error(safe_connection_message(exc, service="Clinic/HP"))
             else:
-                launch_worker(resumed)
+                start_worker(resumed)
                 auto_repo._conn.close()
                 st.rerun()
     elif run_status in {"RUNNING", "WAITING_NETWORK"} and not worker_active:
@@ -620,7 +612,7 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
             "既存RunのWorkerを復旧", type="primary", disabled=controls_disabled or not state_available or not writer_available,
             key="mac_hp_auto_recover", use_container_width=True,
         ):
-            if launch_worker(state):
+            if start_worker(state):
                 st.rerun()
 
     if run_status in {"RUNNING", "WAITING_NETWORK"}:

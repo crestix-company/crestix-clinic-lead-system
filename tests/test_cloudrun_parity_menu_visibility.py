@@ -67,17 +67,23 @@ def test_locked_menu_items_are_labeled_as_requiring_separate_authorization():
     assert "未有効・別権限が必要" in main
 
 
-def test_mac_step5_uses_one_click_detached_auto_run_without_individual_selection():
+def test_mac_step5_uses_legacy_autohprunner_without_individual_selection():
     source = _app_source()
     start = source.index("def simple_workflow_ui")
     end = source.index("def simple_sales_ui", start)
     simple = source[start:end]
+    auto_ui_start = source.index("def _mac_auto_hp_run_ui")
+    auto_ui_end = source.index("@st.fragment", auto_ui_start)
+    auto_ui = source[auto_ui_start:auto_ui_end]
     assert 'st.subheader("Step5：HP・Email自動調査")' in simple
     assert "_mac_auto_hp_run_ui(" in simple
     assert '"HP自動調査を開始"' in source
     assert '"一時停止"' in source
     assert '"HP自動調査を再開"' in source
     assert 'if mac_normal:\n        mode = "mac_detached_auto_run"' in simple
+    assert "auto_runner.start(store)" in auto_ui
+    assert "_start_mac_auto_hp_worker" not in auto_ui
+    assert "Streamlitプロセスは起動状態を保ってください" in auto_ui
     assert "max_value=50, value=50" in simple  # retained for non-Mac/legacy mode
     assert '"Job対象の医院（最大50件・SUCCESSは選択不可）"' not in simple
     assert '"HP調査Jobを作成"' in simple  # retained only for non-Mac branches
