@@ -301,12 +301,49 @@ class SupabaseRuntimeStore:
             return [dict(zip(names, row)) for row in cur.fetchall()]
 
     @_retry_closed_read_connection
+    def hp_normal_recent_jobs(self):
+        """Minimal HP-only job list for the Mac normal Reader UI."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs "
+                "WHERE kind='hp' AND status<>'RESET' "
+                "ORDER BY created_at DESC,id DESC LIMIT 20"
+            )
+            names = [item.name for item in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
     def hp_job_status(self, job_id):
         with self._conn.cursor() as cur:
             cur.execute("SELECT * FROM research.research_jobs WHERE id=%s", (job_id,))
             row = cur.fetchone()
             if not row:
                 raise ValueError("調査履歴が見つかりません。")
+            result = dict(zip([item.name for item in cur.description], row))
+            cur.execute(
+                "SELECT state,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s GROUP BY state", (job_id,),
+            )
+            result["counts"] = dict(cur.fetchall())
+            cur.execute(
+                "SELECT result,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s AND state='DONE' GROUP BY result", (job_id,),
+            )
+            result["results"] = dict(cur.fetchall())
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    @_retry_closed_read_connection
+    def hp_normal_job_status(self, job_id):
+        """Progress summary using only the columns shown in the HP-only UI."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs "
+                "WHERE id=%s AND kind='hp'", (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("HP調査履歴が見つかりません。")
             result = dict(zip([item.name for item in cur.description], row))
             cur.execute(
                 "SELECT state,count(*) FROM research.research_job_items "

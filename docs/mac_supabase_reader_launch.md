@@ -26,22 +26,24 @@ for name in reader.env preview-reader.env runtime-writer.env hp-provider.env; do
 done
 ```
 
-この作成例は既存ファイルを上書きしません。各ファイルに権限者から取得した値を安全なエディタで記入してください。`reader.env`と`preview-reader.env`は各1行の`SUPABASE_READONLY_DB_URL=...`のみです。`runtime-writer.env`はHP通常版専用で、`SUPABASE_RUNTIME_DB_URL=...`のみです。`hp-provider.env`は`TAVILY_API_KEY=...`のみを保存します。ReaderとWriterは別ロール・別URLでなければなりません。パスワード、接続URL、APIキーをコマンド引数、シェル履歴、Git管理ファイルへ置かないでください。起動スクリプトは秘密値を表示しません。
+この作成例は既存ファイルを上書きしません。各ファイルに権限者から取得した値を安全なエディタで記入してください。`reader.env`にはDB管理者から提供される`clinic_cloudrun_reader`専用DSNを、`SUPABASE_READONLY_DB_URL=...`の1行で保存します。Writer DSNからReader URLを作らず、Writerのrole名やパスワードを流用しないでください。`preview-reader.env`も専用のReader URLだけ、`runtime-writer.env`はHP通常版専用で`SUPABASE_RUNTIME_DB_URL=...`のみです。`hp-provider.env`は`TAVILY_API_KEY=...`のみを保存します。パスワード、接続URL、APIキーをコマンド引数、シェル履歴、Git管理ファイルへ置かないでください。起動スクリプトは秘密値を表示しません。
 
 ## Readerの最小参照範囲
 
-READ ONLY閲覧画面は投影relationを使用します。Comdesk Previewは別ReaderとPreview固有relationを使用します。HP通常版はHP対象検索・結果・Job進捗のため、次のSELECTが必要です。HP通常版はEmail候補・Email状態を読みません。
+2026-10-27に対象`clinic-lead-shadow`のカタログをSupabase管理接続からSELECTのみで監査しました。Writer DSNをReader接続として使用していません。
 
-- `public.clinic_cloudrun_readonly` — 医院ID、医院名、住所、都道府県、診療科、Maps公式URLなど対象検索に必要な投影列
-- `hp_research.clinic_hp_research` — HP調査状態・結果の参照
-- `research.research_jobs`、`research.research_job_items` — Job状態と進捗
-- `app_config.settings` — HP Job設定の参照
+READ ONLY閲覧画面は投影relationを使用します。Comdesk Previewは別ReaderとPreview固有relationを使用します。HP通常版の対象検索・結果・Job進捗で実際に使うrelationは次の4つです。監査対象として確認した`app_config.settings`は現行HP専用画面から参照されないため、権限要件から除外しています。
 
-閲覧・営業一覧の利用時は、その画面の投影relationとして`public.clinic_email_enrichment`、`provenance.clinic_cloudrun_comdesk_rows`、`provenance.templates`、`treatment.clinic_treatment_research`、`treatment.clinic_research_status`も必要です。Email候補本文・候補行を読む`email_research.email_candidates`への直接権限は不要です。メール候補の画面・調査はHP通常版の対象外です。
+- `public.clinic_cloudrun_readonly` — 対象抽出と候補表示に使う11列だけ
+- `hp_research.clinic_hp_research` — 対象済み判定に使う`clinic_id`だけ
+- `research.research_jobs` — `id,kind,status,created_at`
+- `research.research_job_items` — `job_id,clinic_id,state,result`
 
-DB管理者は上記relationの列投影、スキーマUSAGE、SELECT、RLSを確認してください。医院マスター全件を許可するかは利用承認範囲に従い、無条件の全国開示を暗黙に設定しないでください。基表RLSを使う場合は、専用Readerに対するSELECT policyで承認済み医院範囲を指定します。投影Viewを使う場合は、所有者権限でRLSを迂回しない構成か（例：適切な`security_invoker`と基表policy）をDBAが検証してください。これは権限設計案であり、今回DDL/GRANT/Policy作成は行いません。
+Email候補本文・候補行を読む`email_research.email_candidates`への直接権限は不要です。READ ONLY閲覧・営業一覧には別のrelation契約を使います。現行HP専用画面のReader要件へ混在させません。
 
-起動時のpreflightは接続roleの管理属性、書込・シーケンス権限、必要なSELECT、医院行の可視性を検査します。権限が不足した場合は停止します。`clinic_runtime`は書込権限を持つためReaderとして使えません。実データ件数の期待値は環境・RLSに依存します。PRレビューで示された164201件は受入確認時の参照値であり、コードの固定条件ではありません。
+カタログ上、医院Viewは`security_barrier=true`の所有者権限Viewで、所有者`clinic_cloudrun_projection_owner`はNOLOGIN/NOBYPASSRLSです。基表`public.clinics`はRLS有効で、projection owner用SELECT policyの条件は`true`です。View所有者には投影に必要な列だけSELECTが付いています。HP台帳もRLS有効で、`clinic_cloudrun_reader`用SELECT policyは`true`、同roleの列権限は限定されています。従ってこれらのpolicyは全国行を返す設計です。全国医院データの利用承認範囲と一致することをDB管理者が確認してください。`research`のReader policyは現状ありません。これはカタログ監査結果であり、今回DDL/GRANT/Policy変更は行いません。
+
+起動時のpreflightは接続roleの管理属性、書込・シーケンス権限、relation/必要列のSELECT、医院行の可視性を検査します。権限が不足した場合は停止します。`clinic_runtime`は書込権限を持つためReaderとして使えません。実データ件数の期待値は環境・RLSに依存します。PRレビューで示された164201件は受入確認時の参照値であり、コードの固定条件ではありません。
 
 ## HP通常版の安全境界
 
@@ -49,16 +51,26 @@ DB管理者は上記relationの列投影、スキーマUSAGE、SELECT、RLSを�
 
 ## DB管理者レビュー用SQL案（実行禁止）
 
-下記は権限案の説明用であり、実行してはいけません。最小のSELECTとRLSの実際の適用範囲は、現在のView定義・基表RLS・承認範囲を確認してDB管理者が決定してください。
+READ ONLYカタログ監査では`clinic_cloudrun_reader`が医院投影ViewのSELECTと`hp_research.clinic_hp_research.clinic_id`を含む列SELECTを持つことを確認しました。同roleはログイン可能で、superuser/createdb/createrole/BYPASSRLS属性はありません。`rolinherit=true`ですがrole membershipはなく、継承権限は確認されませんでした。対象relationへの書込権限もありません。HP台帳には同role向けSELECT policyがあります。`clinic_readonly`は原本`public.clinics`の`base_json`/`effective_json`等、画面に不要な広い列を読めるため選びません。`clinic_runtime`は対象表をINSERT/UPDATEできるためReaderに使いません。
+
+不足するのは`research` schema USAGE、Job一覧・進捗に必要な列SELECT、および両Job relationのHP限定SELECT policyです。`app_config.settings`は現行画面で参照せず、権限を追加しません。下記は既存`clinic_cloudrun_reader`へ足す案で、実行してはいけません。`research_jobs`はHP Jobだけ、`research_job_items`はHP Jobに属するitemだけを可視にします。
 
 ```sql
--- 例示のみ。実行禁止。必要なView/tableに限って個別に付与する。
-GRANT USAGE ON SCHEMA public, hp_research, research, app_config TO <dedicated_reader>;
-GRANT SELECT ON public.clinic_cloudrun_readonly,
-  hp_research.clinic_hp_research,
-  research.research_jobs, research.research_job_items,
-  app_config.settings TO <dedicated_reader>;
--- 基表RLSが有効な場合は、承認済み医院範囲のSELECT policyを別途設計する。
+-- 例示のみ。実行禁止。医院投影ViewとHP台帳の既存権限は変更しない。
+GRANT USAGE ON SCHEMA research TO clinic_cloudrun_reader;
+GRANT SELECT (id, kind, status, created_at)
+  ON research.research_jobs TO clinic_cloudrun_reader;
+GRANT SELECT (job_id, clinic_id, state, result)
+  ON research.research_job_items TO clinic_cloudrun_reader;
+CREATE POLICY clinic_cloudrun_reader_hp_jobs_select
+  ON research.research_jobs FOR SELECT TO clinic_cloudrun_reader
+  USING (kind = 'hp');
+CREATE POLICY clinic_cloudrun_reader_hp_items_select
+  ON research.research_job_items FOR SELECT TO clinic_cloudrun_reader
+  USING (EXISTS (
+    SELECT 1 FROM research.research_jobs j
+    WHERE j.id = research_job_items.job_id AND j.kind = 'hp'
+  ));
 ```
 
-現時点では外部Reader/Writer設定の準備状況を値を読まずに確認するまで、Mac起動可能とは扱いません。本番DB変更は行っていません。
+既存Reader roleの監査は管理接続からSELECTのみで実施しました。これはMac Reader資格情報によるpreflight成功を意味しません。上記不足権限は未適用で、`reader.env`も未作成のためMac起動preflightは未完了です。本番DB変更は行っていません。

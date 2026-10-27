@@ -139,19 +139,23 @@ class ReaderSafetyTests(unittest.TestCase):
     def test_normal_preflight_counts_visible_rows_from_projected_view(self):
         answers = [("clinic_mac_reader", False, False, False, False, False),
                    (False,), (False,), (False,)]
-        for relation in reader.NORMAL_REQUIRED_TABLES:
+        for relation in reader.NORMAL_HP_REQUIRED_TABLES:
             schema = relation.split(".", 1)[0]
-            answers += [(True,), (relation,), (True,)]
-        answers += [(164201,), (0,)]
+            answers += [(True,), (relation,)]
+            answers += [(True,)] * len(reader.NORMAL_HP_REQUIRED_COLUMNS[relation])
+        answers += [(164201,)]
         conn = Connection(answers)
         role, count = reader.verify_reader(
             "fake-url", connect=lambda *a, **kw: conn,
-            required_tables=reader.NORMAL_REQUIRED_TABLES,
+            required_tables=reader.NORMAL_HP_REQUIRED_TABLES,
+            required_columns=reader.NORMAL_HP_REQUIRED_COLUMNS,
             count_relation="public.clinic_cloudrun_readonly",
         )
         self.assertEqual((role, count), ("clinic_mac_reader", 164201))
-        self.assertIn("SELECT count(*) FROM email_research.clinic_email_status_readonly",
-                      conn.cursor_obj.executed[-1][0])
+        self.assertTrue(any("SELECT id,clinic_name,address,prefecture,medical_type" in query
+                            for query, _ in conn.cursor_obj.executed))
+        self.assertFalse(any("email_candidates" in query for query, _ in conn.cursor_obj.executed))
+        self.assertFalse(any("app_config.settings" in query for query, _ in conn.cursor_obj.executed))
 
 
 if __name__ == "__main__":

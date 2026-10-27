@@ -37,12 +37,21 @@ NORMAL_REQUIRED_TABLES = READONLY_REQUIRED_TABLES  # compatibility name
 HP_REQUIRED_TABLES = (
     "research.research_jobs",
     "research.research_job_items",
-    "app_config.settings",
 )
 NORMAL_HP_REQUIRED_TABLES = (
     "public.clinic_cloudrun_readonly",
     "hp_research.clinic_hp_research",
 ) + HP_REQUIRED_TABLES
+NORMAL_HP_REQUIRED_COLUMNS = {
+    "public.clinic_cloudrun_readonly": (
+        "id", "clinic_name", "address", "prefecture", "medical_type",
+        "maps_website_url", "maps_presence_status", "active", "merged_into",
+        "merge_hold", "is_new",
+    ),
+    "hp_research.clinic_hp_research": ("clinic_id",),
+    "research.research_jobs": ("id", "kind", "status", "created_at"),
+    "research.research_job_items": ("job_id", "clinic_id", "state", "result"),
+}
 WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
@@ -71,7 +80,10 @@ def load_reader_dsn(path=None):
     return values["SUPABASE_READONLY_DB_URL"]
 
 
-def verify_reader(dsn, *, connect=None, required_tables=None, count_relation=None):
+def verify_reader(
+    dsn, *, connect=None, required_tables=None, required_columns=None,
+    count_relation=None,
+):
     if connect is None:
         import psycopg
         connect = psycopg.connect
@@ -136,9 +148,22 @@ def verify_reader(dsn, *, connect=None, required_tables=None, count_relation=Non
                 cur.execute("SELECT to_regclass(%s)", (table,))
                 if cur.fetchone()[0] is None:
                     raise RuntimeError(f"必要なテーブルがありません: {table}")
-                cur.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
-                if not cur.fetchone()[0]:
-                    raise RuntimeError(f"参照権限がありません: {table}")
+                columns = (required_columns or {}).get(table)
+                if columns:
+                    for column in columns:
+                        cur.execute(
+                            "SELECT has_column_privilege(current_user,%s,%s,'SELECT')",
+                            (table, column),
+                        )
+                        if not cur.fetchone()[0]:
+                            raise RuntimeError(f"必要な列の参照権限がありません: {table}.{column}")
+                    # Parse and authorize the exact projected select without returning data.
+                    cur.execute(f"SELECT {','.join(columns)} FROM {table} LIMIT 0")
+                    cur.fetchall()
+                else:
+                    cur.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
+                    if not cur.fetchone()[0]:
+                        raise RuntimeError(f"参照権限がありません: {table}")
             count_relation = count_relation or "public.clinics"
             if count_relation not in {"public.clinics", "public.clinic_cloudrun_readonly"}:
                 raise RuntimeError("医院データ確認先の指定が不正です。")
@@ -188,7 +213,9 @@ def main():
     required_tables = PREVIEW_REQUIRED_TABLES if args.mode == "preview" else READONLY_REQUIRED_TABLES
     count_relation = "public.clinics" if args.mode == "preview" else "public.clinic_cloudrun_readonly"
     role, count = verify_reader(
-        dsn, required_tables=required_tables, count_relation=count_relation
+        dsn, required_tables=required_tables,
+        required_columns=(NORMAL_HP_REQUIRED_COLUMNS if args.mode == "readonly" else None),
+        count_relation=count_relation,
     )
     root = Path(__file__).resolve().parents[1]
     env = runtime_environment(dsn, args.mode)

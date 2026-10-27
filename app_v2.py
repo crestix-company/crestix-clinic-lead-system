@@ -1166,7 +1166,7 @@ def hp_normal_research_ui(store):
         else:
             st.caption("現在の条件に合う候補はありません。")
 
-    jobs = [job for job in recent_jobs(store) if job.get("kind") == "hp"]
+    jobs = store.hp_normal_recent_jobs()
     current_id = st.session_state.get("normal_hp_active_job")
     runner = runner_for(str(store.path))
     max_count = min(50, available)
@@ -1178,13 +1178,13 @@ def hp_normal_research_ui(store):
 
     if current_id:
         try:
-            status = job_status(store, current_id)
+            status = store.hp_normal_job_status(current_id)
         except (ValueError, KeyError):
             status = None
         if status:
             st.subheader(f"HP Job {current_id} · {JOB_LABELS.get(status['status'], status['status'])}")
             if status.get("total"):
-                show_job_progress(store, current_id)
+                show_job_progress(store, current_id, hp_only=True)
             if st.button(
                 "このJobのWorkerを開始", type="primary",
                 disabled=runner.running() or status["status"] not in {"PAUSED", "BUDGET"}
@@ -1207,7 +1207,7 @@ def hp_normal_research_ui(store):
         } for job in jobs]), hide_index=True, use_container_width=True)
         with st.expander("既存Jobの進捗を表示"):
             selected = st.selectbox("Job", [job["id"] for job in jobs], key="normal_hp_status_job")
-            show_job_progress(store, selected)
+            show_job_progress(store, selected, hp_only=True)
     else:
         st.caption("HP Job履歴はありません。")
 
@@ -2869,8 +2869,8 @@ def research_ui(store,demo):
 
 
 @st.fragment(run_every=2)
-def show_job_progress(store,jid):
-    job = job_status(store,jid)
+def show_job_progress(store,jid, *, hp_only=False):
+    job = store.hp_normal_job_status(jid) if hp_only else job_status(store,jid)
     done = job["counts"].get("DONE",0)
     st.progress(done/max(1,job["total"]),text=f"完了 {done} / {job['total']}件　｜　{JOB_LABELS.get(job['status'],job['status'])}")
     result = job["results"]

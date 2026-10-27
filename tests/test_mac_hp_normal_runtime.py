@@ -43,17 +43,17 @@ def test_normal_runtime_rejects_same_reader_and_writer_url(monkeypatch, tmp_path
 
 
 def test_hp_reader_contract_excludes_email_and_source_relations():
-    from scripts.launch_v2_mac_reader import NORMAL_HP_REQUIRED_TABLES
+    from scripts.launch_v2_mac_reader import NORMAL_HP_REQUIRED_COLUMNS, NORMAL_HP_REQUIRED_TABLES
 
     assert set(NORMAL_HP_REQUIRED_TABLES) == {
         "public.clinic_cloudrun_readonly",
         "hp_research.clinic_hp_research",
         "research.research_jobs",
         "research.research_job_items",
-        "app_config.settings",
     }
     assert all("email" not in relation for relation in NORMAL_HP_REQUIRED_TABLES)
     assert "public.clinics" not in NORMAL_HP_REQUIRED_TABLES
+    assert NORMAL_HP_REQUIRED_COLUMNS["hp_research.clinic_hp_research"] == ("clinic_id",)
 
 
 def test_supabase_read_factory_uses_readonly_url_and_readonly_session(monkeypatch):

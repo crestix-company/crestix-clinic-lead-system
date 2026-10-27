@@ -33,12 +33,11 @@ class FakeStreamlit:
 def test_normal_hp_screen_searches_candidates_and_reads_selected_job_progress(monkeypatch):
     fake_st = FakeStreamlit()
     monkeypatch.setattr(app_v2, "st", fake_st)
-    monkeypatch.setattr(app_v2, "recent_jobs", lambda _store: [{"id": "job-1", "kind": "hp", "status": "RUNNING"}])
     monkeypatch.setattr(app_v2, "job_status", lambda _store, jid: {
         "id": jid, "status": "RUNNING", "counts": {"PENDING": 1}, "total": 2,
     })
     progress = []
-    monkeypatch.setattr(app_v2, "show_job_progress", lambda _store, jid: progress.append(jid))
+    monkeypatch.setattr(app_v2, "show_job_progress", lambda _store, jid, **_kwargs: progress.append(jid))
     monkeypatch.setattr(app_v2, "runner_for", lambda _path: type("Runner", (), {"running": lambda self: False})())
     monkeypatch.setattr(app_v2, "_maps_hp_available_count", lambda *_args: 1)
 
@@ -53,6 +52,12 @@ def test_normal_hp_screen_searches_candidates_and_reads_selected_job_progress(mo
         def maps_hp_candidate_preview(self, *args, **kwargs):
             return [{"id": 7, "clinic_name": "医院A", "address": "東京", "medical_type": "医科",
                      "maps_website_url": "https://clinic.example"}]
+
+        def hp_normal_recent_jobs(self):
+            return [{"id": "job-1", "kind": "hp", "status": "RUNNING", "created_at": "now"}]
+
+        def hp_normal_job_status(self, jid):
+            return {"id": jid, "status": "RUNNING", "counts": {"PENDING": 1}, "total": 2}
 
     app_v2.hp_normal_research_ui(Store())
 
