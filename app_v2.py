@@ -3437,9 +3437,17 @@ if __name__=="__main__":
     except Exception as exc:
         category = connection_error_category(exc)
         sqlstate = str(getattr(exc, "sqlstate", "") or "")
+        diag = getattr(exc, "diag", None)
         # Only a stable category and SQLSTATE enter logs; never log the driver
-        # message, DSN, username, or host.
-        logging.warning("Clinic/HP operation failed category=%s sqlstate=%s", category, sqlstate)
+        # message, DSN, username, or host. Catalog identifiers help find a
+        # missing grant without exposing connection data or rejected values.
+        logging.warning(
+            "Clinic/HP operation failed category=%s sqlstate=%s schema=%s table=%s column=%s",
+            category, sqlstate,
+            str(getattr(diag, "schema_name", "") or ""),
+            str(getattr(diag, "table_name", "") or ""),
+            str(getattr(diag, "column_name", "") or ""),
+        )
         if is_database_connection_exception(exc):
             st.error(safe_connection_message(exc, service="Clinic/HP"))
         else:
