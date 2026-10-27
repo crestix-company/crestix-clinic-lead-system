@@ -15,20 +15,22 @@ SPEC.loader.exec_module(normal)
 def test_normal_runtime_keeps_reader_and_writer_connections_distinct(monkeypatch, tmp_path):
     env = {"SUPABASE_RUNTIME_DB_URL": "postgresql://writer/private"}
     reader_paths = []
+    preflight = []
     monkeypatch.setattr(normal, "os", type("OS", (), {"environ": env})())
     monkeypatch.setattr("scripts.launch_v2.load_runtime_env", lambda _root: True)
     monkeypatch.setattr(normal, "load_reader_dsn", lambda path=None: (reader_paths.append(path) or "postgresql://reader/private"))
-    monkeypatch.setattr(normal, "load_tavily_key", lambda _path=None: "test-tavily-key")
-    monkeypatch.setattr(normal, "verify_reader", lambda _dsn, **_kw: ("clinic_preview_reader", 123))
+    monkeypatch.setattr(normal, "verify_reader", lambda _dsn, **kw: (preflight.append(kw) or ("clinic_cloudrun_reader", 123)))
 
     role, count = normal.configure_normal_runtime(tmp_path)
 
-    assert (role, count) == ("clinic_preview_reader", 123)
+    assert (role, count) == ("clinic_cloudrun_reader", 123)
     assert env["SUPABASE_READONLY_DB_URL"].startswith("postgresql://reader/")
     assert env["SUPABASE_RUNTIME_DB_URL"].startswith("postgresql://writer/")
     assert env["CLINIC_NORMAL_MAC_RUNTIME"] == "1"
-    assert env["TAVILY_API_KEY"] == "test-tavily-key"
+    assert "TAVILY_API_KEY" not in env
     assert reader_paths == [normal.NORMAL_READER_FILE]
+    assert preflight[0]["required_tables"] == normal.NORMAL_HP_REQUIRED_TABLES
+    assert preflight[0]["required_columns"] == normal.NORMAL_HP_REQUIRED_COLUMNS
 
 
 def test_normal_runtime_rejects_same_reader_and_writer_url(monkeypatch, tmp_path):
@@ -36,7 +38,6 @@ def test_normal_runtime_rejects_same_reader_and_writer_url(monkeypatch, tmp_path
     monkeypatch.setattr(normal, "os", type("OS", (), {"environ": env})())
     monkeypatch.setattr("scripts.launch_v2.load_runtime_env", lambda _root: True)
     monkeypatch.setattr(normal, "load_reader_dsn", lambda _path=None: "postgresql://same/private")
-    monkeypatch.setattr(normal, "load_tavily_key", lambda _path=None: "test-tavily-key")
 
     with pytest.raises(RuntimeError, match="同一"):
         normal.configure_normal_runtime(tmp_path)

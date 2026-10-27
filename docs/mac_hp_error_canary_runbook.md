@@ -6,8 +6,8 @@
 
 - Job登録: `write_repositories_for(store).auto_hp.create_error_canary_job(clinic_ids)`。Supabaseの既存writer経路を使い、同一トランザクション内でAuto Run状態・既存HP Job・ERROR状態・対象claimを検査します。登録後のJob初期状態はDB既定の`PAUSED`です。Workerは起動しません。
 - Worker: `JobRunner.start(store, job_id, provider)`。これは`app_v2.py`の通常Job開始・再開経路と同じ呼出しです。`run_job`を直接呼ぶ手順にはしません。
-- Provider: `TavilySearchProvider(api_key)`。通常画面と同じProviderで、APIキーはプロセス環境の`TAVILY_API_KEY`から取得します。キー値はコマンドやログに書かず、表示しません。キーが未設定・空ならWorker開始前に停止します。
-- 対象10件はすべてMaps確認済みウェブサイトURLを持つため、HP調査コードは検索APIを使わずそのURLを直接取得します。それでもProviderの構築は既存画面と同じにし、予期しない検索フォールバックが必要になった場合に空キーで動き続けないようにします。
+- Provider: 通常画面と同じ`TavilySearchProvider`です。Maps公式HP URLがある対象は既存のSafeFetcherで直接取得するためAPIキーは不要です。検索APIが必要な対象でキーが未設定なら外部検索せず、その医院をエラー記録して次の対象へ進みます。
+- 対象10件はすべてMaps確認済みウェブサイトURLを持つため、HP調査コードは検索APIを使わずそのURLを直接取得します。URLがなく検索フォールバックが必要な医院では、Providerキー未設定なら外部通信せず医院単位のエラーとして記録します。
 
 ## 1. 実行前監査
 
@@ -59,7 +59,7 @@ PY
 
 ## 3. Worker開始（別途承認後のみ）
 
-Job IDと対象10件を再確認し、実行直前のREAD ONLY監査をやり直します。`TAVILY_API_KEY`は秘密管理済みの実行環境から注入してください。シェル履歴やコマンド引数にキー値を記述しません。
+Job IDと対象10件を再確認し、実行直前のREAD ONLY監査をやり直します。Maps公式HP URLを持つCanaryではProvider APIキーは不要です。検索APIが必要な場合だけ、すでに承認・設定済みのProviderを利用し、キー未設定なら外部検索しません。
 
 ```bash
 .venv/bin/python - <<'PY'
@@ -73,12 +73,11 @@ from src.repository.runtime_store import SupabaseRuntimeStore
 
 job_id = "JOB_IDを登録結果で置換"
 load_runtime_env(Path.cwd())
-api_key = os.environ.get("TAVILY_API_KEY", "").strip()
-if not api_key:
-    raise SystemExit("TAVILY_API_KEYが未設定です。Workerは起動していません。")
+# Maps HP URLを直接取得するCanaryではTAVILY_API_KEYは不要です。
+# URLがなく検索が必要な対象は、キー未設定なら医院単位で失敗記録し次へ進みます。
 
 store = SupabaseRuntimeStore()
-provider = TavilySearchProvider(api_key)
+provider = TavilySearchProvider()
 runner = JobRunner()
 runner.start(store, job_id, provider)
 while runner.running():

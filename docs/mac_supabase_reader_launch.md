@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | READ ONLYの医院閲覧・営業一覧・出力 | `./scripts/launch_v2_mac.sh --headless` | `$HOME/.config/clinic-lead/reader.env` | Readerのみ |
 | Comdesk Preview | `./scripts/launch_v2_mac.sh --comdesk-preview --headless` | `$HOME/.config/clinic-lead/preview-reader.env` | Preview Readerのみ |
-| HP調査通常版 | `./scripts/launch_v2_mac_normal.sh --headless` | 上記Reader、`runtime-writer.env`、`hp-provider.env` | ReaderとHP Writer |
+| HP調査通常版 | `./scripts/launch_v2_mac_normal.sh --headless` | 上記Reader、`runtime-writer.env` | ReaderとHP Writer |
 
 全モードはローカル127.0.0.1にbindし、SQLiteへfallbackしません。同じリポジトリのUIは共有file lockで同時起動を拒否します。READ ONLYとPreviewはWriter資格情報をUIプロセスへ渡しません。HP通常版ではHP操作だけがWriterを使います。Streamlitプロセス自体にはWriter DSNが存在するため、プロセス内の侵害に対する資格情報隔離ではありません。HP通常版のUIからHP以外のWriter操作へ到達できないことと、バックエンドのWriter呼び出しがHP用途に限定されることを回帰テストで確認します。
 
@@ -19,14 +19,16 @@
 ```sh
 mkdir -p "$HOME/.config/clinic-lead"
 chmod 700 "$HOME/.config/clinic-lead"
-for name in reader.env preview-reader.env runtime-writer.env hp-provider.env; do
+for name in reader.env preview-reader.env runtime-writer.env; do
   path="$HOME/.config/clinic-lead/$name"
   if [ ! -e "$path" ]; then (umask 077; : > "$path"); fi
   chmod 600 "$path"
 done
 ```
 
-この作成例は既存ファイルを上書きしません。各ファイルに権限者から取得した値を安全なエディタで記入してください。`reader.env`にはDB管理者から提供される`clinic_cloudrun_reader`専用DSNを、`SUPABASE_READONLY_DB_URL=...`の1行で保存します。Writer DSNからReader URLを作らず、Writerのrole名やパスワードを流用しないでください。`preview-reader.env`も専用のReader URLだけ、`runtime-writer.env`はHP通常版専用で`SUPABASE_RUNTIME_DB_URL=...`のみです。`hp-provider.env`は`TAVILY_API_KEY=...`のみを保存します。パスワード、接続URL、APIキーをコマンド引数、シェル履歴、Git管理ファイルへ置かないでください。起動スクリプトは秘密値を表示しません。
+この作成例は既存ファイルを上書きしません。各ファイルに権限者から取得した値を安全なエディタで記入してください。`reader.env`にはDB管理者から提供される`clinic_cloudrun_reader`専用DSNを、`SUPABASE_READONLY_DB_URL=...`の1行で保存します。Writer DSNからReader URLを作らず、Writerのrole名やパスワードを流用しないでください。`preview-reader.env`も専用のReader URLだけ、`runtime-writer.env`はHP通常版専用で`SUPABASE_RUNTIME_DB_URL=...`のみです。パスワードや接続URLをコマンド引数、シェル履歴、Git管理ファイルへ置かないでください。起動スクリプトは秘密値を表示しません。
+
+HP通常版はMapsに登録済みの公式HP URLを取得・解析するため、検索APIキーは不要です。Maps URLのない医院について既存Providerによる検索APIが設定済みなら、従来どおりその環境変数を使います。未設定時は外部検索せず、その医院だけ検索不可エラーとしてJobを続行します。
 
 ## Readerの最小参照範囲
 
