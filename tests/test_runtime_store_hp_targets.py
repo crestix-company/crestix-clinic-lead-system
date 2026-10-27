@@ -115,6 +115,56 @@ def test_hp_job_result_preview_reads_only_reader_visible_projection_and_ledger()
     assert params == ("job-1",)
 
 
+def test_hp_job_status_avoids_select_star_for_column_scoped_reader():
+    from types import SimpleNamespace
+
+    class JobCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self.result = None
+            self.description = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.split())
+            self.conn.calls.append((normalized, tuple(params)))
+            if normalized.startswith("SELECT id,kind,status,created_at FROM research.research_jobs"):
+                self.description = [SimpleNamespace(name=n) for n in ("id", "kind", "status", "created_at")]
+                self.result = ("job-1", "hp", "RUNNING", "today")
+            elif "GROUP BY state" in normalized:
+                self.result = [("PENDING", 5)]
+            else:
+                self.result = [("SUCCESS", 1)]
+
+        def fetchone(self):
+            return self.result
+
+        def fetchall(self):
+            return self.result
+
+    class JobConnection:
+        def __init__(self):
+            self.calls = []
+
+        def cursor(self):
+            return JobCursor(self)
+
+    conn = JobConnection()
+    clinic_repo = type("ClinicRepo", (), {"_conn": conn})()
+    store = SupabaseRuntimeStore(type("Repos", (), {"clinics": clinic_repo})())
+    status = store.hp_job_status("job-1")
+
+    assert status["id"] == "job-1" and status["status"] == "RUNNING"
+    assert status["counts"] == {"PENDING": 5} and status["total"] == 5
+    assert "SELECT *" not in conn.calls[0][0]
+    assert "SELECT id,kind,status,created_at FROM research.research_jobs" in conn.calls[0][0]
+
+
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
     predicate, args = _maps_hp_target_predicate("東京都", ["医科"], force=False)
 

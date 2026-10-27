@@ -368,7 +368,12 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def hp_job_status(self, job_id):
         with self._conn.cursor() as cur:
-            cur.execute("SELECT * FROM research.research_jobs WHERE id=%s", (job_id,))
+            # The Mac/Cloud Reader has column-level grants. Never use SELECT * here:
+            # JobRunner polls only these fields, and its UI derives progress from items.
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs WHERE id=%s",
+                (job_id,),
+            )
             row = cur.fetchone()
             if not row:
                 raise ValueError("調査履歴が見つかりません。")
