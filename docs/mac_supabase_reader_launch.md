@@ -1,24 +1,51 @@
-# Mac Supabase Reader 起動手順
+# Mac 通常版・Comdesk Preview 起動手順
 
-通常のMacプレビュー起動は `./scripts/launch_v2_mac.sh --headless`。
-GitHub worktreeを切り替えても同じ**リポジトリ外**のReader設定を参照します。
+通常版（医院マスター・Maps由来情報・HP調査・営業対象の閲覧とCSV/XLSX出力）は
+`./scripts/launch_v2_mac.sh --headless`。Comdesk差分Preview専用版は
+`./scripts/launch_v2_mac.sh --comdesk-preview --headless`。
+両者は**リポジトリ外**の別Reader設定を参照し、SQLiteへ切り替えません。
 
 ## 初回設定（DB管理者が専用Readerを払い出した後）
 
-- 本番 `clinic_runtime` のURL、`.supabase-runtime.env.local` の内容は転用しない。
-- `$HOME/.config/clinic-lead/preview-reader.env` を作り、内容は
-  `SUPABASE_RUNTIME_DB_URL=postgresql://<dedicated-reader-connection>` の**1行のみ**とする。
-- `chmod 600 "$HOME/.config/clinic-lead/preview-reader.env"` を実行。
-- DB管理者が、専用ログインロール・SELECT許可・必要テーブルのRLS SELECTポリシーを**事前に審査**する。
+通常版は `$HOME/.config/clinic-lead/reader.env`、Preview専用版は
+`$HOME/.config/clinic-lead/preview-reader.env` を使います。どちらも
+`SUPABASE_RUNTIME_DB_URL=postgresql://<dedicated-reader-connection>` の1行だけを保存し、
+`chmod 600` にします。資格情報ファイルをリポジトリに置かないでください。
+
+- 本番 `clinic_runtime` のURLや `.supabase-runtime.env.local` を転用しない。
+- DB管理者が、専用ログインロール・SELECT許可・必要テーブル/viewのRLS SELECTポリシーを**事前に審査**する。
 - テスト用SQLiteやwriterへフォールバックすることはない。
 
-`./scripts/launch_v2_mac.sh --headless` は接続の成否、ロールの管理者属性、非システムテーブル・シーケンスへの更新権限、必要な7テーブルのSELECT権限、`public.clinics` の可視データの有無を検査し、不適合なら画面起動前に停止する。秘密の接続URLやパスワードは表示しない。
+起動前に接続の成否、ロールの管理者属性、全非システムテーブル・シーケンスの更新権限、必要テーブルのSELECT権限、
+`public.clinics` の可視データを検査します。不適合なら画面起動前に停止します。通常版は
+`CLINIC_READ_ONLY_UI=1`を設定し、画面閲覧とCSV出力だけを提供します。Maps取込、HP/Email調査、Comdesk反映や
+Job操作は画面に出さず、Writer専用資格情報・明示操作・HOLD/承認の設計が整うまで使えません。
+秘密の接続URLやパスワードは表示しません。
 
-プレビュー起動は `CLINIC_COMDESK_PREVIEW_ONLY=1` でComdesk差分確認の機能制限を維持する。通常運用の調査・DB更新・Gmail下書き作成に利用しない。
+Preview起動は `CLINIC_COMDESK_PREVIEW_ONLY=1` でComdesk差分確認だけに限定します。
+
+## Reader権限とRLSのレビュー案（未適用）
+
+既存 `clinic_runtime` はINSERT/UPDATE権限を持つため、通常版に使用しません。DB管理者は
+通常版の起動前検査は投影済み`public.clinic_cloudrun_readonly`、
+`public.clinic_email_enrichment`、
+`provenance.clinic_cloudrun_comdesk_rows`、`provenance.templates`、
+`hp_research.clinic_hp_research`、`treatment.clinic_treatment_research`、
+`treatment.clinic_research_status`のSELECTを確認します。これは画面の読取契約を示す最低限のrelation一覧です。
+DB管理者は各列・RLS条件を追加レビューし、Email候補・個人情報・原本JSON・履歴など画面に不要な列/行は
+Reader用viewから除外してください。追加relationが必要と判明した場合は、検査リストと投影設計を更新してから起動します。
+
+提案する境界は専用NOINHERIT/NOBYPASSRLS/NOLOGIN helperを作り、helperにのみ必要列SELECTと
+`TO <reader_helper>` のSELECTポリシーを与え、専用LOGIN Readerには投影済みviewのSELECTだけを付ける方式です。
+医院一覧の全国範囲を認める場合でも、RLS条件は承認済み対象医院の範囲に固定し、`USING (true)`を
+無条件に採用しないでください。画面要件が未確定の参照先については、権限を追加せず起動を拒否し、
+不足relation/columnと必要なSELECT/RLS案を管理者レビューへ返します。本番GRANT・Policy作成はこの作業では行いません。
 
 ## DB作業（保留）
 
-現時点の既存Readerロールは必要テーブルのSELECT権限が揃っていない。特に`provenance.google_maps_results` と`email_research.email_candidates` を含むRLSポリシー設計が未確定。**本番DBのCREATE ROLE / GRANT / CREATE POLICY / ALTER ROLEは未実施**。
+既存Readerの資格情報・権限は未確認で、通常版の全参照先SELECTとRLSは未確定です。
+特にMaps/HP/Email関連のソーステーブルを直接公開するのではなく、画面に必要な投影列と行範囲を先に確定してください。
+**本番DBのCREATE ROLE / GRANT / CREATE POLICY / ALTER ROLEは未実施**。
 
 レビュー事項：
 1. Comdeskプレビューの対象医院を `provenance.comdesk_preview_scope` 等の許可リストで限定するか。

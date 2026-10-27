@@ -102,6 +102,45 @@ class ReaderSafetyTests(unittest.TestCase):
         self.assertEqual((role, count), ("clinic_preview_reader", 164201))
         self.assertTrue(conn.rolled_back)
 
+    def test_normal_and_preview_environments_are_separate_and_read_only(self):
+        source = {
+            "CLINIC_DB_PATH": "/must/not/be/used.sqlite3",
+            "CLINIC_DATA_BACKEND": "sqlite",
+            "CLINIC_WRITE_BACKEND": "sqlite",
+            "EMAIL_AUTO_RUN_ENABLED": "true",
+            "OUTREACH_GMAIL_DRAFTS_ENABLED": "true",
+        }
+        normal = reader.runtime_environment("reader-dsn", "normal", source)
+        preview = reader.runtime_environment("preview-dsn", "preview", source)
+        self.assertEqual(normal["SUPABASE_RUNTIME_DB_URL"], "reader-dsn")
+        self.assertEqual(normal["CLINIC_DATA_BACKEND"], "supabase")
+        self.assertEqual(normal["CLINIC_READ_ONLY_UI"], "1")
+        self.assertEqual(normal["CLINIC_COMDESK_PREVIEW_ONLY"], "0")
+        self.assertEqual(preview["CLINIC_COMDESK_PREVIEW_ONLY"], "1")
+        self.assertNotIn("CLINIC_DB_PATH", normal)
+        self.assertEqual(normal["EMAIL_AUTO_RUN_ENABLED"], "false")
+        self.assertEqual(normal["OUTREACH_GMAIL_DRAFTS_ENABLED"], "false")
+        self.assertIn("public.clinic_cloudrun_readonly", reader.NORMAL_REQUIRED_TABLES)
+        self.assertIn("hp_research.clinic_hp_research", reader.NORMAL_REQUIRED_TABLES)
+        self.assertNotIn("provenance.google_maps_results", reader.NORMAL_REQUIRED_TABLES)
+        self.assertNotIn("email_research.email_candidates", reader.NORMAL_REQUIRED_TABLES)
+
+    def test_normal_preflight_counts_visible_rows_from_projected_view(self):
+        answers = [("clinic_mac_reader", False, False, False, False, False),
+                   (False,), (False,), (False,)]
+        for relation in reader.NORMAL_REQUIRED_TABLES:
+            answers += [(relation,), (True,)]
+        answers += [(164201,)]
+        conn = Connection(answers)
+        role, count = reader.verify_reader(
+            "fake-url", connect=lambda *a, **kw: conn,
+            required_tables=reader.NORMAL_REQUIRED_TABLES,
+            count_relation="public.clinic_cloudrun_readonly",
+        )
+        self.assertEqual((role, count), ("clinic_mac_reader", 164201))
+        self.assertIn("SELECT count(*) FROM public.clinic_cloudrun_readonly",
+                      conn.cursor_obj.executed[-1][0])
+
 
 if __name__ == "__main__":
     unittest.main()
