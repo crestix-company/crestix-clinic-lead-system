@@ -15,4 +15,13 @@ else
     exit 1
 fi
 
-exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2_mac_reader.py" "$@"
+HAS_PORT=false
+for ARG in "$@"; do
+    case "$ARG" in
+        --port|--port=*) HAS_PORT=true ;;
+    esac
+done
+if [ "$HAS_PORT" = true ]; then
+    exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2_mac_reader.py" "$@"
+fi
+exec "$PYTHON" "$REPO_ROOT/scripts/launch_v2_mac_reader.py" --port 8502 --strict-port "$@"
