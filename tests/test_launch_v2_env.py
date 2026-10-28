@@ -6,6 +6,12 @@ import pytest
 from scripts import launch_v2
 
 
+def test_normal_mac_email_settings_live_in_user_config_directory():
+    assert launch_v2.MAC_EMAIL_ENV_FILE == (
+        Path.home() / ".config" / "clinic-lead" / "email_research.env"
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clean_runtime_env(monkeypatch):
     """load_runtime_env() also reads CLINIC_WRITE_BACKEND / SUPABASE_RUNTIME_DB_URL from

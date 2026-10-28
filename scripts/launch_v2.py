@@ -15,7 +15,7 @@ from filelock import FileLock, Timeout
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
 PRODUCTION_ENV_FILE = "config/production_runtime.env"
 EMAIL_ENV_FILE = "config/email_research.env.local"
-MAC_EMAIL_ENV_FILE = Path.home() / "ClinicLeadRuntime" / EMAIL_ENV_FILE
+MAC_EMAIL_ENV_FILE = Path.home() / ".config" / "clinic-lead" / "email_research.env"
 RUNTIME_ENV_KEYS = {
     "SUPABASE_RUNTIME_DB_URL",
     "CLINIC_WRITE_BACKEND",
