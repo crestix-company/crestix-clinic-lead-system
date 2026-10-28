@@ -142,6 +142,53 @@ def store_for(path=None, runtime_config_key=None):
     return store
 
 
+def hp_auto_run_display_metrics(store, *, state=None, eligible=None, snapshot=None):
+    """Read the independently-defined Auto Run cohort and current Run remainder."""
+    values = {"eligible": eligible, "remaining": None}
+    if not getattr(store, "is_supabase_runtime", False):
+        return values
+    try:
+        if values["eligible"] is None:
+            values["eligible"] = store.hp_auto_run_eligible_count("", ["医科", "歯科"])
+        state = state if state is not None else store.hp_auto_run_state()
+        if state.get("status") in {"COMPLETED", "IDLE", "CANCELLED"} or not state.get("run_id"):
+            values["remaining"] = 0
+        else:
+            snapshot = snapshot or _auto_hp_progress_snapshot(store, None)
+            values["remaining"] = int(snapshot["total_remaining"])
+    except Exception as exc:
+        logging.warning(
+            "HP status metrics unavailable exception_type=%s category=%s sqlstate=%s",
+            type(exc).__name__, connection_error_category(exc),
+            str(getattr(exc, "sqlstate", "") or ""),
+        )
+    return values
+
+
+def comdesk_safe_failure(exc, *, stage):
+    """Log only a safe classification and return a secret-free Step6/7 message."""
+    category = connection_error_category(exc)
+    sqlstate = str(getattr(exc, "sqlstate", "") or "")
+    logging.warning(
+        "Comdesk operation failed stage=%s exception_type=%s category=%s sqlstate=%s",
+        stage, type(exc).__name__, category, sqlstate,
+    )
+    if category == "permission":
+        if stage == "apply":
+            return "Clinic Sync専用Writerの権限またはRLSポリシーを確認してください。反映結果を照合するまで再操作しないでください。"
+        return "Comdesk専用ReaderのSELECT権限またはRLSポリシーを確認してください。"
+    if category in {"authentication", "configuration", "disconnected", "network", "timeout", "unavailable"}:
+        service = "Clinic Sync専用Writer" if stage == "apply" else "Comdesk専用Reader"
+        return f"{service}へ接続できません。専用設定とネットワーク状態を確認してください。"
+    if stage == "csv":
+        return "Comdesk同期用CSVを生成できませんでした。医院データの形式を確認してください。"
+    if stage == "preview":
+        return "UUID照合プレビューを作成できませんでした。CSV形式と専用Readerの読取状態を確認してください。"
+    if stage == "apply":
+        return "同期反映を完了できませんでした。DB反映状態を照合してから再操作してください。"
+    return "Comdesk同期対象を読み取れませんでした。専用ReaderのSELECT権限とRLSを確認してください。"
+
+
 def show_web_research_metrics(store, *, read_only=False, compact=False):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
     try:
@@ -157,23 +204,27 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
     if counts is None:
         st.warning("HP research batch sidecarがないため、Webサイト調査状況を表示できません。")
         return
+    auto_metrics = hp_auto_run_display_metrics(store)
     if not compact:
         definitions = [
-            ("WebサイトURL取得済み", "url_acquired", "医院データにWebサイトURLが登録されている医院数です。"),
-            ("Webサイト調査完了", "researched", "公式HPの内容確認まで完了したクリニック数です。"),
-            ("Webサイト調査失敗", "failed", "Webサイトの取得または解析を正常完了できなかった医院数です。"),
-            ("Webサイト未調査", "not_researched", "非アクティブ医院も含む、WebサイトURL登録済み・自動調査未完了の参考件数です。Step 4の「HP調査可能・未調査」とは分母が異なります。"),
-            ("治療カテゴリ検出あり", "treatment_detected", "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
-            ("治療カテゴリ検出なし", "treatment_not_detected", "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
+            ("HP URL取得済み", counts["url_acquired"], "未統合医院のうちHP URLまたはMaps WebサイトURLが登録済み。1医院1件です。"),
+            ("HP調査完了", counts["researched"], "上記URL母集団のうちHP調査履歴があり、fetch_status=OKの医院数です。"),
+            ("HP未調査", counts["not_researched"], "上記URL母集団のうちHP調査履歴行がない医院数です。履歴を直接照合します。"),
+            ("HP取得・解析失敗", counts["failed"], "上記URL母集団のうち履歴があり、fetch_statusがOKまたはREVIEW以外の医院数です。"),
+            ("HP要確認", counts["review"], "上記URL母集団のうち最新HP履歴がfetch_status=REVIEWの医院数です。"),
+            ("自動調査可能・未調査", auto_metrics["eligible"], "active・未統合/未保留・Maps公式HP URLあり・履歴なし・未予約・過去SUCCESSなしの医科/歯科です。"),
+            ("今回のAuto Run残件", auto_metrics["remaining"], "現在のAuto Run条件でDBから再取得した残件。完了・待機中は0件です。"),
+            ("治療カテゴリ検出あり", counts["treatment_detected"], "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"),
+            ("治療カテゴリ検出なし", counts["treatment_not_detected"], "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"),
         ]
         for start in range(0, len(definitions), 3):
             columns = st.columns(3)
-            for column, (label, key, help_text) in zip(columns, definitions[start:start + 3]):
-                column.metric(label, f"{counts[key]:,}件", help=help_text)
+            for column, (label, value, help_text) in zip(columns, definitions[start:start + 3]):
+                column.metric(label, f"{value:,}件" if value is not None else "—", help=help_text)
         return
     primary = [
-        ("WebサイトURL取得済み", "url_acquired", "医院データにHP URLまたはMaps WebサイトURLが登録されています。"),
-        ("Webサイト調査完了", "researched", "fetch_status=OK。取得と公式HPの検証が完了した件数です。"),
+        ("HP URL取得済み", "url_acquired", "未統合医院のうちHP URLまたはMaps WebサイトURLが登録済み。1医院1件です。"),
+        ("HP調査完了", "researched", "上記URL母集団のうちHP調査履歴があり、fetch_status=OKの医院数です。"),
         ("厚生局全件", None, "厚生局から取り込んだ元レコード数です。ユニーク医院数とは限りません。"),
         ("既存UUIDあり", None, "現在の医院マスターでComdesk UUIDが登録されている医院数です。"),
     ]
@@ -187,15 +238,25 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         value = counts[key] if key else metrics.get("厚生局取込レコード" if label == "厚生局全件" else "既存UUIDあり", 0)
         with column.container(border=True):
             st.metric(label, f"{value:,}件" if value is not None else "—", help=help_text)
+    operational = [
+        ("HP未調査", counts["not_researched"], "URL取得済み母集団のうちHP調査履歴行がない医院数。履歴を直接照合し、差引推定はしません。"),
+        ("HP取得・解析失敗", counts["failed"], "URL取得済み母集団のうち、履歴がありfetch_statusがOKまたはREVIEW以外です。"),
+        ("HP要確認", counts["review"], "URL取得済み母集団のうち、最新HP履歴がREVIEWです。"),
+        ("自動調査可能・未調査", auto_metrics["eligible"], "active・未統合/未保留・Maps公式HPあり・履歴なし・未予約・過去SUCCESSなしの医科/歯科。"),
+        ("今回のAuto Run残件", auto_metrics["remaining"], "現在のAuto Run条件でDBから取得。完了・待機中は0件です。"),
+    ]
+    columns = st.columns(5)
+    for column, (label, value, help_text) in zip(columns, operational):
+        column.metric(label, f"{value:,}件" if value is not None else "—", help=help_text)
     details = [
         ("URL取得済み", "url_acquired"), ("調査完了", "researched"),
-        ("取得・解析失敗", "failed"), ("URLあり・未調査", "not_researched"),
+        ("取得・解析失敗", "failed"), ("要確認", "review"), ("URLあり・未調査", "not_researched"),
         ("治療カテゴリ検出あり", "treatment_detected"),
         ("治療カテゴリ検出なし", "treatment_not_detected"),
     ]
     if compact:
         with st.expander("現在のデータ状況：集計定義と補助指標", expanded=False):
-            st.caption("HP指標の母集団はHP URLまたはMaps URL登録済みの医院です。厚生局全件は取込元レコード数、UUIDは医院マスター数で、それぞれ別の母集団です。")
+            st.caption("HP全体指標は未統合医院のうちHP URLまたはMaps URL登録済みが母集団です。自動調査可能数はactive・未統合/未保留・Maps公式HPあり・履歴なし・未予約・過去SUCCESSなしの医科/歯科です。厚生局とUUIDは別母集団です。")
             columns = st.columns(3)
             for column, (label, key) in zip(columns, details):
                 column.metric(label, f"{counts[key]:,}件")
@@ -477,21 +538,49 @@ def _mac_auto_hp_run_ui(store, *, state, state_available, controls_disabled):
     run_status = str(state.get("status") or "IDLE")
     active_run = run_status in {"RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"}
     snapshot = _auto_hp_progress_snapshot(store, None) if state.get("run_id") else None
+    auto_metrics = hp_auto_run_display_metrics(
+        store, state=state, eligible=eligible, snapshot=snapshot,
+    )
     results = (snapshot or {}).get("cumulative", {})
     breakdown_unavailable = bool((snapshot or {}).get("legacy_breakdown_unavailable"))
 
+    try:
+        hp_counts = store.web_research_metrics(read_only_ui=True)
+    except Exception as exc:
+        hp_counts = None
+        logging.warning(
+            "HP national status metrics failed exception_type=%s category=%s sqlstate=%s",
+            type(exc).__name__, connection_error_category(exc),
+            str(getattr(exc, "sqlstate", "") or ""),
+        )
+    if hp_counts:
+        st.caption("全国HP調査状況（未統合医院のうちHP URLまたはMaps URL登録済み。医院単位で履歴を直接照合）")
+        columns = st.columns(5)
+        for column, (label, key) in zip(columns, [
+            ("HP URL取得済み", "url_acquired"), ("HP調査完了", "researched"),
+            ("HP未調査", "not_researched"), ("HP取得・解析失敗", "failed"),
+            ("HP要確認", "review"),
+        ]):
+            column.metric(label, f"{int(hp_counts.get(key, 0)):,}件")
+
     if run_status in {"RUNNING", "WAITING_NETWORK"}:
-        st.metric("未調査対象", f"{eligible:,}件")
+        columns = st.columns(2)
+        columns[0].metric("自動調査可能・未調査", f"{eligible:,}件")
+        columns[1].metric(
+            "今回のAuto Run残件",
+            f"{auto_metrics['remaining']:,}件" if auto_metrics["remaining"] is not None else "—",
+        )
         _live_auto_hp_progress(store)
     else:
-        columns = st.columns(4)
-        columns[0].metric("未調査対象", f"{eligible:,}件")
-        columns[1].metric("成功", "—" if breakdown_unavailable else f"{int(results.get('SUCCESS', 0)):,}件")
-        columns[2].metric("要確認", "—" if breakdown_unavailable else f"{int(results.get('REVIEW', 0)):,}件")
-        columns[3].metric("エラー", "—" if breakdown_unavailable else f"{int(results.get('ERROR', 0)):,}件")
+        columns = st.columns(5)
+        columns[0].metric("自動調査可能・未調査", f"{eligible:,}件")
+        columns[1].metric("今回のAuto Run残件", f"{auto_metrics['remaining']:,}件" if auto_metrics["remaining"] is not None else "—")
+        columns[2].metric("成功", "—" if breakdown_unavailable else f"{int(results.get('SUCCESS', 0)):,}件")
+        columns[3].metric("要確認", "—" if breakdown_unavailable else f"{int(results.get('REVIEW', 0)):,}件")
+        columns[4].metric("エラー", "—" if breakdown_unavailable else f"{int(results.get('ERROR', 0)):,}件")
 
     st.caption(
-        "対象：active=true・未統合・Maps公式HP URLあり・HP調査履歴なし。"
+        "自動調査可能・未調査：active=true・未統合・merge holdなし・Maps公式HP URLあり・HP調査履歴なし。"
         "過去SUCCESS・他Jobの予約を除外し、ERROR／REVIEWは自動再調査しません。"
     )
     st.caption("1Batch最大50医院。医院ごとの失敗を記録し、残り候補をDBから再取得して続行します。")
@@ -1841,21 +1930,26 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
     st.caption("件数ごとに母集団を明記しています。URL・調査完了は全HP URL登録済み母集団、UUID・除外・同期対象は最新のHP成功医院母集団です。各除外件数は優先順で重複を除いています。")
     export_store = None
-    try:
-        if mac_normal:
+    if mac_normal:
+        try:
             from src.repository.mac_feature_access import comdesk_reader_store
             export_store = comdesk_reader_store()
+        except Exception as exc:
+            st.metric("Comdesk同期対象", "未確定")
+            st.error(comdesk_safe_failure(exc, stage="reader_connect"))
+    else:
+        export_store = store
+    if export_store is not None:
+        try:
+            breakdown = comdesk_sync_breakdown(export_store, metrics)
+        except Exception as exc:
+            st.metric("Comdesk同期対象", "未確定")
+            st.error(comdesk_safe_failure(exc, stage="reader_query"))
         else:
-            export_store = store
-        breakdown = comdesk_sync_breakdown(export_store, metrics)
-        st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
-        render_comdesk_sync_export(export_store, demo)
-    except Exception:
-        st.metric("Comdesk同期対象", "未確定")
-        st.warning("Step6専用Readerの権限・接続を確認できないため、Comdesk同期用CSV出力を停止しました。")
-    finally:
-        if mac_normal and export_store is not None:
-            export_store._conn.close()
+            st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
+            render_comdesk_sync_export(export_store, demo)
+    if mac_normal and export_store is not None:
+        export_store._conn.close()
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
@@ -2030,6 +2124,13 @@ def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
     st.caption("CSV取込とDB反映を分けています。完全一致したUUIDだけを照合し、反映前に差分を確認できます。")
     from src.repository.mac_feature_access import comdesk_reader_configured, comdesk_reader_store
     from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
+    if mac_normal:
+        reader_ready = comdesk_reader_configured()
+        writer_ready = feature_writer_configured("comdesk_sync")
+        if not reader_ready:
+            st.warning("Comdesk専用Readerの設定がないため、UUID照合プレビューを無効にしています。")
+        if not writer_ready:
+            st.info("Clinic Sync専用Writerの設定がないため、DB反映を無効にしています。")
     preview_disabled = write_disabled and not (mac_normal and comdesk_reader_configured())
     apply_disabled = write_disabled and not (mac_normal and feature_writer_configured("comdesk_sync"))
     upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=preview_disabled)
@@ -2048,7 +2149,7 @@ def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
             st.session_state["step7_clinic_sync_plan"] = plan
             st.session_state["step7_clinic_sync_name"] = upload.name
         except Exception as exc:
-            st.error(f"差分プレビューを作成できません：{exc}")
+            st.error(comdesk_safe_failure(exc, stage="preview"))
     plan = st.session_state.get("step7_clinic_sync_plan")
     if not plan or st.session_state.get("step7_clinic_sync_name") != upload.name:
         return
@@ -2097,7 +2198,7 @@ def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
             st.success(f"反映完了：{result.get('updated', 0):,}件")
             st.session_state.pop("step7_clinic_sync_plan", None)
         except Exception as exc:
-            st.error(f"同期を反映できません：{exc}")
+            st.error(comdesk_safe_failure(exc, stage="apply"))
 
 
 def render_comdesk_preview_only(repository):
@@ -2866,19 +2967,26 @@ def cloud_kouseikyoku_import_ui(store):
 def render_comdesk_sync_export(store, demo):
     try:
         candidates = comdesk_sync_candidates(store)
-    except Exception:
+        revision = store.revision()
+    except Exception as exc:
         st.metric("Comdesk同期対象", "未確定")
-        st.error("Comdesk取込履歴・照合保留をREAD ONLYで確認できないため、同期用CSV出力を停止しました。provenance参照権限を確認してください。")
+        st.error(comdesk_safe_failure(exc, stage="reader_query"))
         return
     st.metric("Comdesk同期対象", f"{len(candidates):,}件", help="HP調査成功・UUID・Comdesk取込履歴・照合保留・merge holdを確認します。営業用HPランクは使用しません。")
     with st.expander("同期対象医院一覧", expanded=False):
         st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
-    signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, store.revision()], ensure_ascii=False)
+    signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, revision], ensure_ascii=False)
     if st.button(f"同期対象 {len(candidates):,}件をComdesk CSVで出力", key="simple_comdesk_sync_export", disabled=demo or not candidates, use_container_width=True):
-        st.session_state["simple_comdesk_sync_output"] = {
-            "signature": signature,
-            "content": comdesk_sync_csv(store, candidates),
-        }
+        try:
+            content = comdesk_sync_csv(store, candidates)
+            if len(COMDESK_EXPORT_HEADERS) != 30:
+                raise ValueError("unexpected Comdesk column contract")
+            st.session_state["simple_comdesk_sync_output"] = {
+                "signature": signature,
+                "content": content,
+            }
+        except Exception as exc:
+            st.error(comdesk_safe_failure(exc, stage="csv"))
     output = st.session_state.get("simple_comdesk_sync_output")
     if output and output["signature"] == signature:
         st.download_button("同期対象CSVをダウンロード", output["content"], "comdesk_hp_confirmed_sync.csv", mime="text/csv", key="simple_comdesk_sync_download")

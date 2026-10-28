@@ -103,26 +103,28 @@ class SupabaseHpResearchRepository:
             cur.execute(
                 f"""
                 WITH url_clinics AS (
-                  SELECT id FROM {source} WHERE hp_url<>'' OR maps_website_url<>''
+                  SELECT id FROM {source} WHERE merged_into IS NULL
+                    AND (COALESCE(BTRIM(hp_url),'')<>'' OR COALESCE(BTRIM(maps_website_url),'')<>'')
                 ), joined AS (
-                  SELECT u.id, r.fetch_status, r.treatment_categories
+                  SELECT u.id, r.clinic_id AS history_clinic_id, r.fetch_status, r.treatment_categories
                   FROM url_clinics u LEFT JOIN hp_research.clinic_hp_research r ON r.clinic_id=u.id
                 )
                 SELECT
                   count(*),
                   sum(CASE WHEN fetch_status='OK' THEN 1 ELSE 0 END),
-                  sum(CASE WHEN fetch_status IS NOT NULL AND fetch_status<>'OK' THEN 1 ELSE 0 END),
-                  sum(CASE WHEN fetch_status IS NULL THEN 1 ELSE 0 END),
+                  sum(CASE WHEN history_clinic_id IS NOT NULL AND (fetch_status IS NULL OR fetch_status NOT IN ('OK','REVIEW')) THEN 1 ELSE 0 END),
+                  sum(CASE WHEN fetch_status='REVIEW' THEN 1 ELSE 0 END),
+                  sum(CASE WHEN history_clinic_id IS NULL THEN 1 ELSE 0 END),
                   sum(CASE WHEN fetch_status='OK' AND jsonb_array_length(treatment_categories)>0 THEN 1 ELSE 0 END),
                   sum(CASE WHEN fetch_status='OK' AND jsonb_array_length(treatment_categories)=0 THEN 1 ELSE 0 END)
                 FROM joined
                 """
             )
             row = cur.fetchone()
-        keys = ("url_acquired", "researched", "failed", "not_researched",
+        keys = ("url_acquired", "researched", "failed", "review", "not_researched",
                 "treatment_detected", "treatment_not_detected")
         result = {k: int(v or 0) for k, v in zip(keys, row)}
-        if result["url_acquired"] != result["researched"] + result["failed"] + result["not_researched"]:
+        if result["url_acquired"] != result["researched"] + result["failed"] + result["review"] + result["not_researched"]:
             raise BatchMetricInvariantError("WebサイトURL件数と調査状態の合計が一致しません。")
         if result["researched"] != result["treatment_detected"] + result["treatment_not_detected"]:
             raise BatchMetricInvariantError("Webサイト調査完了件数と治療カテゴリ判定の合計が一致しません。")

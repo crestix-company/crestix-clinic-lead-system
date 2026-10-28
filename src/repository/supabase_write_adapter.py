@@ -1478,7 +1478,11 @@ class SupabaseClinicWriteRepository:
         updated = 0
         with self._conn.transaction():
             with self._conn.cursor() as cur:
-                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                # Serialize retries per input hash without granting UPDATE on the
+                # provenance ledger. The row is immutable after insertion; a
+                # transaction advisory lock plus its unique id preserves idempotency.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (batch_id,))
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s", (batch_id,))
                 old = cur.fetchone()
                 if old:
                     value = old[0] if isinstance(old[0], dict) else json.loads(old[0])
