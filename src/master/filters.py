@@ -13,6 +13,9 @@ AD_COUNT_SQL = "(SELECT count(DISTINCT value) FROM json_each(signals_json) WHERE
 class Filters:
     active_only: bool = True
     hp_only: bool = True
+    # Normally merge-held clinics are hidden from operational lists. Comdesk Step6 opts in
+    # only to count them explicitly as an exclusion, never to export them.
+    include_merge_hold: bool = False
     recent_only: bool = False
     age_min: float | None = None
     ranks: list[str] = field(default_factory=list)
@@ -209,4 +212,7 @@ def clauses(f, as_of=None):
 
 def where(f, as_of=None):
     steps = clauses(f, as_of)
-    return " AND ".join(["merged_into IS NULL", "merge_hold=0"]+[s for _,s,_ in steps]), [p for _,_,args in steps for p in args]
+    base = ["merged_into IS NULL"]
+    if not f.include_merge_hold:
+        base.append("merge_hold=0")
+    return " AND ".join(base+[s for _,s,_ in steps]), [p for _,_,args in steps for p in args]

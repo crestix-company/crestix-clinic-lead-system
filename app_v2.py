@@ -1,6 +1,7 @@
 """第一営業部向けローカルアプリ。importだけでは画面/DB/ネットを動かさない。"""
 from pathlib import Path
 from dataclasses import asdict, replace
+from io import BytesIO
 import hashlib
 import hmac
 import json
@@ -14,7 +15,7 @@ import streamlit as st
 from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
-from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
+from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns
 from src.master.clinic_identity import project_export_rows
 from src.master.fixed_export import fixed_row
 from src.io.output_writer import csv_bytes
@@ -188,11 +189,16 @@ def comdesk_safe_failure(exc, *, stage):
     )
     if category == "permission":
         if stage == "apply":
-            return "Clinic Sync専用Writerの権限またはRLSポリシーを確認してください。反映結果を照合するまで再操作しないでください。"
-        return "Comdesk専用ReaderのSELECT権限またはRLSポリシーを確認してください。"
+            return "差分を反映できません。反映状態を確認してから管理者に設定をご相談ください。"
+        return "Comdesk用CSVの読取を利用できません。管理者に専用接続設定を確認してください。"
     if category in {"authentication", "configuration", "disconnected", "network", "timeout", "unavailable"}:
-        service = "Clinic Sync専用Writer" if stage == "apply" else "Comdesk専用Reader"
-        return f"{service}へ接続できません。専用設定とネットワーク状態を確認してください。"
+        if stage == "reader_connect":
+            return "Comdesk用CSVの対象確認・出力を利用できません。管理者に接続設定を確認してください。"
+        if stage == "preview":
+            return "UUID照合プレビューを利用できません。管理者に接続設定を確認してください。"
+        if stage == "apply":
+            return "差分を反映できません。反映状態を確認してから管理者に接続状態をご相談ください。"
+        return "Comdesk同期対象を確認できません。管理者に接続設定を確認してください。"
     if stage == "csv":
         return "Comdesk同期用CSVを生成できませんでした。医院データの形式を確認してください。"
     if stage == "preview":
@@ -200,6 +206,19 @@ def comdesk_safe_failure(exc, *, stage):
     if stage == "apply":
         return "同期反映を完了できませんでした。DB反映状態を照合してから再操作してください。"
     return "Comdesk同期対象を読み取れませんでした。専用ReaderのSELECT権限とRLSを確認してください。"
+
+
+def comdesk_connection_admin_status_ui():
+    """Show configuration presence only; never render connection strings or passwords."""
+    from src.repository.mac_feature_access import comdesk_reader_configured, feature_writer_configured
+
+    st.subheader("Comdesk CSV接続状態（管理者向け）")
+    reader = comdesk_reader_configured()
+    writer = feature_writer_configured("comdesk_sync")
+    columns = st.columns(2)
+    columns[0].metric("Comdesk Reader設定形式", "確認済み" if reader else "未設定または要確認")
+    columns[1].metric("Clinic Sync Writer設定形式", "確認済み" if writer else "未設定または要確認")
+    st.caption("接続情報やパスワードは表示しません。この表示は設定形式の確認で、DB実接続・権限確認は操作時に別途行います。")
 
 
 def show_web_research_metrics(store, *, read_only=False, compact=False):
@@ -1978,8 +1997,8 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
         email_human_review_card(store)
         email_auto_research_card(store, demo=demo)
 
-    st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
-    st.caption("件数ごとに母集団を明記しています。URL・調査完了は全HP URL登録済み母集団、UUID・除外・同期対象は最新のHP成功医院母集団です。各除外件数は優先順で重複を除いています。")
+    st.subheader("Step6：HP確認済み医院をComdesk用CSVで出力")
+    st.caption("HP確認済みの全医院マスターを母集団に、UUID登録状況と除外理由を表示します。各除外件数は優先順で重複を除いています。")
     export_store = None
     if mac_normal and getattr(store, "is_supabase_runtime", False):
         try:
@@ -2006,11 +2025,10 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     if mac_normal and getattr(store, "is_supabase_runtime", False) and export_store is not None:
         export_store._conn.close()
 
-    st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
+    st.subheader("Step7：Comdeskから出力したCSVを取り込む")
     st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
     if mac_normal:
-        st.caption("Step7のUUID照合プレビューにはComdesk Export Reader、反映にはClinic Sync専用Writerが必要です。設定された操作だけ利用できます。")
-    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む", mac_normal=mac_normal)
+        st.caption("CSVをアップロードしてUUID照合・差分プレビューを行います。DB反映は明示確認後、専用接続が設定されている場合だけ実行できます。")
     render_comdesk_clinic_sync(store, write_disabled, mac_normal=mac_normal)
 
     if not mac_normal:
@@ -2175,7 +2193,7 @@ def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
         "morning_end": "午前終", "afternoon_start": "午後始", "afternoon_end": "午後終",
         "phone": "電話番号", "address": "住所", "clinic_name": "医院名",
     }
-    st.markdown("**医院情報の差分同期（30列形式）**")
+    st.markdown("**Comdeskから出力したCSVを取り込む（差分確認）**")
     st.caption("CSV取込とDB反映を分けています。完全一致したUUIDだけを照合し、反映前に差分を確認できます。")
     from src.repository.mac_feature_access import comdesk_reader_configured, comdesk_reader_store
     from src.repository.mac_feature_access import feature_writer_configured, feature_writer_repositories
@@ -2183,11 +2201,13 @@ def render_comdesk_clinic_sync(store, write_disabled, *, mac_normal=False):
         reader_ready = comdesk_reader_configured()
         writer_ready = feature_writer_configured("comdesk_sync")
         if not reader_ready:
-            st.warning("Comdesk専用Readerの設定がないため、UUID照合プレビューを無効にしています。")
+            st.warning("UUID照合プレビューを利用できません。管理者に専用接続設定を確認してください。")
         if not writer_ready:
-            st.info("Clinic Sync専用Writerの設定がないため、DB反映を無効にしています。")
-    preview_disabled = write_disabled and not (mac_normal and comdesk_reader_configured())
-    apply_disabled = write_disabled and not (mac_normal and feature_writer_configured("comdesk_sync"))
+            st.info("差分をDBへ反映できません。管理者が専用接続を設定するまで反映操作は無効です。")
+    reader_available = comdesk_reader_configured() if mac_normal else not write_disabled
+    writer_available = feature_writer_configured("comdesk_sync") if mac_normal else not write_disabled
+    preview_disabled = not reader_available
+    apply_disabled = not writer_available
     upload = st.file_uploader("Comdesk 30列CSV", type=["csv"], key="step7_clinic_sync_upload", disabled=preview_disabled)
     if not upload:
         return
@@ -3027,15 +3047,26 @@ def render_comdesk_sync_export(store, demo):
         st.metric("Comdesk同期対象", "未確定")
         st.error(comdesk_safe_failure(exc, stage="reader_query"))
         return
-    st.metric("Comdesk同期対象", f"{len(candidates):,}件", help="HP調査成功・UUID・Comdesk取込履歴・照合保留・merge holdを確認します。営業用HPランクは使用しません。")
+    st.metric("Comdesk同期対象", f"{len(candidates):,}件", help="現存・未統合・HP確認済み・HP URLありの医院を対象に、Comdesk取込履歴・照合保留・merge holdを確認します。営業用HPランクは使用しません。")
     with st.expander("同期対象医院一覧", expanded=False):
-        st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
+        st.dataframe(pd.DataFrame([{k:r.get(k,"") for k in ("id","uuid","clinic_name","phone","address","prefecture")} for r in candidates]), hide_index=True)
     signature = json.dumps([str(store.path), [r["id"] for r in candidates], COMDESK_EXPORT_HEADERS, revision], ensure_ascii=False)
-    if st.button(f"同期対象 {len(candidates):,}件をComdesk CSVで出力", key="simple_comdesk_sync_export", disabled=demo or not candidates, use_container_width=True):
+    try:
+        preview_content = comdesk_sync_csv(store, candidates[:10])
+        if len(COMDESK_EXPORT_HEADERS) != 30:
+            raise ValueError("unexpected Comdesk column contract")
+        with st.expander("Comdesk CSVプレビュー（先頭10件）", expanded=False):
+            preview_frame = pd.read_csv(BytesIO(preview_content), dtype=str, keep_default_na=False, nrows=10)
+            st.dataframe(preview_frame, hide_index=True, use_container_width=True)
+            st.caption("出力は既存の30列形式です。Clinic IDは一覧で照合し、CSVにはComdesk既存仕様どおり出力しません。")
+    except Exception as exc:
+        preview_content = None
+        st.error(comdesk_safe_failure(exc, stage="csv"))
+    if st.button(f"同期対象 {len(candidates):,}件をComdesk CSVで出力", key="simple_comdesk_sync_export", disabled=demo or not candidates or preview_content is None, use_container_width=True):
         try:
+            if preview_content is None:
+                raise ValueError("Comdesk CSV preview is unavailable")
             content = comdesk_sync_csv(store, candidates)
-            if len(COMDESK_EXPORT_HEADERS) != 30:
-                raise ValueError("unexpected Comdesk column contract")
             st.session_state["simple_comdesk_sync_output"] = {
                 "signature": signature,
                 "content": content,
@@ -3061,8 +3092,9 @@ def comdesk_sync_csv(store, candidates, *, project_key="default"):
         if common_id is not None and clinic.get("canonical_comdesk_uuid"):
             canonical_by_entity[int(common_id)] = str(clinic["canonical_comdesk_uuid"]).strip()
     clinics = project_export_rows(clinics, project_key, canonical_by_entity)
-    row_mapping = {"uuid":0,"clinic_name":2,"phone":9,"prefecture":5,"address":6}
-    rows = [new_export_row(r, COMDESK_HEADERS, row_mapping) for r in clinics]
+    # Match the pre-Cloud-Run Mac export: UUID, URL, prefecture/address formatting,
+    # and confirmed Maps business details are projected into the fixed 28-column base.
+    rows = [fixed_row(r) for r in clinics]
     if hasattr(store, "_attach_export_metadata"):
         rows = store._attach_export_metadata(clinics, rows)
     else:
@@ -3074,22 +3106,29 @@ def comdesk_sync_csv(store, candidates, *, project_key="default"):
     return csv_bytes(COMDESK_EXPORT_HEADERS, rows)
 
 
+def _comdesk_hp_confirmed_clinics(store, page_size=50000):
+    """Read the full current verified-HP cohort, independent of the most recent HP job."""
+    filters = Filters(active_only=True, hp_only=True, include_merge_hold=True)
+    total = store.count(filters)
+    clinics = []
+    for offset in range(0, total, page_size):
+        clinics.extend(store.query(filters, limit=page_size, offset=offset))
+    # Defensive dedupe in case a backend returns an overlapping page. Clinic IDs are the
+    # identity key; this prevents a duplicate row from inflating counts or the outbound CSV.
+    unique = {}
+    for row in clinics:
+        unique.setdefault(int(row["id"]), row)
+    return list(unique.values())
+
+
 def comdesk_sync_breakdown(store, master_metrics):
     """Return display-only Step6 counts with explicit, non-overlapping exclusions."""
-    if getattr(store, "is_supabase_runtime", False):
-        job = store.latest_completed_hp_job()
-        successful_ids = store.hp_job_export_summary(job["id"])["export_ids"] if job else []
-        clinics = store.records_by_ids(successful_ids)
-    else:
-        filters = Filters(active_only=True, hp_only=True)
-        total = store.count(filters)
-        clinics = []
-        for offset in range(0, total, 50000):
-            clinics.extend(store.query(filters, limit=50000, offset=offset))
+    clinics = _comdesk_hp_confirmed_clinics(store)
 
     linkage = store.comdesk_linkage_state()
     imported = set(linkage["imported_clinic_ids"])
     held = set(linkage["held_clinic_ids"])
+    assigned = [row for row in clinics if str(row.get("uuid") or "").strip()]
     unassigned = [row for row in clinics if not str(row.get("uuid") or "").strip()]
     imported_rows = [row for row in unassigned if int(row["id"]) in imported]
     after_import = [row for row in unassigned if int(row["id"]) not in imported]
@@ -3114,8 +3153,9 @@ def comdesk_sync_breakdown(store, master_metrics):
          "母集団・条件": "厚生局 source_records の取込元レコード数（医院数ではありません）。Reader権限外なら非表示"},
         {"項目": "HP URL取得済み", "件数": f"{int(hp_counts.get('url_acquired', 0)):,}件", "母集団・条件": "hp_url または Maps WebサイトURL 登録済み医院"},
         {"項目": "HP調査完了", "件数": f"{int(hp_counts.get('researched', 0)):,}件", "母集団・条件": "上記URL母集団のうち fetch_status=OK（取得・公式HP検証完了）"},
-        {"項目": "HP成功医院（同期候補の母集団）", "件数": f"{len(clinics):,}件", "母集団・条件": "現行同期処理と同じ最新完了HP Job（SQLiteはhp_status=VERIFIEDかつURLあり）"},
-        {"項目": "UUID未付与", "件数": f"{len(unassigned):,}件", "母集団・条件": "HP成功医院のうちUUIDが空欄"},
+        {"項目": "HP確認済み医院", "件数": f"{len(clinics):,}件", "母集団・条件": "全Clinic Masterのactive=true・未統合・merge holdを含む・hp_status=VERIFIED・HP URLあり。最新Jobに限定しない"},
+        {"項目": "UUID登録済み", "件数": f"{len(assigned):,}件", "母集団・条件": "HP確認済み医院のうち既存UUIDあり"},
+        {"項目": "UUID未付与", "件数": f"{len(unassigned):,}件", "母集団・条件": "HP確認済み医院のうちClinic MasterのUUIDが空欄"},
         {"項目": "除外：Comdesk取込済み", "件数": f"{len(imported_rows):,}件", "母集団・条件": "UUID未付与の医院から除外（最初に判定）"},
         {"項目": "除外：照合保留", "件数": f"{len(held_rows):,}件", "母集団・条件": "Comdesk取込済み除外後の未解決照合・候補医院"},
         {"項目": "除外：merge hold", "件数": f"{len(merge_rows):,}件", "母集団・条件": "取込済み・照合保留除外後にmerge holdがある医院"},
@@ -3124,19 +3164,7 @@ def comdesk_sync_breakdown(store, master_metrics):
 
 
 def comdesk_sync_candidates(store, page_size=50000):
-    if getattr(store, "is_supabase_runtime", False):
-        # Reuse the HP workflow's canonical SUCCESS/Human Review/fetch-status gate.
-        job = store.latest_completed_hp_job()
-        successful_ids = store.hp_job_export_summary(job["id"])["export_ids"] if job else []
-        clinics = store.records_by_ids(successful_ids)
-    else:
-        # SQLite/test mode has no canonical HP job ledger. Its established projection of the
-        # same success state is hp_status=VERIFIED with a non-empty official hp_url.
-        filters = Filters(active_only=True, hp_only=True)
-        total = store.count(filters)
-        clinics = []
-        for offset in range(0, total, page_size):
-            clinics.extend(store.query(filters, limit=page_size, offset=offset))
+    clinics = _comdesk_hp_confirmed_clinics(store, page_size=page_size)
 
     linkage = store.comdesk_linkage_state()
     imported_ids = set(linkage["imported_clinic_ids"])
@@ -3441,6 +3469,8 @@ def advanced_ui(store, demo, *, mac_normal=False):
             email_research_page(store)
         elif section == "Email Human Review":
             email_human_review_page(store)
+        elif section == "要確認・設定":
+            comdesk_connection_admin_status_ui()
         else:
             st.info("この画面は元のメニュー構成を維持しています。Mac通常版では承認済みのHP調査以外の更新操作を停止しています。")
         return

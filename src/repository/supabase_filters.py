@@ -341,6 +341,9 @@ def clauses(filters, as_of=None, excluded_ids=None, read_only_ui=False):
 
 def where(filters, as_of=None, excluded_ids=None, read_only_ui=False):
     steps = clauses(filters, as_of, excluded_ids=excluded_ids, read_only_ui=read_only_ui)
-    sql = " AND ".join(["merged_into IS NULL", "merge_hold=false"] + [s for _, s, _ in steps])
+    base = ["merged_into IS NULL"]
+    if not filters.include_merge_hold:
+        base.append("merge_hold=false")
+    sql = " AND ".join(base + [s for _, s, _ in steps])
     args = [a for _, _, args in steps for a in args]
     return sql, args
