@@ -306,7 +306,7 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
                 column.metric(label, f"{counts[key]:,}件" if counts.get(key) is not None else "—")
             quality_done = treatment_quality_completed_count(counts)
             st.metric(
-                "治療カテゴリ判定完了", f"{quality_done:,}件",
+                "治療カテゴリ判定完了", f"{quality_done:,}件" if quality_done is not None else "—",
                 help="fetch_status=OKのうち、検出あり・検出なしのどちらかに分類できた医院数です。",
             )
             st.caption("治療カテゴリの判定完了は検出あり＋検出なしで算出します。診療科目そのものの品質確認状態は既存集計に独立した状態列がなく、別件数にはできません。")
@@ -376,7 +376,11 @@ AUTO_HP_ACTIVE_STATUSES = {"RUNNING", "WAITING_NETWORK"}
 
 def treatment_quality_completed_count(web_counts):
     """Count existing treatment-category classifications, including no-match results."""
-    return int(web_counts["treatment_detected"]) + int(web_counts["treatment_not_detected"])
+    detected = web_counts.get("treatment_detected")
+    not_detected = web_counts.get("treatment_not_detected")
+    if detected is None or not_detected is None:
+        return None
+    return int(detected) + int(not_detected)
 
 
 def _auto_hp_progress_snapshot(store, auto_repo):
