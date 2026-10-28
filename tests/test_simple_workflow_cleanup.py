@@ -161,6 +161,17 @@ def test_step6_breakdown_fails_closed_when_hp_population_is_unknown():
         app_v2.comdesk_sync_breakdown(FixtureStore(), {})
 
 
+def test_auto_run_eligible_metric_failure_is_isolated_and_secret_safe(caplog):
+    class BrokenReader:
+        def hp_auto_run_eligible_count(self, *_args):
+            raise RuntimeError("postgres://user:secret@example.invalid/db")
+
+    assert app_v2.safe_hp_auto_run_eligible_count(BrokenReader(), "", ["医科", "歯科"]) is None
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "postgres://" not in caplog.text
+    assert "example.invalid" not in caplog.text
+
+
 def test_single_hp_job_controls_survive_rerun_in_advanced_settings():
     app = AppTest.from_string(r'''
 import streamlit as st

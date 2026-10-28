@@ -165,6 +165,19 @@ def hp_auto_run_display_metrics(store, *, state=None, eligible=None, snapshot=No
     return values
 
 
+def safe_hp_auto_run_eligible_count(store, prefecture="", medical_types=None):
+    """Read the Auto Run target count without letting one metric abort the page."""
+    try:
+        return int(store.hp_auto_run_eligible_count(prefecture, medical_types))
+    except Exception as exc:
+        logging.warning(
+            "HP Auto Run eligible count failed exception_type=%s category=%s sqlstate=%s",
+            type(exc).__name__, connection_error_category(exc),
+            str(getattr(exc, "sqlstate", "") or ""),
+        )
+        return None
+
+
 def comdesk_safe_failure(exc, *, stage):
     """Log only a safe classification and return a secret-free Step6/7 message."""
     category = connection_error_category(exc)
@@ -1710,7 +1723,9 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     selected_hp_statuses = []
     force_confirmed = True
     if mac_normal:
-        available = store.hp_auto_run_eligible_count("", ["医科", "歯科"])
+        available = safe_hp_auto_run_eligible_count(store, "", ["医科", "歯科"])
+        if available is None:
+            st.warning("Auto Run対象件数を取得できません。件数を確認できるまでStep5の開始操作を無効にしています。")
         force_confirmed = True
     else:
         force = st.checkbox("調査済みもやり直す", value=False, key="simple_force")
@@ -1794,7 +1809,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     if mac_normal:
         _mac_auto_hp_run_ui(
             store, state=auto_state, state_available=auto_state_available,
-            controls_disabled=hp_control_disabled,
+            controls_disabled=hp_control_disabled or available is None,
         )
     elif mode == "指定件数だけ調査":
         count_cap = max_single_job_count(hp_mode)
