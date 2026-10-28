@@ -1930,7 +1930,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
     st.subheader("Step6：HP確認済み医院をComdesk同期用CSVで出力")
     st.caption("件数ごとに母集団を明記しています。URL・調査完了は全HP URL登録済み母集団、UUID・除外・同期対象は最新のHP成功医院母集団です。各除外件数は優先順で重複を除いています。")
     export_store = None
-    if mac_normal:
+    if mac_normal and getattr(store, "is_supabase_runtime", False):
         try:
             from src.repository.mac_feature_access import comdesk_reader_store
             export_store = comdesk_reader_store()
@@ -1948,7 +1948,7 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
         else:
             st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
             render_comdesk_sync_export(export_store, demo)
-    if mac_normal and export_store is not None:
+    if mac_normal and getattr(store, "is_supabase_runtime", False) and export_store is not None:
         export_store._conn.close()
 
     st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
