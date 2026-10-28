@@ -1944,7 +1944,11 @@ def simple_workflow_ui(store, demo, *, read_only=False, mac_normal=False):
             breakdown = comdesk_sync_breakdown(export_store, metrics)
         except Exception as exc:
             st.metric("Comdesk同期対象", "未確定")
-            st.error(comdesk_safe_failure(exc, stage="reader_query"))
+            if (isinstance(exc, ValueError)
+                    and not getattr(export_store, "is_supabase_runtime", False)):
+                st.warning("ローカルSQLiteにはHP履歴サイドカーがないため、同期対象のHP母集団を確認できません。")
+            else:
+                st.error(comdesk_safe_failure(exc, stage="reader_query"))
         else:
             st.dataframe(pd.DataFrame(breakdown), hide_index=True, use_container_width=True)
             render_comdesk_sync_export(export_store, demo)
@@ -3051,18 +3055,14 @@ def comdesk_sync_breakdown(store, master_metrics):
             hp_counts = web_research_metrics(store.path)
     except TypeError:
         hp_counts = store.web_research_metrics()
-    # Legacy SQLite fixtures may not have the separate HP history sidecar. Keep
-    # their Comdesk projection usable while marking only the unavailable metrics.
-    hp_counts = hp_counts or {}
-    def format_hp_count(key):
-        value = hp_counts.get(key)
-        return f"{int(value):,}件" if value is not None else "—"
+    if hp_counts is None:
+        raise ValueError("HP URL母集団の集計を取得できません。")
     return [
         {"項目": "厚生局全件", "件数": (f"{int(master_metrics['厚生局取込レコード']):,}件"
           if master_metrics.get("厚生局取込レコード") is not None else "—"),
          "母集団・条件": "厚生局 source_records の取込元レコード数（医院数ではありません）。Reader権限外なら非表示"},
-        {"項目": "HP URL取得済み", "件数": format_hp_count("url_acquired"), "母集団・条件": "hp_url または Maps WebサイトURL 登録済み医院"},
-        {"項目": "HP調査完了", "件数": format_hp_count("researched"), "母集団・条件": "上記URL母集団のうち fetch_status=OK（取得・公式HP検証完了）"},
+        {"項目": "HP URL取得済み", "件数": f"{int(hp_counts.get('url_acquired', 0)):,}件", "母集団・条件": "hp_url または Maps WebサイトURL 登録済み医院"},
+        {"項目": "HP調査完了", "件数": f"{int(hp_counts.get('researched', 0)):,}件", "母集団・条件": "上記URL母集団のうち fetch_status=OK（取得・公式HP検証完了）"},
         {"項目": "HP成功医院（同期候補の母集団）", "件数": f"{len(clinics):,}件", "母集団・条件": "現行同期処理と同じ最新完了HP Job（SQLiteはhp_status=VERIFIEDかつURLあり）"},
         {"項目": "UUID未付与", "件数": f"{len(unassigned):,}件", "母集団・条件": "HP成功医院のうちUUIDが空欄"},
         {"項目": "除外：Comdesk取込済み", "件数": f"{len(imported_rows):,}件", "母集団・条件": "UUID未付与の医院から除外（最初に判定）"},
