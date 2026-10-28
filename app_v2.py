@@ -204,6 +204,7 @@ def comdesk_safe_failure(exc, *, stage):
 
 def show_web_research_metrics(store, *, read_only=False, compact=False):
     """通常UIのWebサイト調査状況SSOT。HPの公式性は断定しない。"""
+    counts_available = True
     try:
         if hasattr(store, "web_research_metrics"):
             counts = (store.web_research_metrics(read_only_ui=True)
@@ -212,13 +213,31 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         else:
             counts = web_research_metrics(store.path)
     except BatchMetricInvariantError as exc:
-        st.error(f"Webサイト調査件数を表示できません：{exc}")
-        return
+        counts = None
+        counts_available = False
+        logging.warning("HP status metrics failed exception_type=%s category=invalid_data", type(exc).__name__)
+        st.warning(f"HP調査状況を確認できません：{exc}")
+    except Exception as exc:
+        counts = None
+        counts_available = False
+        logging.warning(
+            "HP status metrics failed exception_type=%s category=%s sqlstate=%s",
+            type(exc).__name__, connection_error_category(exc),
+            str(getattr(exc, "sqlstate", "") or ""),
+        )
+        st.warning("HP調査状況の集計に接続できませんでした。この指標だけを一時的に非表示にしています。")
     if counts is None:
-        st.warning("HP research batch sidecarがないため、Webサイト調査状況を表示できません。")
-        return
+        if counts_available:
+            st.warning("HP research batch sidecarがないため、Webサイト調査状況を表示できません。")
+        if not compact:
+            return
+        counts = {}
     auto_metrics = hp_auto_run_display_metrics(store)
+    if auto_metrics["eligible"] is None or auto_metrics["remaining"] is None:
+        st.warning("Auto Run件数を取得できない指標があります。HP調査状況と画面閲覧は継続します。")
     if not compact:
+        if not counts_available or not counts:
+            return
         definitions = [
             ("HP URL取得済み", counts["url_acquired"], "未統合医院のうちHP URLまたはMaps WebサイトURLが登録済み。1医院1件です。"),
             ("HP調査完了", counts["researched"], "上記URL母集団のうちHP調査履歴があり、fetch_status=OKの医院数です。"),
@@ -241,20 +260,32 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         ("厚生局全件", None, "厚生局から取り込んだ元レコード数です。ユニーク医院数とは限りません。"),
         ("既存UUIDあり", None, "現在の医院マスターでComdesk UUIDが登録されている医院数です。"),
     ]
-    metrics = (
-        store.metrics(read_only_ui=True)
-        if compact and read_only and getattr(store, "is_supabase_runtime", False)
-        else store.metrics() if compact else {}
-    )
+    try:
+        metrics = (
+            store.metrics(read_only_ui=True)
+            if compact and read_only and getattr(store, "is_supabase_runtime", False)
+            else store.metrics() if compact else {}
+        )
+    except Exception as exc:
+        metrics = {}
+        logging.warning(
+            "Master metrics failed exception_type=%s category=%s sqlstate=%s",
+            type(exc).__name__, connection_error_category(exc),
+            str(getattr(exc, "sqlstate", "") or ""),
+        )
+        st.warning("医院マスター集計の一部に接続できませんでした。HP集計と画面閲覧は継続します。")
     columns = st.columns(4)
     for column, (label, key, help_text) in zip(columns, primary):
-        value = counts[key] if key else metrics.get("厚生局取込レコード" if label == "厚生局全件" else "既存UUIDあり", 0)
+        if key:
+            value = counts.get(key) if counts_available else None
+        else:
+            value = metrics.get("厚生局取込レコード" if label == "厚生局全件" else "既存UUIDあり")
         with column.container(border=True):
             st.metric(label, f"{value:,}件" if value is not None else "—", help=help_text)
     operational = [
-        ("HP未調査", counts["not_researched"], "URL取得済み母集団のうちHP調査履歴行がない医院数。履歴を直接照合し、差引推定はしません。"),
-        ("HP取得・解析失敗", counts["failed"], "URL取得済み母集団のうち、履歴がありfetch_statusがOKまたはREVIEW以外です。"),
-        ("HP要確認", counts["review"], "URL取得済み母集団のうち、最新HP履歴がREVIEWです。"),
+        ("HP未調査", counts.get("not_researched"), "URL取得済み母集団のうちHP調査履歴行がない医院数。履歴を直接照合し、差引推定はしません。"),
+        ("HP取得・解析失敗", counts.get("failed"), "URL取得済み母集団のうち、履歴がありfetch_statusがOKまたはREVIEW以外です。"),
+        ("HP要確認", counts.get("review"), "URL取得済み母集団のうち、最新HP履歴がREVIEWです。"),
         ("自動調査可能・未調査", auto_metrics["eligible"], "active・未統合/未保留・Maps公式HPあり・履歴なし・未予約・過去SUCCESSなしの医科/歯科。"),
         ("今回のAuto Run残件", auto_metrics["remaining"], "現在のAuto Run条件でDBから取得。完了・待機中は0件です。"),
     ]
@@ -267,12 +298,12 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         ("治療カテゴリ検出あり", "treatment_detected"),
         ("治療カテゴリ検出なし", "treatment_not_detected"),
     ]
-    if compact:
+    if compact and counts_available:
         with st.expander("現在のデータ状況：集計定義と補助指標", expanded=False):
             st.caption("HP全体指標は未統合医院のうちHP URLまたはMaps URL登録済みが母集団です。自動調査可能数はactive・未統合/未保留・Maps公式HPあり・履歴なし・未予約・過去SUCCESSなしの医科/歯科です。厚生局とUUIDは別母集団です。")
             columns = st.columns(3)
             for column, (label, key) in zip(columns, details):
-                column.metric(label, f"{counts[key]:,}件")
+                column.metric(label, f"{counts[key]:,}件" if counts.get(key) is not None else "—")
             quality_done = treatment_quality_completed_count(counts)
             st.metric(
                 "治療カテゴリ判定完了", f"{quality_done:,}件",
@@ -284,7 +315,8 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
         for start in range(0, len(details), 3):
             columns = st.columns(3)
             for column, (label, key) in zip(columns, details[start:start + 3]):
-                column.metric(label, f"{counts[key]:,}件")
+                value = counts.get(key)
+                column.metric(label, f"{value:,}件" if value is not None else "—")
 
 
 def show_email_research_metrics(store):

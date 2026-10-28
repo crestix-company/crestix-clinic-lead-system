@@ -172,6 +172,30 @@ def test_auto_run_eligible_metric_failure_is_isolated_and_secret_safe(caplog):
     assert "example.invalid" not in caplog.text
 
 
+def test_hp_metric_reader_failure_preserves_other_metrics_in_apptest():
+    app = AppTest.from_string('''
+import app_v2
+
+class BrokenHpMetricsStore:
+    is_supabase_runtime = True
+    def web_research_metrics(self, **_kwargs):
+        raise RuntimeError("postgres://user:secret@example.invalid/db")
+    def hp_auto_run_eligible_count(self, *_args):
+        return 0
+    def hp_auto_run_state(self):
+        return {"status": "COMPLETED"}
+    def metrics(self, **_kwargs):
+        return {"既存UUIDあり": 42, "厚生局取込レコード": None}
+
+app_v2.show_web_research_metrics(BrokenHpMetricsStore(), read_only=True, compact=True)
+''').run()
+    assert not app.exception
+    assert any(metric.label == "既存UUIDあり" and metric.value == "42件" for metric in app.metric)
+    assert any(metric.label == "HP URL取得済み" and metric.value == "—" for metric in app.metric)
+    assert any("HP調査状況の集計に接続できませんでした" in warning.value for warning in app.warning)
+    assert not any("secret" in warning.value for warning in app.warning)
+
+
 def test_single_hp_job_controls_survive_rerun_in_advanced_settings():
     app = AppTest.from_string(r'''
 import streamlit as st
