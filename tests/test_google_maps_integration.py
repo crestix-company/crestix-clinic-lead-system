@@ -26,6 +26,25 @@ def maps_frame(record, **overrides):
     row.update(overrides)
     return pd.DataFrame([row],columns=MAPS_RESULT_HEADERS)
 
+def test_maps_csv_keeps_phone_as_text_and_uses_canonical_url_columns():
+    values = {header: "" for header in MAPS_RESULT_HEADERS}
+    values.update({
+        "source_phone": "03-0123-0045", "maps_phone": "03-0123-0045",
+        "source_address": "東京都千代田区1-2", "maps_address": "東京都千代田区1-2",
+        "maps_profile_url": "https://maps.google.test/place/clinic",
+        "maps_website_url": "https://official.example/",
+    })
+    raw = csv_bytes(MAPS_RESULT_HEADERS, [[values[column] for column in MAPS_RESULT_HEADERS]])
+    loaded = load_table(raw, "maps.csv")
+    validated = __import__("src.master.google_maps", fromlist=["validate_maps_frame"]).validate_maps_frame(loaded.frame())
+    row = validated.iloc[0]
+    assert row["source_phone"] == "03-0123-0045"
+    assert row["maps_phone"] == "03-0123-0045"
+    assert row["source_address"] == "東京都千代田区1-2"
+    assert row["maps_address"] == "東京都千代田区1-2"
+    assert row["maps_profile_url"] == "https://maps.google.test/place/clinic"
+    assert row["maps_website_url"] == "https://official.example/"
+
 def test_exclusion_hospital_center_and_normal():
     assert excluded_reason({"clinic_name":"架空病院","facility_type":"診療所"}) == "hospital"
     assert excluded_reason({"clinic_name":"架空医療センター","facility_type":"診療所"}) == "center"

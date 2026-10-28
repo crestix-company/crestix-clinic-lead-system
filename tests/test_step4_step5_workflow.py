@@ -67,6 +67,10 @@ def test_completed_hp_worker_writes_canonical_ledger_before_finishing(monkeypatc
 
     class Store:
         def get(self, clinic_id):
+            raise AssertionError("HP worker must not read public.clinics through its Reader")
+
+        def get_hp_research_clinic(self, clinic_id):
+            events.append(("reader_projection", clinic_id))
             return {"id": clinic_id, "hp_url": "https://clinic.example/"}
 
     class Researcher:
@@ -77,6 +81,7 @@ def test_completed_hp_worker_writes_canonical_ledger_before_finishing(monkeypatc
                      "hp_verified": True, "hp_url": "https://clinic.example/"}, [])
 
     assert _research_one(Store(), "job", {"kind": "hp"}, {}, Researcher(), 12)
+    assert events[0] == ("reader_projection", 12)
     assert events[-2][0] == "ledger"
     assert events[-1] == ("finish", 12, "ERROR" if failure else "SUCCESS")
     assert events[-2][2] == ("ERROR" if failure else "OK")
@@ -115,15 +120,15 @@ def _runtime_store(conn):
 
 
 def test_latest_completed_hp_job_is_explicit_and_deterministically_ordered():
-    conn = _Conn([("job-2", "2026-10-02", "2026-10-03", 9, 9)])
+    conn = _Conn([("job-2", "2026-10-02", 9, 9)])
     job = _runtime_store(conn).latest_completed_hp_job()
     sql, params = conn.calls[0]
-    assert job == {"id": "job-2", "created_at": "2026-10-02", "updated_at": "2026-10-03",
+    assert job == {"id": "job-2", "created_at": "2026-10-02", "updated_at": None,
                    "target_count": 9, "done_count": 9}
     assert params == ()
     assert "j.kind='hp' AND j.status='COMPLETED'" in sql
     assert "count(*) FILTER (WHERE i.state<>'DONE')=0" in sql
-    assert "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC" in sql
+    assert "ORDER BY j.created_at DESC,j.id DESC" in sql
 
 
 def test_step5_keeps_current_job_metrics_but_exports_cumulative_uuid_empty_backlog():

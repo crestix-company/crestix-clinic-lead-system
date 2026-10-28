@@ -44,28 +44,51 @@ def _simple_workflow_read_only_block():
 
 def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
-    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
+    assert "nav_options = NAV if hp_normal_runtime else NAV[:2] if nav_locked else NAV" in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 
-def test_sidebar_shows_full_local_menu_structure_as_static_text_only():
+def test_mac_normal_restores_original_sidebar_and_cloud_read_only_stays_locked():
     main = _main_source()
-    expander_start = main.index("ローカル版のメニュー構成（参考）")
-    block_start = main.rindex("with st.expander(", 0, expander_start)
-    block_end = main.index("else:", block_start)
-    block = main[block_start:block_end]
-
-    # Renders every NAV entry (all 5 local menu items), not a hardcoded subset.
-    assert "for name in NAV:" in block
-    assert "st.radio" not in block
-    assert "st.button" not in block
-    assert "st.file_uploader" not in block
+    source = _app_source()
+    assert 'NAV = ["かんたん操作","営業対象・出力","Email調査","メール送付文章","詳細設定"]' in source
+    assert 'nav == "かんたん操作"' in main
+    assert 'nav == "営業対象・出力"' in main
+    assert 'nav == "Email調査"' in main
+    assert 'nav == "メール送付文章"' in main
+    assert "simple_sales_ui(store, demo, read_only=True)" in main
+    assert "mac_normal=True" in main
+    assert "read_only=read_only" in main
 
 
 def test_locked_menu_items_are_labeled_as_requiring_separate_authorization():
     main = _main_source()
     assert "未有効・別権限が必要" in main
+
+
+def test_mac_step5_uses_legacy_autohprunner_without_individual_selection():
+    source = _app_source()
+    start = source.index("def simple_workflow_ui")
+    end = source.index("def simple_sales_ui", start)
+    simple = source[start:end]
+    auto_ui_start = source.index("def _mac_auto_hp_run_ui")
+    auto_ui_end = source.index("@st.fragment", auto_ui_start)
+    auto_ui = source[auto_ui_start:auto_ui_end]
+    assert 'st.subheader("Step5：HP・Email自動調査")' in simple
+    assert "_mac_auto_hp_run_ui(" in simple
+    assert '"HP自動調査を開始"' in source
+    assert '"一時停止"' in source
+    assert '"HP自動調査を再開"' in source
+    assert 'if mac_normal:\n        mode = "mac_detached_auto_run"' in simple
+    assert "auto_runner.start(store)" in auto_ui
+    assert "_start_mac_auto_hp_worker" not in auto_ui
+    assert "Streamlitプロセスは起動状態を保ってください" in auto_ui
+    assert "max_value=50, value=50" in simple  # retained for non-Mac/legacy mode
+    assert '"Job対象の医院（最大50件・SUCCESSは選択不可）"' not in simple
+    assert '"HP調査Jobを作成"' in simple  # retained only for non-Mac branches
+    assert 'if not mac_normal:\n        with st.expander("HP調査の詳細' in simple
+    assert '"HP単発Job管理・復旧"' in _app_source()
 
 
 def test_read_only_step_overview_is_static_text_with_no_write_calls():

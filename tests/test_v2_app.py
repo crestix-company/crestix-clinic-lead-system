@@ -38,7 +38,7 @@ def test_v2_dashboard_sample_filters_export_details_and_settings(tmp_path,monkey
     assert not app.exception and not app.error
     app.toggle[0].set_value(True).run()
     assert not app.exception and not app.error
-    assert any(m.label=="Webサイト調査完了" and m.value=="3件" for m in app.metric)
+    assert any(m.label=="HP調査完了" and m.value=="3件" for m in app.metric)
     assert not any(s.label == "単発HP Job履歴" for s in app.selectbox)
     assert not any(b.key in {"simple_pause", "simple_resume", "simple_reset"} for b in app.button)
     next(r for r in app.radio if r.label == "メニュー").set_value("営業対象・出力").run()
@@ -77,7 +77,7 @@ def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
 
     source = inspect.getsource(app_v2.simple_workflow_ui)
     assert "unfinished" in source
-    assert "disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
+    assert "disabled=hp_control_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
     assert 'j.get("kind") == "hp"' in source
 
     admin_source = inspect.getsource(app_v2.single_hp_job_recovery_ui)

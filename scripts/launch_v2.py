@@ -15,6 +15,7 @@ from filelock import FileLock, Timeout
 RUNTIME_ENV_FILE = ".supabase-runtime.env.local"
 PRODUCTION_ENV_FILE = "config/production_runtime.env"
 EMAIL_ENV_FILE = "config/email_research.env.local"
+MAC_EMAIL_ENV_FILE = Path.home() / ".config" / "clinic-lead" / "email_research.env"
 RUNTIME_ENV_KEYS = {
     "SUPABASE_RUNTIME_DB_URL",
     "CLINIC_WRITE_BACKEND",
@@ -51,6 +52,7 @@ EMAIL_ENV_KEYS = {
     "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
 }
 PREVIEW_ONLY_ENV_VAR = "CLINIC_COMDESK_PREVIEW_ONLY"
+RUNTIME_ENV_PATH_VAR = "CLINIC_RUNTIME_ENV_FILE"
 
 BOOLEAN_SETTING_VALUES = {
     "1": "1",
@@ -99,12 +101,33 @@ def load_runtime_env(root):
     if preview_setting not in {"", "0", "1"}:
         raise RuntimeError(f"{PREVIEW_ONLY_ENV_VAR}は1または0で指定してください。")
     preview_only = preview_setting == "1"
+    normal_mac = os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1"
+    read_only_ui = os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
     parsed = _parse_env_file(root / PRODUCTION_ENV_FILE)
-    parsed.update(_parse_env_file(root / RUNTIME_ENV_FILE, require_private=True))
-    # Preview-only boot never reads the broad Email/Gmail settings file.
-    email_db_config = {} if preview_only else _parse_env_file(
-        root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
-    )
+    # Preview and dedicated READ ONLY launches must not even load a Writer secret.
+    runtime_file = Path(os.environ.get(RUNTIME_ENV_PATH_VAR) or (root / RUNTIME_ENV_FILE))
+    if not (preview_only or read_only_ui):
+        parsed.update(_parse_env_file(runtime_file, require_private=True))
+    else:
+        parsed.pop("SUPABASE_RUNTIME_DB_URL", None)
+    # Normal Mac may use existing dedicated Email repositories from the private
+    # Runtime config. Gmail OAuth settings are excluded, and the switches below
+    # keep Auto Run and Gmail drafts disabled. Preview/Reader-only never load it.
+    if preview_only or read_only_ui:
+        email_db_config = {}
+    elif normal_mac:
+        email_db_config = _parse_env_file(
+            MAC_EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
+        )
+        for key in (
+            "OUTREACH_GMAIL_OAUTH_CLIENT_JSON", "OUTREACH_GMAIL_OAUTH_TOKEN_JSON",
+            "OUTREACH_GMAIL_EXPECTED_ACCOUNT", "OUTREACH_GMAIL_DRAFTS_ENABLED",
+        ):
+            email_db_config.pop(key, None)
+    else:
+        email_db_config = _parse_env_file(
+            root / EMAIL_ENV_FILE, require_private=True, allowed_keys=EMAIL_ENV_KEYS
+        )
     if "EMAIL_AUTO_RUN_ENABLED" in email_db_config:
         auto_run_value = email_db_config["EMAIL_AUTO_RUN_ENABLED"].strip().lower()
         if auto_run_value not in {"true", "false"}:
@@ -122,7 +145,7 @@ def load_runtime_env(root):
     parsed.update(email_db_config)
     selected_write = (os.environ.get("CLINIC_WRITE_BACKEND") or parsed.get("CLINIC_WRITE_BACKEND", "sqlite")).strip()
     runtime_url = (os.environ.get("SUPABASE_RUNTIME_DB_URL") or parsed.get("SUPABASE_RUNTIME_DB_URL", "")).strip()
-    if selected_write.strip().lower() == "supabase" and not runtime_url:
+    if not (preview_only or read_only_ui) and selected_write.strip().lower() == "supabase" and not runtime_url:
         raise RuntimeError("Supabase WRITEにはSUPABASE_RUNTIME_DB_URLが必要です。admin URLへのfallbackは行いません。")
     for key, value in parsed.items():
         if key == "EMAIL_AUTO_RUN_ENABLED":
@@ -131,13 +154,17 @@ def load_runtime_env(root):
         elif not (os.environ.get(key) or "").strip():
             # An explicitly exported but empty variable must not shadow the private config.
             os.environ[key] = value
-    if preview_only:
+    if preview_only or read_only_ui:
         if (os.environ.get("CLINIC_DATA_BACKEND", "").strip().casefold() != "supabase"
-                or not os.environ.get("SUPABASE_RUNTIME_DB_URL", "").strip()):
-            raise RuntimeError("Preview専用起動にはSupabaseの専用Reader接続設定が必要です。")
+                or not os.environ.get("SUPABASE_READONLY_DB_URL", "").strip()):
+            raise RuntimeError("Preview/READ ONLY起動にはSupabaseの専用Reader接続設定が必要です。")
+        os.environ.pop("SUPABASE_RUNTIME_DB_URL", None)
         # Defense in depth: existing read-only connection setup is also enabled, while
         # the dedicated role and server-side guards remain the actual write boundary.
         os.environ["CLINIC_READ_ONLY_UI"] = "1"
+        os.environ["EMAIL_AUTO_RUN_ENABLED"] = "false"
+        os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] = "false"
+    elif normal_mac:
         os.environ["EMAIL_AUTO_RUN_ENABLED"] = "false"
         os.environ["OUTREACH_GMAIL_DRAFTS_ENABLED"] = "false"
     return bool(parsed)

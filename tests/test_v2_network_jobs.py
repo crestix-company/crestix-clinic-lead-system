@@ -44,6 +44,16 @@ def test_cache_persists_force_only_and_cap(store):
     assert p.calls==2
 
 
+def test_cached_search_construction_does_not_read_reader_settings():
+    class ReaderOnlyStore:
+        def setting(self, *_args, **_kwargs):
+            raise AssertionError("Researcher construction must not require app_config Reader access")
+
+    search = CachedSearch(ReaderOnlyStore(), Provider())
+    assert search.monthly_limit == 900
+    assert search.used == 0
+
+
 def test_failed_search_counts_and_reserve_and_month_boundary(store):
     p=Provider(fail=True);s=CachedSearch(store,p)
     store.set_setting("monthly_limit",2)
@@ -212,6 +222,41 @@ def test_network_error_one_clinic_does_not_stop_batch(store):
     run_job(store,jid,FailFirst(),SampleFetcher())
     assert job_status(store,jid)["results"]=={"ERROR":1,"SUCCESS":1}
     assert job_status(store,jid)["status"]=="COMPLETED"
+
+
+@pytest.mark.parametrize("reason", [
+    "HTTP 404でページを取得できません。",
+    "SSL証明書を検証できません。",
+    "接続がタイムアウトしました。",
+    "robots.txtのアクセス制限により取得を停止しました。",
+])
+def test_safe_web_error_is_recorded_per_clinic_and_batch_continues(store, monkeypatch, reason):
+    store.import_master(sample_records()[:2])
+    first_id = store.query(limit=1)[0]["id"]
+
+    class FailFirstResearch:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def run(self, _kind, record, _force):
+            if record["id"] == first_id:
+                raise WebError(reason)
+            return ({"research_status": "SUCCESS", "hp_status": "VERIFIED",
+                     "hp_verified": True, "hp_url": "https://demo2.example/"}, [])
+
+    monkeypatch.setattr("src.master.jobs.Researcher", FailFirstResearch)
+
+    jid = create_job(store, Filters(hp_only=False), max_searches=10)
+    run_job(store, jid, SampleProvider(), SampleFetcher())
+
+    status = job_status(store, jid)
+    assert status["status"] == "COMPLETED"
+    assert status["results"] == {"ERROR": 1, "SUCCESS": 1}
+    with store.connect() as conn:
+        first = json.loads(conn.execute(
+            "SELECT result_json FROM research_results WHERE clinic_id=?", (first_id,)
+        ).fetchone()[0])
+    assert first["research_error"] == reason
 
 
 @pytest.mark.parametrize("force",[False,True])

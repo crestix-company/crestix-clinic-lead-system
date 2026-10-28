@@ -166,7 +166,7 @@ def main(argv=None):
             store=store,
             lock_conn=lock_conn,
             run_job_fn=lambda s, jid, progress_callback: run_job(
-                s, jid, TavilySearchProvider(""), progress_callback=progress_callback
+                s, jid, TavilySearchProvider(), progress_callback=progress_callback
             ),
             job_status_fn=job_status,
             pause_job_fn=pause_job,

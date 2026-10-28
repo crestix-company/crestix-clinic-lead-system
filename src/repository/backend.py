@@ -56,14 +56,23 @@ def build_repositories(backend=None, *, sqlite_path=None, supabase_url=None):
             connect, SupabaseClinicRepository, SupabaseHpResearchRepository, SupabaseTreatmentRepository,
             SupabaseResearchRepository, SupabaseProvenanceRepository, SupabaseSettingsRepository,
         )
-        url = supabase_url or _os.environ.get("SUPABASE_RUNTIME_DB_URL")
+        url = supabase_url or _os.environ.get("SUPABASE_READONLY_DB_URL")
+        strict_reader = (
+            _os.environ.get("CLINIC_NORMAL_MAC_RUNTIME") == "1"
+            or _os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
+            or _os.environ.get("CLINIC_COMDESK_PREVIEW_ONLY", "").strip() == "1"
+        )
+        # Existing non-read-only deployments retain their established contract. Every explicit
+        # Reader/Preview runtime fails closed instead of treating a Writer URL as a Reader.
+        if not url and not strict_reader:
+            url = _os.environ.get("SUPABASE_RUNTIME_DB_URL")
         if not url:
             # Runtime cutover catches ordinary exceptions and falls back to SQLite.  SystemExit
             # would terminate Streamlit's script thread and bypass that safety mechanism.
-            raise RuntimeError("SUPABASE_RUNTIME_DB_URL is not set")
+            raise RuntimeError("SUPABASE_READONLY_DB_URL is not set")
         # Stage4-C runtime connections are long-lived.  Autocommit keeps one failed/cancelled
         # SELECT from poisoning every later read with InFailedSqlTransaction.
-        conn = connect(url, autocommit=True)
+        conn = connect(url, autocommit=True, read_only=True)
         hp = SupabaseHpResearchRepository(conn)
         return Repositories(
             clinics=SupabaseClinicRepository(conn, hp),

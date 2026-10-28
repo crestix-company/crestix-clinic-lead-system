@@ -381,7 +381,7 @@ def test_simple_flow_keeps_hp_controls_and_adds_independent_email_control():
     import inspect
     import app_v2
     source = inspect.getsource(app_v2.simple_workflow_ui)
-    assert '"HP自動調査を開始"' in source
+    assert '"HP調査Jobを作成"' in source
     assert "email_auto_research_card(store, demo=demo)" in source
 
 

@@ -504,13 +504,19 @@ def test_supabase_jobs_runtime_methods_have_postgres_implementations(monkeypatch
     import src.repository.supabase_filters as pg_filters
 
     monkeypatch.setattr(pg_filters, "where", lambda filters: ("merged_into IS NULL", []))
-    conn = FakeConn(script=[[(1_000_000_000,), (1_000_000_001,)]])
+    conn = FakeConn(script=[
+        None, ('{"status":"IDLE"}',), None,
+        [(1_000_000_000,), (1_000_000_001,)],
+    ])
     repo = SupabaseJobsWriteRepository(conn)
     job_id = repo.create_job_from_filters(Filters(active_only=False, hp_only=False), limit=2)
     assert isinstance(job_id, str) and len(job_id) == 32
     statements = [sql for sql, _ in conn.executed]
     assert any("INSERT INTO research.research_jobs" in sql for sql in statements)
     assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 2
+    candidate_sql = next(sql for sql in statements if "FOR UPDATE OF clinics SKIP LOCKED" in sql)
+    assert "pg_advisory_xact_lock" in statements[0]
+    assert "queued_i.state IN ('PENDING','RUNNING')" in candidate_sql
 
     for invoke, expected in [
         (lambda r: r.complete_job_if_no_remaining_items("j"), "status='COMPLETED'"),
@@ -522,6 +528,33 @@ def test_supabase_jobs_runtime_methods_have_postgres_implementations(monkeypatch
         invoke(SupabaseJobsWriteRepository(branch))
         assert any(expected in sql for sql, _ in branch.executed)
         assert branch.committed == 1 and branch.rolled_back == 0
+
+
+@pytest.mark.parametrize("state", ["RUNNING", "WAITING_NETWORK", "PAUSED", "ERROR"])
+def test_supabase_hp_filter_job_refuses_while_auto_run_is_active(state):
+    from src.master.filters import Filters
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+
+    conn = FakeConn([None, (json.dumps({"status": state}),)])
+    with pytest.raises(ValueError, match="Auto Runが未完了"):
+        SupabaseJobsWriteRepository(conn).create_job_from_filters(
+            Filters(active_only=False, hp_only=False), limit=2
+        )
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
+def test_supabase_hp_filter_job_refuses_when_another_hp_job_is_running():
+    from src.master.filters import Filters
+    from src.repository.supabase_write_adapter import SupabaseJobsWriteRepository
+
+    conn = FakeConn([None, ('{"status":"COMPLETED"}',), ("running-job",)])
+    with pytest.raises(ValueError, match="実行中HP Job"):
+        SupabaseJobsWriteRepository(conn).create_job_from_filters(
+            Filters(active_only=False, hp_only=False), limit=2
+        )
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
 
 
 def test_supabase_recover_job_preserves_canonical_transition_order():
@@ -942,14 +975,12 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
         return "SELECT id,base_json->>'medical_institution_number'" in q
 
     def route_clinic_state(q, params):
-        return "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q
+        return "SELECT id,base_json,effective_json FROM public.clinics" in q
 
     routes = [
         (lambda q, p: "import_batches" in q and "SELECT" in q, lambda p: None),
         (route_find_target, lambda p: [(1_000_000_001, None, None, None, None, None)]),
-        (route_clinic_state, lambda p: [(1_000_000_001, dict(base), "uuid-1", "")]),
-        (lambda q, p: "research.research_results" in q, lambda p: []),
-        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda p: []),
+        (route_clinic_state, lambda p: [(1_000_000_001, dict(base), json.dumps(base, ensure_ascii=False))]),
         (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda p: None),
     ]
     conn = RoutingFakeConn(routes)
@@ -964,7 +995,9 @@ def test_supabase_import_maps_results_preserves_confirmed_website():
     assert conn.committed == 1 and conn.rolled_back == 0
     update_calls = [q for q, _ in conn.executed if "UPDATE public.clinics AS c SET base_json=v.base_json" in q]
     assert update_calls, "expected a bulk base_json UPDATE to have been issued"
-    assert any("UPDATE public.clinics AS c SET" in q and "effective_json" in q for q, _ in conn.executed)
+    maps_update = next(q for q, _ in conn.executed if q.startswith("UPDATE public.clinics AS c SET"))
+    assert "maps_website_url=v.maps_website_url" in maps_update
+    assert "hp_url=" not in maps_update and "medical_key=" not in maps_update and "uuid=" not in maps_update
 
 
 def test_maps_batch_projection_values_have_explicit_postgres_types_and_null_semantics():
@@ -1058,10 +1091,8 @@ def test_supabase_maps_batch_preserves_sequential_semantics_for_repeated_clinic(
         (lambda q, p: "SELECT id,base_json->>'medical_institution_number'" in q,
          lambda _p: [(clinic_id, None, "official-31", None, None, None)]),
         (lambda q, p: "base_json->>'medical_institution_number'=ANY" in q, lambda _p: []),
-        (lambda q, p: "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q,
-         lambda _p: [(clinic_id, dict(initial), "stable-uuid", "")]),
-        (lambda q, p: "research.research_results" in q and "SELECT" in q, lambda _p: []),
-        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: "SELECT id,base_json,effective_json FROM public.clinics" in q,
+         lambda _p: [(clinic_id, dict(initial), json.dumps(initial, ensure_ascii=False))]),
         (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda _p: None),
     ]
     conn = RoutingFakeConn(routes)
@@ -1109,23 +1140,13 @@ def test_supabase_maps_batch_preserves_sequential_semantics_for_repeated_clinic(
         if query.startswith("UPDATE public.clinics AS c SET") and "effective_json" in query
     )
     assignments = projection_sql.split(" FROM ", 1)[0]
-    assert "uuid=v." not in assignments and "id=v." not in assignments
-    from src.master.identity_contract import refresh_clinic_projection_preserving_identity
-    from src.master.store import dumps
-    projected = refresh_clinic_projection_preserving_identity(
-        {**expected, "uuid": "stable-uuid", "manual_fields": []}
-    )
-    projected["effective_json"] = dumps(projected["effective_json"])
-    for column, expected_value in projected.items():
-        actual_value = projection_params[1 + list(projected).index(column)]
-        if column in ("departments_json", "treatments_json", "signals_json"):
-            actual_value = actual_value.obj
-        if column in ("active", "owner_equal") and expected_value is not None:
-            expected_value = bool(expected_value)
-        assert actual_value == expected_value, f"projection column mismatch: {column}"
+    assert "uuid=" not in assignments and "medical_key=" not in assignments
+    assert "hp_url=" not in assignments and "active=" not in assignments
+    assert json.loads(projection_params[2])["maps_website_url"] == "https://two.example"
+    assert json.loads(projection_params[2])["clinic_name"] == "順序確認クリニック"
 
 
-@pytest.mark.parametrize("failure_point", ["maps_insert", "base_write", "projection_calc"])
+@pytest.mark.parametrize("failure_point", ["maps_insert", "clinic_maps_update", "history_insert"])
 def test_supabase_maps_batch_failure_rolls_back_without_commit(failure_point, monkeypatch):
     import pandas as pd
     import src.repository.supabase_write_adapter as adapter
@@ -1139,10 +1160,10 @@ def test_supabase_maps_batch_failure_rolls_back_without_commit(failure_point, mo
             result = super().execute(query, params)
             if failure_point == "maps_insert" and normalized.startswith("INSERT INTO provenance.google_maps_results"):
                 raise RuntimeError("injected failure after provenance bulk insert")
-            if failure_point == "base_write" and normalized.startswith("UPDATE public.clinics AS c SET base_json"):
-                raise RuntimeError("injected failure after clinic base write")
-            if failure_point == "projection_calc" and normalized.startswith("UPDATE public.clinics AS c SET") and "effective_json" in normalized:
-                raise RuntimeError("injected failure after projection calculation")
+            if failure_point == "clinic_maps_update" and normalized.startswith("UPDATE public.clinics AS c SET base_json"):
+                raise RuntimeError("injected failure during Maps clinic update")
+            if failure_point == "history_insert" and normalized.startswith("INSERT INTO provenance.change_history"):
+                raise RuntimeError("injected failure during Maps history insert")
             return result
 
     class FailureConn(RoutingFakeConn):
@@ -1154,10 +1175,8 @@ def test_supabase_maps_batch_failure_rolls_back_without_commit(failure_point, mo
         (lambda q, p: "SELECT id,base_json->>'medical_institution_number'" in q,
          lambda _p: [(clinic_id, None, "official-41", None, None, None)]),
         (lambda q, p: "base_json->>'medical_institution_number'=ANY" in q, lambda _p: []),
-        (lambda q, p: "SELECT id,base_json,uuid,medical_key FROM public.clinics" in q,
-         lambda _p: [(clinic_id, dict(state), "uuid-41", "")]),
-        (lambda q, p: "research.research_results" in q and "SELECT" in q, lambda _p: []),
-        (lambda q, p: "manual_overrides" in q and "SELECT" in q, lambda _p: []),
+        (lambda q, p: "SELECT id,base_json,effective_json FROM public.clinics" in q,
+         lambda _p: [(clinic_id, dict(state), json.dumps(state, ensure_ascii=False))]),
         (lambda q, p: q.startswith("INSERT") or q.startswith("UPDATE"), lambda _p: None),
     ]
     conn = FailureConn(routes)

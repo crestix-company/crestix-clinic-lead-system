@@ -120,6 +120,9 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def get(self, clinic_id): return self.repositories.clinics.get(clinic_id)
     @_retry_closed_read_connection
+    def get_hp_research_clinic(self, clinic_id):
+        return self.repositories.clinics.get_hp_research_clinic(clinic_id)
+    @_retry_closed_read_connection
     def get_by_uuid(self, value): return self.repositories.clinics.get_by_uuid(value)
     @_retry_closed_read_connection
     def get_by_medical_key(self, value): return self.repositories.clinics.get_by_medical_key(value)
@@ -142,7 +145,10 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def funnel(self, filters, as_of=None): return self.repositories.clinics.funnel(filters, as_of)
     @_retry_closed_read_connection
-    def metrics(self): return self.repositories.clinics.metrics()
+    def metrics(self, *, read_only_ui=False):
+        if read_only_ui:
+            return self.repositories.clinics.metrics(read_only_ui=True)
+        return self.repositories.clinics.metrics()
     @_retry_closed_read_connection
     def treatment_status_for_ids(self, ids): return self.repositories.treatment.status_for_ids(ids)
     @_retry_closed_read_connection
@@ -156,6 +162,17 @@ class SupabaseRuntimeStore:
     @_retry_closed_read_connection
     def web_research_metrics(self, *, read_only_ui=False):
         return self.repositories.hp_research.batch_metrics(read_only_ui=read_only_ui)
+
+    @_retry_closed_read_connection
+    def email_research_status_metrics(self):
+        """Aggregate the allowlisted Email status projection; never read candidate addresses."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT research_status,count(*) FROM email_research.clinic_email_status_readonly "
+                "GROUP BY research_status ORDER BY research_status"
+            )
+            rows = cur.fetchall()
+        return {str(status): int(count) for status, count in rows}
     @_retry_closed_read_connection
     def history(self, clinic_id, limit=30):
         return self.repositories.provenance.history_for_clinic(clinic_id, limit)
@@ -237,21 +254,258 @@ class SupabaseRuntimeStore:
 
     @_retry_closed_read_connection
     def maps_hp_candidate_ids(self, prefecture="", medical_types=None, force=False, limit=500):
-        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
         args.append(min(500, max(1, int(limit))))
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT c.id FROM public.clinics c WHERE " + predicate +
+                "SELECT c.id FROM public.clinic_cloudrun_readonly c WHERE " + predicate +
                 " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
             )
             return [r[0] for r in cur.fetchall()]
 
     @_retry_closed_read_connection
     def maps_hp_available_count(self, prefecture="", medical_types=None, force=False):
-        predicate, args = _maps_hp_target_predicate(prefecture, medical_types, force)
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
         with self._conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM public.clinics c WHERE " + predicate, args)
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
             return cur.fetchone()[0]
+
+    @_retry_closed_read_connection
+    def maps_hp_candidate_preview(self, prefecture="", medical_types=None, force=False, limit=10):
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, force,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        args.append(min(10, max(1, int(limit))))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.id,c.clinic_name,c.address,c.medical_type,c.maps_website_url "
+                "FROM public.clinic_cloudrun_readonly c WHERE " + predicate +
+                " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
+            )
+            return [
+                {"id": row[0], "clinic_name": row[1], "address": row[2],
+                 "medical_type": row[3], "maps_website_url": row[4]}
+                for row in cur.fetchall()
+            ]
+
+    @_retry_closed_read_connection
+    def maps_hp_status_candidates(self, prefecture="", medical_types=None, statuses=None, limit=50):
+        """Reader-only HP candidates grouped by ledger status; reserved clinics stay excluded."""
+        allowed = {"UNRESEARCHED", "ERROR", "REVIEW", "SUCCESS"}
+        statuses = list(dict.fromkeys(statuses or []))
+        if not statuses or any(value not in allowed for value in statuses):
+            raise ValueError("Unsupported HP research status")
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, True,
+            clinic_relation="public.clinic_cloudrun_readonly",
+            include_verified=True,
+        )
+        status_expr = ("CASE WHEN c.hp_status='VERIFIED' OR h.fetch_status='OK' THEN 'SUCCESS' "
+                       "WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+                       "ELSE 'ERROR' END")
+        predicate += f" AND ({status_expr})=ANY(%s::text[])"
+        args.append(statuses)
+        args.append(min(100, max(1, int(limit))))
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.id,c.clinic_name,c.address,c.medical_type,c.maps_website_url," + status_expr + ",h.fetch_status" +
+                " FROM public.clinic_cloudrun_readonly c LEFT JOIN hp_research.clinic_hp_research h "
+                "ON h.clinic_id=c.id WHERE " + predicate + " ORDER BY c.is_new DESC,c.id LIMIT %s", args,
+            )
+            return [{"id": row[0], "clinic_name": row[1], "address": row[2],
+                     "medical_type": row[3], "maps_website_url": row[4], "hp_status": row[5],
+                     "hp_status_detail": row[6]}
+                    for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def maps_hp_status_count(self, prefecture="", medical_types=None, statuses=None):
+        allowed = {"UNRESEARCHED", "ERROR", "REVIEW", "SUCCESS"}
+        statuses = list(dict.fromkeys(statuses or []))
+        if not statuses or any(value not in allowed for value in statuses):
+            raise ValueError("Unsupported HP research status")
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, True,
+            clinic_relation="public.clinic_cloudrun_readonly",
+            include_verified=True,
+        )
+        status_expr = ("CASE WHEN c.hp_status='VERIFIED' OR h.fetch_status='OK' THEN 'SUCCESS' "
+                       "WHEN h.clinic_id IS NULL THEN 'UNRESEARCHED' "
+                       "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' "
+                       "ELSE 'ERROR' END")
+        predicate += f" AND ({status_expr})=ANY(%s::text[])"
+        args.append(statuses)
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM public.clinic_cloudrun_readonly c LEFT JOIN hp_research.clinic_hp_research h "
+                "ON h.clinic_id=c.id WHERE " + predicate, args,
+            )
+            return cur.fetchone()[0]
+
+    @_retry_closed_read_connection
+    def hp_recent_jobs(self):
+        """Read HP job headers through the verified Reader connection."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM research.research_jobs WHERE status<>'RESET' "
+                "ORDER BY created_at DESC,id DESC LIMIT 20"
+            )
+            names = [item.name for item in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def hp_normal_recent_jobs(self):
+        """Minimal HP-only job list for the Mac normal Reader UI."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs "
+                "WHERE kind='hp' AND status<>'RESET' "
+                "ORDER BY created_at DESC,id DESC LIMIT 20"
+            )
+            names = [item.name for item in cur.description]
+            return [dict(zip(names, row)) for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def hp_job_status(self, job_id):
+        with self._conn.cursor() as cur:
+            # The Mac/Cloud Reader has column-level grants. Never use SELECT * here:
+            # JobRunner polls only these fields, and its UI derives progress from items.
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs WHERE id=%s",
+                (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("調査履歴が見つかりません。")
+            result = dict(zip([item.name for item in cur.description], row))
+            cur.execute(
+                "SELECT state,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s GROUP BY state", (job_id,),
+            )
+            result["counts"] = dict(cur.fetchall())
+            cur.execute(
+                "SELECT result,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s AND state='DONE' GROUP BY result", (job_id,),
+            )
+            result["results"] = dict(cur.fetchall())
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    @_retry_closed_read_connection
+    def hp_normal_job_status(self, job_id):
+        """Progress summary using only the columns shown in the HP-only UI."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,kind,status,created_at FROM research.research_jobs "
+                "WHERE id=%s AND kind='hp'", (job_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("HP調査履歴が見つかりません。")
+            result = dict(zip([item.name for item in cur.description], row))
+            cur.execute(
+                "SELECT state,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s GROUP BY state", (job_id,),
+            )
+            result["counts"] = dict(cur.fetchall())
+            cur.execute(
+                "SELECT result,count(*) FROM research.research_job_items "
+                "WHERE job_id=%s AND state='DONE' GROUP BY result", (job_id,),
+            )
+            result["results"] = dict(cur.fetchall())
+            result["total"] = sum(result["counts"].values())
+            return result
+
+    @_retry_closed_read_connection
+    def hp_normal_job_results(self, job_id):
+        """Read per-clinic job outcomes and published HP fields via the dedicated Reader."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT i.clinic_id,c.clinic_name,c.address,i.state,i.result,h.fetch_status,"
+                "h.hp_url,h.final_url,h.machine_hp_rank,c.hp_status,c.hp_rank "
+                "FROM research.research_job_items i "
+                "JOIN public.clinic_cloudrun_readonly c ON c.id=i.clinic_id "
+                "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
+                "WHERE i.job_id=%s ORDER BY i.clinic_id", (job_id,),
+            )
+            return [{
+                "clinic_id": row[0], "clinic_name": row[1], "address": row[2],
+                "item_state": row[3], "item_result": row[4], "fetch_status": row[5],
+                "hp_url": row[6], "final_url": row[7], "machine_hp_rank": row[8],
+                "published_hp_status": row[9], "published_hp_rank": row[10],
+            } for row in cur.fetchall()]
+
+    @_retry_closed_read_connection
+    def hp_auto_run_state(self):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT value FROM app_config.settings WHERE key=%s", ("hp_auto_run_state",))
+            row = cur.fetchone()
+        if not row:
+            return {"status": "IDLE"}
+        value = row[0]
+        return value if isinstance(value, dict) else json.loads(value)
+
+    @_retry_closed_read_connection
+    def hp_running_job_count(self):
+        """Read the standalone HP RUNNING-job blocker without expanding Reader scope."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT count(*) FROM research.research_jobs WHERE kind='hp' AND status='RUNNING'"
+            )
+            return int(cur.fetchone()[0])
+
+    @_retry_closed_read_connection
+    def hp_auto_run_cumulative_results(self, run_id):
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT value FROM app_config.settings WHERE key=%s", ("hp_auto_run_state",))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        value = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+        if value.get("run_id") != run_id:
+            return {}
+        results = value.get("cumulative_results") or {}
+        return {str(key): int(count) for key, count in results.items()}
+
+    @_retry_closed_read_connection
+    def hp_auto_run_remaining_count(self, state):
+        predicate, args = _maps_hp_target_predicate(
+            state.get("prefecture", ""), state.get("medical_types"), state.get("force", False),
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items success_i "
+            "JOIN research.research_jobs success_j ON success_j.id=success_i.job_id "
+            "WHERE success_i.clinic_id=c.id AND success_i.state='DONE' "
+            "AND success_i.result::text ILIKE '%%SUCCESS%%' AND success_j.kind='hp')"
+        )
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
+            return int(cur.fetchone()[0])
+
+    @_retry_closed_read_connection
+    def hp_auto_run_eligible_count(self, prefecture="", medical_types=None):
+        """Count fresh Auto Run targets, excluding historical successful HP Jobs."""
+        predicate, args = _maps_hp_target_predicate(
+            prefecture, medical_types, False,
+            clinic_relation="public.clinic_cloudrun_readonly",
+        )
+        predicate += (
+            " AND NOT EXISTS (SELECT 1 FROM research.research_job_items prior_i "
+            "JOIN research.research_jobs prior_j ON prior_j.id=prior_i.job_id "
+            "WHERE prior_i.clinic_id=c.id AND prior_i.state='DONE' "
+            "AND prior_i.result::text ILIKE '%%SUCCESS%%' AND prior_j.kind='hp')"
+        )
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM public.clinic_cloudrun_readonly c WHERE " + predicate, args)
+            return int(cur.fetchone()[0])
 
     def mhlw_join_status(self):
         # The optional Navi sidecar never existed and was explicitly excluded from migration.
@@ -369,21 +623,21 @@ class SupabaseRuntimeStore:
         """Return the latest fully completed HP job; never fall back to historical clinics."""
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT j.id,j.created_at,j.updated_at,count(i.clinic_id) AS target_count, "
+                "SELECT j.id,j.created_at,count(i.clinic_id) AS target_count, "
                 "count(*) FILTER (WHERE i.state='DONE') AS done_count "
                 "FROM research.research_jobs j "
                 "JOIN research.research_job_items i ON i.job_id=j.id "
                 "WHERE j.kind='hp' AND j.status='COMPLETED' "
-                "GROUP BY j.id,j.created_at,j.updated_at "
+                "GROUP BY j.id,j.created_at "
                 "HAVING count(i.clinic_id)>0 "
                 "AND count(*) FILTER (WHERE i.state<>'DONE')=0 "
-                "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC LIMIT 1"
+                "ORDER BY j.created_at DESC,j.id DESC LIMIT 1"
             )
             row = cur.fetchone()
         if not row:
             return None
-        return {"id": row[0], "created_at": row[1], "updated_at": row[2],
-                "target_count": row[3], "done_count": row[4]}
+        return {"id": row[0], "created_at": row[1], "updated_at": None,
+                "target_count": row[2], "done_count": row[3]}
 
     @_retry_closed_read_connection
     def hp_job_export_summary(self, job_id):

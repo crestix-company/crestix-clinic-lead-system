@@ -151,7 +151,7 @@ def build_comdesk_preview_repository():
         raise PreviewReaderConfigurationError("Preview専用モードが有効ではありません。")
     if active_backend() != BACKEND_SUPABASE:
         raise PreviewReaderConfigurationError("Preview専用モードではSupabase READ backendのみ利用できます。")
-    url = os.environ.get("SUPABASE_RUNTIME_DB_URL", "").strip()
+    url = os.environ.get("SUPABASE_READONLY_DB_URL", "").strip()
     if not url:
         raise PreviewReaderConfigurationError("専用Preview Readerの接続設定がありません。")
     conn = connect(url, autocommit=True)

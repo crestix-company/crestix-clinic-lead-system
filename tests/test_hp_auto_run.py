@@ -43,9 +43,9 @@ def _state(total=1159, force=False):
     )
 
 
-def test_a_b_h_500_batch_chain_1159_completes_without_extra_job():
+def test_auto_batch_chain_is_capped_at_50_and_completes_without_extra_job():
     state = _state()
-    assert state["batch_size"] == 500 and state["current_batch"] == 1
+    assert state["batch_size"] == 50 and state["current_batch"] == 1
     state = advance_completed_batch(
         state, remaining=659, next_job_id="job-2", timestamp="2026-10-08T01:00:00+00:00"
     )
@@ -61,12 +61,33 @@ def test_a_b_h_500_batch_chain_1159_completes_without_extra_job():
     assert state["current_job_id"] == "job-3"  # no fourth child was created
 
 
-def test_batch_size_is_always_capped_at_500():
+def test_batch_size_is_always_capped_at_50():
     state = initial_auto_state(
         run_id="r", prefecture="", medical_types=["医科", "歯科"], force=False,
         batch_size=6000, initial_count=6000, current_job_id="j", timestamp="t",
     )
-    assert state["batch_size"] == 500
+    assert state["batch_size"] == 50
+
+
+def test_completed_batch_results_are_checkpointed_for_reader_only_progress():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+
+    state = {
+        "current_job_id": "job-1", "cumulative_results": {"SUCCESS": 4},
+        "cumulative_history_complete": True,
+    }
+    conn = _Connection([[ ("SUCCESS", 3), ("ERROR", 2) ]])
+    SupabaseHpAutoRunRepository._accumulate_completed_job_results(_Cursor(conn), state)
+
+    assert state["cumulative_results"] == {"SUCCESS": 7, "ERROR": 2}
+    assert state["cumulative_history_complete"] is True
+    assert "GROUP BY result" in conn.executed[0][0]
+
+    legacy = {"current_job_id": "job-legacy"}
+    legacy_conn = _Connection([[ ("NOT_FOUND", 5) ]])
+    SupabaseHpAutoRunRepository._accumulate_completed_job_results(_Cursor(legacy_conn), legacy)
+    assert legacy["cumulative_results"] == {"NOT_FOUND": 5}
+    assert legacy["cumulative_history_complete"] is False
 
 
 def test_i_j_force_only_removes_ledger_exclusion_not_active_job_guard():
@@ -134,7 +155,7 @@ def test_k_stale_process_cannot_finish_item_after_new_claim(tmp_path):
 def test_k_supabase_start_serializes_state_and_batch_creation():
     from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
 
-    ids = [(i,) for i in range(1, 501)]
+    ids = [(i,) for i in range(1, 51)]
     conn = _Connection([
         None, None, ('{"status":"IDLE"}',), None, (1159,), ids,
     ])
@@ -142,9 +163,31 @@ def test_k_supabase_start_serializes_state_and_batch_creation():
     statements = [sql for sql, _params in conn.executed]
     assert "pg_advisory_xact_lock" in statements[0]
     assert any("FOR UPDATE" in sql and "app_config.settings" in sql for sql in statements)
-    assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 500
-    assert state["initial_count"] == 1159 and state["batch_size"] == 500
+    assert sum("INSERT INTO research.research_job_items" in sql for sql in statements) == 50
+    assert state["initial_count"] == 1159 and state["batch_size"] == 50
+    candidate_sql = next(sql for sql in statements if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "success_i.state='DONE'" in candidate_sql
+    assert "success_i.result::text ILIKE '%%SUCCESS%%'" in candidate_sql
     assert state["current_job_id"] and conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_k_writer_preflight_is_select_only_and_requires_expected_role_and_privileges():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+
+    good_conn = _Connection([("clinic_runtime", "postgres", True, True, True, True, True)])
+    result = SupabaseHpAutoRunRepository(good_conn).preflight()
+    assert result == {
+        "ok": True, "role": "clinic_runtime", "database": "postgres", "privileges_ok": True,
+    }
+    assert len(good_conn.executed) == 1
+    assert "SELECT current_user" in good_conn.executed[0][0]
+    assert good_conn.committed == 0 and good_conn.rolled_back == 1
+
+    denied_conn = _Connection([("clinic_runtime", "postgres", True, True, True, False, True)])
+    assert SupabaseHpAutoRunRepository(denied_conn).preflight()["ok"] is False
+
+    wrong_role_conn = _Connection([("postgres", "postgres", True, True, True, True, True)])
+    assert SupabaseHpAutoRunRepository(wrong_role_conn).preflight()["ok"] is False
 
 
 def test_k_second_controller_cannot_start_an_active_auto_run():
@@ -157,6 +200,91 @@ def test_k_second_controller_cannot_start_an_active_auto_run():
         SupabaseHpAutoRunRepository(conn).start("", ["医科"], False, 500)
     assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
     assert conn.rolled_back == 1 and conn.committed == 0
+
+
+def test_error_canary_job_atomically_accepts_only_reviewed_error_ids():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+
+    requested = [133, 147, 149]
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None,
+        [(clinic_id,) for clinic_id in requested],
+    ])
+    job_id = SupabaseHpAutoRunRepository(conn).create_error_canary_job(requested)
+    inserts = [(sql, params) for sql, params in conn.executed if "INSERT INTO research.research_jobs" in sql]
+    assert len(inserts) == 1
+    assert inserts[0][1][1].obj == {
+        "force": True, "max_pages": 20, "phase1_error_canary": True,
+    }
+    candidate_sql = next(sql for sql, _ in conn.executed if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "fetch_status='ERROR'" in candidate_sql
+    assert "queued_i.state IN ('PENDING','RUNNING')" in candidate_sql
+    queued = [params for sql, params in conn.executed if "INSERT INTO research.research_job_items" in sql]
+    assert [params[1] for params in queued] == requested
+    assert job_id and conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_error_canary_job_rolls_back_if_any_candidate_is_stale_or_claimed():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None, [(133,), (147,)],
+    ])
+    with pytest.raises(ValueError, match="ERROR状態でない"):
+        SupabaseHpAutoRunRepository(conn).create_error_canary_job([133, 147, 149])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
+def test_error_canary_job_refuses_while_auto_run_is_unfinished():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    conn = _Connection([None, (json.dumps({"status": "PAUSED"}),)])
+    with pytest.raises(ValueError, match="Auto Runが未完了"):
+        SupabaseHpAutoRunRepository(conn).create_error_canary_job([133])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
+
+
+def test_mac_selected_job_revalidates_exact_statuses_and_excludes_paused_job_claims():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+
+    conn = _Connection([
+        None, (json.dumps({"status": "COMPLETED"}),), None, [(101,), (202,)],
+    ])
+    job_id = SupabaseHpAutoRunRepository(conn).create_selected_hp_job(
+        [101, 202], ["UNRESEARCHED", "ERROR"],
+    )
+    sqls = [sql for sql, _ in conn.executed]
+    check_sql = next(sql for sql in sqls if "FOR UPDATE OF c SKIP LOCKED" in sql)
+    assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in check_sql
+    assert "WHEN h.fetch_status='OK' THEN 'SUCCESS'" in check_sql
+    assert "WHEN h.fetch_status='REVIEW' THEN 'REVIEW' ELSE 'ERROR'" in check_sql
+    assert "success_i.result::text ILIKE '%%SUCCESS%%'" in check_sql
+    assert any("pg_advisory_xact_lock" in sql for sql in sqls)
+    queued = [params for sql, params in conn.executed if "INSERT INTO research.research_job_items" in sql]
+    assert [params[1] for params in queued] == [101, 202]
+    assert job_id and conn.committed == 1 and conn.rolled_back == 0
+
+
+def test_mac_selected_job_rejects_success_and_rolls_back_stale_or_claimed_targets():
+    from src.repository.hp_auto_run_repository import SupabaseHpAutoRunRepository
+    import json
+    import pytest
+
+    with pytest.raises(ValueError, match="SUCCESS"):
+        SupabaseHpAutoRunRepository(_Connection([])).create_selected_hp_job([1], ["SUCCESS"])
+    conn = _Connection([None, (json.dumps({"status": "COMPLETED"}),), None, [(1,)]] )
+    with pytest.raises(ValueError, match="状態が変わった"):
+        SupabaseHpAutoRunRepository(conn).create_selected_hp_job([1, 2], ["ERROR"])
+    assert not any("INSERT INTO research.research_jobs" in sql for sql, _ in conn.executed)
+    assert conn.committed == 0 and conn.rolled_back == 1
 
 
 def test_k_unexpired_database_clock_lease_rejects_second_pc():
@@ -248,6 +376,42 @@ def test_e_network_waiting_then_recovery_keeps_completed_work(monkeypatch):
     assert "WAITING_NETWORK" in repo.transitions
     assert calls["done"] == 500
     assert repo.state["status"] == "COMPLETED"
+
+
+def test_e_network_retry_is_bounded_and_persists_safe_error(monkeypatch):
+    from src.master import hp_auto_run
+
+    class Repo:
+        def __init__(self):
+            self.state = {"status": "RUNNING", "current_job_id": "job-1"}
+            self.transitions = []
+        def acquire(self, _controller):
+            return dict(self.state) if self.state["status"] in {"RUNNING", "WAITING_NETWORK"} else None
+        def set_controller_status(self, _controller, status, error="", retry_count=0):
+            self.state.update(status=status, last_error=error, retry_count=retry_count)
+            self.transitions.append(status)
+            return True
+        def get_state(self):
+            return dict(self.state)
+        def heartbeat(self, _controller):
+            return True
+
+    repo = Repo()
+    calls = {"run": 0}
+    monkeypatch.setattr(hp_auto_run, "job_status", lambda *_: {
+        "status": "RUNNING", "counts": {"DONE": 0, "PENDING": 50}, "total": 50,
+    })
+    def fail(*_args, **_kwargs):
+        calls["run"] += 1
+        raise ConnectionError("network is unreachable")
+    monkeypatch.setattr(hp_auto_run, "run_job", fail)
+    runner = hp_auto_run.AutoHpRunner(sleeper=lambda _seconds: None, backoffs=(0, 0))
+    monkeypatch.setattr(runner, "_repo", lambda _store: repo)
+    result = runner.run_blocking(object())
+    assert result == {"reason": "error_network_retry_limit", "failure_category": "temporary"}
+    assert calls["run"] == 3
+    assert repo.state["status"] == "ERROR"
+    assert "network is unreachable" not in repo.state["last_error"]
 
 
 def test_e_auth_and_dns_are_not_classified_as_unbounded_network_retry():

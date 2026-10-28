@@ -56,10 +56,124 @@ def test_hp_target_count_and_candidates_share_the_exact_eligibility_predicate():
     count_predicate = count_sql.split(" WHERE ", 1)[1]
     assert candidate_predicate == count_predicate
     assert candidate_args[:-1] == count_args == ("東京都", ["医科"])
+    assert "FROM public.clinic_cloudrun_readonly c WHERE" in candidate_sql
+    assert "FROM public.clinic_cloudrun_readonly c WHERE" in count_sql
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research h WHERE h.clinic_id=c.id)" in candidate_sql
-    assert "hp_status" not in candidate_sql
-    assert "hp_status" not in count_sql
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in candidate_sql
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in count_sql
     assert "uuid" not in candidate_sql.lower()
+    assert "email_candidates" not in candidate_sql.lower()
+
+
+def test_hp_candidate_preview_uses_projected_reader_relation_and_safe_columns():
+    store, conn = _store([[ (101, "Clinic", "Tokyo", "医科", "https://example.test") ]])
+    rows = store.maps_hp_candidate_preview("東京都", ["医科"], False, limit=10)
+
+    assert rows == [{"id": 101, "clinic_name": "Clinic", "address": "Tokyo",
+                     "medical_type": "医科", "maps_website_url": "https://example.test"}]
+    sql, _args = conn.calls[0]
+    assert "FROM public.clinic_cloudrun_readonly c" in sql
+    assert "public.clinics" not in sql
+    assert "email_candidates" not in sql
+
+
+def test_status_candidates_use_hp_ledger_reader_and_always_exclude_reserved_jobs():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "医科", "https://clinic.test", "ERROR", "NOT_FOUND")]])
+    rows = store.maps_hp_status_candidates("東京都", ["医科"], ["ERROR"], limit=100)
+
+    assert rows == [{"id": 7, "clinic_name": "Clinic", "address": "Tokyo", "medical_type": "医科",
+                     "maps_website_url": "https://clinic.test", "hp_status": "ERROR",
+                     "hp_status_detail": "NOT_FOUND"}]
+    sql, args = conn.calls[0]
+    assert "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=c.id" in sql
+    assert "queued_j.status IN ('RUNNING','PAUSED','BUDGET')" in sql
+    assert "success_i.result::text ILIKE '%SUCCESS%'" not in sql
+    assert "public.clinic_cloudrun_readonly c" in sql
+    assert "public.clinics" not in sql and "email_candidates" not in sql.lower()
+    assert "success_i.result::text ILIKE '%SUCCESS%'" not in sql
+    assert args[-2:] == (["ERROR"], 100)
+
+
+def test_status_candidate_query_rejects_unknown_states():
+    store, _conn = _store([])
+    with pytest.raises(ValueError, match="Unsupported"):
+        store.maps_hp_status_candidates(statuses=["SUCCESS_WITH_WRITE"])
+
+
+def test_status_candidate_query_can_show_success_read_only():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "医科", "https://clinic.test", "SUCCESS", "OK")]])
+    rows = store.maps_hp_status_candidates(statuses=["SUCCESS"], limit=10)
+    assert rows[0]["hp_status"] == "SUCCESS"
+    sql, _args = conn.calls[0]
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" not in sql
+    assert "h.fetch_status='OK' THEN 'SUCCESS'" in sql
+
+
+def test_hp_job_result_preview_reads_only_reader_visible_projection_and_ledger():
+    store, conn = _store([[(7, "Clinic", "Tokyo", "DONE", "SUCCESS", "OK",
+                           "https://clinic.test/", "https://clinic.test/", "A", "HP確認済み", "A")]])
+    rows = store.hp_normal_job_results("job-1")
+    assert rows == [{
+        "clinic_id": 7, "clinic_name": "Clinic", "address": "Tokyo", "item_state": "DONE",
+        "item_result": "SUCCESS", "fetch_status": "OK", "hp_url": "https://clinic.test/",
+        "final_url": "https://clinic.test/", "machine_hp_rank": "A",
+        "published_hp_status": "HP確認済み", "published_hp_rank": "A",
+    }]
+    sql, params = conn.calls[0]
+    assert "JOIN public.clinic_cloudrun_readonly c ON c.id=i.clinic_id" in sql
+    assert "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id" in sql
+    assert "research.research_results" not in sql and "public.clinics" not in sql
+    assert params == ("job-1",)
+
+
+def test_hp_job_status_avoids_select_star_for_column_scoped_reader():
+    from types import SimpleNamespace
+
+    class JobCursor:
+        def __init__(self, conn):
+            self.conn = conn
+            self.result = None
+            self.description = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.split())
+            self.conn.calls.append((normalized, tuple(params)))
+            if normalized.startswith("SELECT id,kind,status,created_at FROM research.research_jobs"):
+                self.description = [SimpleNamespace(name=n) for n in ("id", "kind", "status", "created_at")]
+                self.result = ("job-1", "hp", "RUNNING", "today")
+            elif "GROUP BY state" in normalized:
+                self.result = [("PENDING", 5)]
+            else:
+                self.result = [("SUCCESS", 1)]
+
+        def fetchone(self):
+            return self.result
+
+        def fetchall(self):
+            return self.result
+
+    class JobConnection:
+        def __init__(self):
+            self.calls = []
+
+        def cursor(self):
+            return JobCursor(self)
+
+    conn = JobConnection()
+    clinic_repo = type("ClinicRepo", (), {"_conn": conn})()
+    store = SupabaseRuntimeStore(type("Repos", (), {"clinics": clinic_repo})())
+    status = store.hp_job_status("job-1")
+
+    assert status["id"] == "job-1" and status["status"] == "RUNNING"
+    assert status["counts"] == {"PENDING": 5} and status["total"] == 5
+    assert "SELECT *" not in conn.calls[0][0]
+    assert "SELECT id,kind,status,created_at FROM research.research_jobs" in conn.calls[0][0]
 
 
 def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
@@ -79,11 +193,11 @@ def test_hp_target_filter_preserves_all_scope_and_maps_conditions():
     assert args == ["東京都", ["医科"]]
 
 
-def test_force_includes_researched_rows_without_using_projection_hp_status():
+def test_force_includes_researched_rows_but_excludes_published_success():
     predicate, args = _maps_hp_target_predicate("東京都", ["医科"], force=True)
 
     assert "hp_research.clinic_hp_research" not in predicate
-    assert "hp_status" not in predicate
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in predicate
     assert "c.prefecture=%s" in predicate
     assert "c.medical_type=ANY(%s::text[])" in predicate
     assert args == ["東京都", ["医科"]]
@@ -107,7 +221,7 @@ def test_empty_optional_filters_are_supported_and_force_off_uses_hp_research_sot
     assert "c.prefecture=%s" not in predicate
     assert "c.medical_type=ANY" not in predicate
     assert "NOT EXISTS (SELECT 1 FROM hp_research.clinic_hp_research" in predicate
-    assert "hp_status" not in predicate
+    assert "COALESCE(c.hp_status,'')<>'VERIFIED'" in predicate
 
 
 def test_ui_count_wrapper_delegates_the_selected_scope_to_supabase_ledger():
@@ -154,3 +268,35 @@ def test_sqlite_projection_is_not_used_to_guess_step4_research_completion():
         is_supabase_runtime = False
 
     assert app_v2._maps_hp_available_count(LocalStore(), "東京都", False, ["医科"]) == 0
+
+
+def test_auto_run_read_counts_use_reader_projection_and_exclude_historical_success():
+    store, conn = _store([(17,), (9,)])
+
+    assert store.hp_auto_run_eligible_count("", ["医科", "歯科"]) == 17
+    assert store.hp_auto_run_remaining_count({
+        "prefecture": "", "medical_types": ["医科", "歯科"], "force": False, "run_id": "r1",
+    }) == 9
+
+    eligible_sql, eligible_args = conn.calls[0]
+    remaining_sql, remaining_args = conn.calls[1]
+    assert "FROM public.clinic_cloudrun_readonly c" in eligible_sql
+    assert "FROM public.clinic_cloudrun_readonly c" in remaining_sql
+    assert "prior_i.state='DONE'" in eligible_sql and "prior_i.result::text ILIKE '%%SUCCESS%%'" in eligible_sql
+    assert "success_i.state='DONE'" in remaining_sql and "success_i.result::text ILIKE '%%SUCCESS%%'" in remaining_sql
+    assert "public.clinics" not in eligible_sql + remaining_sql
+    assert "options_json" not in remaining_sql
+    assert eligible_args == (["医科", "歯科"],)
+    assert remaining_args == (["医科", "歯科"],)
+
+
+def test_auto_run_cumulative_results_come_from_the_rls_scoped_state_row():
+    import json
+
+    state = {"run_id": "r1", "cumulative_results": {"SUCCESS": 12, "ERROR": 2}}
+    store, conn = _store([(json.dumps(state),)])
+
+    assert store.hp_auto_run_cumulative_results("r1") == {"SUCCESS": 12, "ERROR": 2}
+    sql, args = conn.calls[0]
+    assert "app_config.settings" in sql and "research_jobs" not in sql
+    assert args == ("hp_auto_run_state",)

@@ -209,7 +209,11 @@ class SerpApiSearchProvider:
 class CachedSearch:
     def __init__(self,store,provider,job_id=None,monthly_limit=None,max_searches=100):
         self.store,self.provider,self.job_id = store,provider,job_id
-        self.monthly_limit = int(monthly_limit if monthly_limit is not None else store.setting("monthly_limit",900))
+        # Do not touch the Reader's app_config.settings relation just to construct a
+        # Researcher. HP Jobs with a Maps website URL never call search(); when search is
+        # needed, the write repository enforces the configured monthly limit itself.
+        # Keep this local ceiling aligned with the historical default.
+        self.monthly_limit = int(900 if monthly_limit is None else monthly_limit)
         self.max_searches = int(max_searches)
         self.used = 0
 

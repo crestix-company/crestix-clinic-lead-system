@@ -17,6 +17,7 @@ class _LargeClinicStore:
         assert filters.effective_ranks == []
         assert filters.active_only is True
         assert filters.hp_only is True
+        assert filters.include_merge_hold is True
         raise_if_unsupported(filters)
         return self.total
 
@@ -52,25 +53,29 @@ def test_sync_candidates_page_through_all_hp_confirmed_clinics_and_exclude_linka
 class _SupabaseHpSuccessStore:
     is_supabase_runtime = True
 
-    def latest_completed_hp_job(self):
-        return {"id": 81}
+    def count(self, filters):
+        assert filters.active_only and filters.hp_only and filters.include_merge_hold
+        return 4
 
-    def hp_job_export_summary(self, job_id):
-        assert job_id == 81
-        return {"export_ids": [11, 12, 13, 14]}
-
-    def records_by_ids(self, clinic_ids):
-        assert clinic_ids == [11, 12, 13, 14]
+    def query(self, filters, *, limit, offset):
+        assert filters.active_only and filters.hp_only and filters.include_merge_hold
+        clinic_ids = range(offset + 11, min(15, offset + limit + 11))
         return [
             {"id": clinic_id, "uuid": "SYNCED" if clinic_id == 14 else "", "clinic_name": f"医院{clinic_id}"}
             for clinic_id in clinic_ids
         ]
 
+    def latest_completed_hp_job(self):
+        raise AssertionError("Step6 must not narrow the full-master cohort to the latest job")
+
+    def hp_job_export_summary(self, _job_id):
+        raise AssertionError("Step6 must not narrow the full-master cohort to the latest job")
+
     def comdesk_linkage_state(self):
         return {"imported_clinic_ids": {11}, "held_clinic_ids": {12}}
 
 
-def test_supabase_sync_reuses_canonical_hp_success_ids_before_linkage_exclusions():
+def test_supabase_sync_uses_full_hp_confirmed_master_cohort_before_linkage_exclusions():
     assert [row["id"] for row in comdesk_sync_candidates(_SupabaseHpSuccessStore())] == [13]
 
 
@@ -89,15 +94,22 @@ def test_unlinked_export_row_keeps_formal_thirty_column_contract():
 
 def test_sync_csv_row_count_matches_candidate_count_and_keeps_thirty_columns():
     candidates = [
-        {"id": 1, "clinic_name": "A医院", "effective_hp_rank": "D"},
-        {"id": 2, "clinic_name": "B医院", "effective_hp_rank": "UNKNOWN"},
+        {"id": 1, "uuid": "canonical-uuid-1", "clinic_name": "A医院", "phone": "03-1234-5678",
+         "prefecture": "東京都", "address": "東京都千代田区1-1", "hp_url": "https://a.example",
+         "hp_status": "VERIFIED", "effective_hp_rank": "D"},
+        {"id": 2, "uuid": "", "clinic_name": "B医院", "effective_hp_rank": "UNKNOWN"},
     ]
 
-    table = load_table(comdesk_sync_csv(object(), candidates), "sync.csv")
+    content = comdesk_sync_csv(object(), candidates)
+    table = load_table(content, "sync.csv")
 
     assert table.headers == COMDESK_EXPORT_HEADERS
     assert len(table.headers) == 30
     assert len(table.data) == len(candidates) == 2
+    assert content.startswith(b"\xef\xbb\xbf")
+    assert table.value(0, table.headers.index("UUID")) == "canonical-uuid-1"
+    assert table.value(0, table.headers.index("URL")) == "https://a.example"
+    assert table.value(0, table.headers.index("住所１")) == "千代田区1-1"
 
 
 def test_uuid_added_after_initial_comdesk_import_reimport_updates_same_clinic(tmp_path):

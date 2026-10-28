@@ -51,14 +51,15 @@ def test_simple_workflow_keeps_step1_through_step7_in_order():
         "Step3：Google Maps Collector",
         "Step4：Google Maps結果を取り込む",
         "Step5：HP・Email自動調査",
-        "Step6：HP確認済み医院をComdesk同期用CSVで出力",
-        "Step7：UUID付与後のComdesk CSVを再取り込む",
+        "Step6：HP確認済み医院をComdesk用CSVで出力",
+        "Step7：Comdeskから出力したCSVを取り込む",
     ]
 
     positions = [simple.index(heading) for heading in headings]
     assert positions == sorted(positions)
     assert "render_comdesk_sync_export(store, demo)" in simple
-    assert 'key_prefix="simple_comdesk_reimport"' in simple
+    assert "render_comdesk_clinic_sync(store, write_disabled, mac_normal=mac_normal)" in simple
+    assert 'key_prefix="simple_comdesk_reimport"' not in simple
 
 
 def test_single_job_status_is_hidden_from_simple_workflow_and_managed_in_advanced_settings():
@@ -89,8 +90,12 @@ def test_simple_sync_and_sales_export_use_separate_conditions_and_actions():
     sales_end = source.index("def advanced_ui", sales_start)
     sales = source[sales_start:sales_end]
 
-    assert "hp_job_export_summary" in sync
-    assert "hp_only=True" in sync
+    assert "hp_job_export_summary" not in sync
+    assert "latest_completed_hp_job" not in sync
+    assert "_comdesk_hp_confirmed_clinics" in sync
+    cohort_start = source.index("def _comdesk_hp_confirmed_clinics")
+    cohort_end = source.index("def comdesk_sync_breakdown", cohort_start)
+    assert "active_only=True, hp_only=True, include_merge_hold=True" in source[cohort_start:cohort_end]
     assert "effective_ranks" not in sync
     assert "comdesk_linkage_state" in sync
     assert "simple_comdesk_sync_export" not in sales
@@ -126,6 +131,8 @@ def test_step6_breakdown_matches_sync_exclusion_order_and_labels_populations():
     assert rows["厚生局全件"]["件数"] == "50件"
     assert rows["HP URL取得済み"]["件数"] == "20件"
     assert rows["HP調査完了"]["件数"] == "12件"
+    assert rows["HP確認済み医院"]["件数"] == "5件"
+    assert rows["UUID登録済み"]["件数"] == "1件"
     assert rows["UUID未付与"]["件数"] == "4件"
     exclusions = sum(int(rows[key]["件数"].removesuffix("件")) for key in (
         "除外：Comdesk取込済み", "除外：照合保留", "除外：merge hold",
@@ -133,7 +140,11 @@ def test_step6_breakdown_matches_sync_exclusion_order_and_labels_populations():
     ))
     assert exclusions == 4
     assert "hp_url" in rows["HP URL取得済み"]["母集団・条件"]
-    assert "最新完了HP Job" in rows["HP成功医院（同期候補の母集団）"]["母集団・条件"]
+    readonly_rows = {row["項目"]: row for row in app_v2.comdesk_sync_breakdown(
+        FixtureStore(), {"厚生局取込レコード": None},
+    )}
+    assert readonly_rows["厚生局全件"]["件数"] == "—"
+    assert "最新Jobに限定しない" in rows["HP確認済み医院"]["母集団・条件"]
 
 
 def test_step6_breakdown_fails_closed_when_hp_population_is_unknown():
@@ -155,6 +166,51 @@ def test_step6_breakdown_fails_closed_when_hp_population_is_unknown():
     import pytest
     with pytest.raises(ValueError, match="HP URL母集団"):
         app_v2.comdesk_sync_breakdown(FixtureStore(), {})
+
+
+def test_auto_run_eligible_metric_failure_is_isolated_and_secret_safe(caplog):
+    class BrokenReader:
+        def hp_auto_run_eligible_count(self, *_args):
+            raise RuntimeError("postgres://user:secret@example.invalid/db")
+
+    assert app_v2.safe_hp_auto_run_eligible_count(BrokenReader(), "", ["医科", "歯科"]) is None
+    assert "exception_type=RuntimeError" in caplog.text
+    assert "postgres://" not in caplog.text
+    assert "example.invalid" not in caplog.text
+
+
+def test_comdesk_connection_failures_use_task_focused_messages(caplog):
+    exc = RuntimeError("postgres://user:secret@example.invalid/db")
+    step6 = app_v2.comdesk_safe_failure(exc, stage="reader_connect")
+    step7 = app_v2.comdesk_safe_failure(exc, stage="preview")
+    assert "CSVの対象確認・出力を利用できません" in step6
+    assert "UUID照合プレビューを利用できません" in step7
+    assert "example.invalid" not in step6 + step7 + caplog.text
+    assert "secret" not in step6 + step7 + caplog.text
+
+
+def test_hp_metric_reader_failure_preserves_other_metrics_in_apptest():
+    app = AppTest.from_string('''
+import app_v2
+
+class BrokenHpMetricsStore:
+    is_supabase_runtime = True
+    def web_research_metrics(self, **_kwargs):
+        raise RuntimeError("postgres://user:secret@example.invalid/db")
+    def hp_auto_run_eligible_count(self, *_args):
+        return 0
+    def hp_auto_run_state(self):
+        return {"status": "COMPLETED"}
+    def metrics(self, **_kwargs):
+        return {"既存UUIDあり": 42, "厚生局取込レコード": None}
+
+app_v2.show_web_research_metrics(BrokenHpMetricsStore(), read_only=True, compact=True)
+''').run()
+    assert not app.exception
+    assert any(metric.label == "既存UUIDあり" and metric.value == "42件" for metric in app.metric)
+    assert any(metric.label == "HP URL取得済み" and metric.value == "—" for metric in app.metric)
+    assert any("HP調査状況の集計に接続できませんでした" in warning.value for warning in app.warning)
+    assert not any("secret" in warning.value for warning in app.warning)
 
 
 def test_single_hp_job_controls_survive_rerun_in_advanced_settings():
@@ -224,11 +280,11 @@ def test_read_only_ui_skips_startup_writes_and_auto_resume():
     simple_end = source.index("def import_ui_comdesk_step", simple_start)
     simple = source[simple_start:simple_end]
 
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
-    assert "nav_locked = read_only or is_cloud_run_deployment()" in main
-    assert "if not read_only and not is_cloud_run_executor() and not is_cloud_run_deployment():" in main
+    assert "nav_options = NAV if hp_normal_runtime else NAV[:2] if nav_locked else NAV" in main
+    assert "nav_locked = read_only or is_cloud_run_deployment() or hp_normal_runtime" in main
+    assert "and os.environ.get(\"CLINIC_NORMAL_MAC_RUNTIME\") != \"1\"" in main
     assert "write_repositories_for(store).clinics.refresh_age_model()" in main
-    assert "not read_only and not is_cloud_run_deployment() and auto_state.get" in simple
+    assert "auto_runner.start(store)" not in simple[:simple.index('"Auto Run Workerを開始・再開"')]
     assert "write_disabled = demo or read_only" in simple
     assert "READ ONLY画面確認中" in simple
 
@@ -264,8 +320,8 @@ def test_cloud_run_deployment_blocks_human_review_sidebar_and_dialogs_in_main():
     source = _app_source()
     main_start = source.index("def main():")
     main_body = source[main_start:source.index("\ndef ", main_start + 10)]
-    assert "if not read_only and not is_cloud_run_deployment():" in main_body
-    guard_pos = main_body.index("if not read_only and not is_cloud_run_deployment():")
+    assert "if not read_only and not is_cloud_run_deployment() and not hp_normal_runtime:" in main_body
+    guard_pos = main_body.index("if not read_only and not is_cloud_run_deployment() and not hp_normal_runtime:")
     sidebar_pos = main_body.index("hp_human_review_sidebar(store)")
     dialog_pos = main_body.index("hp_human_review_dialog(store)")
     assert guard_pos < sidebar_pos < dialog_pos

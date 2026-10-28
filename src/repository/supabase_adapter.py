@@ -21,7 +21,7 @@ from src.repository.errors import BackendNotSupportedError
 from src.repository import supabase_filters as sf
 
 
-def connect(url, *, connect_timeout=20, autocommit=False):
+def connect(url, *, connect_timeout=20, autocommit=False, read_only=False):
     """Opens a Postgres connection with the Stage3 root-caused float-readback fix applied
     (extra_float_digits=0 is this project's session default; raised to 3 here so float8 text
     output is shortest-round-trip-safe again -- see docs/supabase_migration root cause writeup).
@@ -37,7 +37,7 @@ def connect(url, *, connect_timeout=20, autocommit=False):
     import os
     import psycopg
     from src.safety.preview_mode import comdesk_preview_only_enabled
-    read_only_ui = (
+    read_only_ui = read_only or (
         os.environ.get("CLINIC_READ_ONLY_UI", "").strip().casefold() in {"1", "true", "yes", "on"}
         or comdesk_preview_only_enabled()
     )
@@ -103,26 +103,28 @@ class SupabaseHpResearchRepository:
             cur.execute(
                 f"""
                 WITH url_clinics AS (
-                  SELECT id FROM {source} WHERE hp_url<>'' OR maps_website_url<>''
+                  SELECT id FROM {source} WHERE merged_into IS NULL
+                    AND (COALESCE(BTRIM(hp_url),'')<>'' OR COALESCE(BTRIM(maps_website_url),'')<>'')
                 ), joined AS (
-                  SELECT u.id, r.fetch_status, r.treatment_categories
+                  SELECT u.id, r.clinic_id AS history_clinic_id, r.fetch_status, r.treatment_categories
                   FROM url_clinics u LEFT JOIN hp_research.clinic_hp_research r ON r.clinic_id=u.id
                 )
                 SELECT
                   count(*),
                   sum(CASE WHEN fetch_status='OK' THEN 1 ELSE 0 END),
-                  sum(CASE WHEN fetch_status IS NOT NULL AND fetch_status<>'OK' THEN 1 ELSE 0 END),
-                  sum(CASE WHEN fetch_status IS NULL THEN 1 ELSE 0 END),
+                  sum(CASE WHEN history_clinic_id IS NOT NULL AND (fetch_status IS NULL OR fetch_status NOT IN ('OK','REVIEW')) THEN 1 ELSE 0 END),
+                  sum(CASE WHEN fetch_status='REVIEW' THEN 1 ELSE 0 END),
+                  sum(CASE WHEN history_clinic_id IS NULL THEN 1 ELSE 0 END),
                   sum(CASE WHEN fetch_status='OK' AND jsonb_array_length(treatment_categories)>0 THEN 1 ELSE 0 END),
                   sum(CASE WHEN fetch_status='OK' AND jsonb_array_length(treatment_categories)=0 THEN 1 ELSE 0 END)
                 FROM joined
                 """
             )
             row = cur.fetchone()
-        keys = ("url_acquired", "researched", "failed", "not_researched",
+        keys = ("url_acquired", "researched", "failed", "review", "not_researched",
                 "treatment_detected", "treatment_not_detected")
         result = {k: int(v or 0) for k, v in zip(keys, row)}
-        if result["url_acquired"] != result["researched"] + result["failed"] + result["not_researched"]:
+        if result["url_acquired"] != result["researched"] + result["failed"] + result["review"] + result["not_researched"]:
             raise BatchMetricInvariantError("WebサイトURL件数と調査状態の合計が一致しません。")
         if result["researched"] != result["treatment_detected"] + result["treatment_not_detected"]:
             raise BatchMetricInvariantError("Webサイト調査完了件数と治療カテゴリ判定の合計が一致しません。")
@@ -497,6 +499,32 @@ class SupabaseClinicRepository:
         machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories = hp_row or ("", "", "", "", [])
         return self._build_record(d, machine_hp_rank, fetch_status, hp_batch_url, final_url, treatment_categories)
 
+    def get_hp_research_clinic(self, clinic_id):
+        """Fetch the minimal HP worker input from the Reader projection, never public.clinics."""
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id,clinic_name,phone,address,prefecture,medical_type,maps_website_url,"
+                "maps_presence_status,departments_json FROM public.clinic_cloudrun_readonly WHERE id=%s",
+                (int(clinic_id),),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise ValueError("医院が見つかりません。")
+        departments = row[8] or []
+        if isinstance(departments, str):
+            try:
+                departments = json.loads(departments)
+            except (TypeError, ValueError):
+                departments = [departments]
+        if not isinstance(departments, (list, tuple)):
+            departments = [str(departments)]
+        return {
+            "id": row[0], "clinic_name": row[1] or "", "phone": row[2] or "",
+            "address": row[3] or "", "prefecture": row[4] or "", "medical_type": row[5] or "",
+            "maps_website_url": row[6] or "", "maps_presence_status": row[7] or "",
+            "departments": " / ".join(str(value) for value in departments if value),
+        }
+
     def get_by_uuid(self, uuid):
         d = self._fetch_row("uuid=%s AND merged_into IS NULL", uuid)
         return self.get(d["id"]) if d else None
@@ -675,7 +703,41 @@ class SupabaseClinicRepository:
         output.append(("最終営業対象", output[-1][1]))
         return output
 
-    def metrics(self):
+    def metrics(self, *, read_only_ui=False):
+        if read_only_ui:
+            # Keep the dashboard's original metric layout on a least-privilege
+            # Reader connection. The allowlisted projection intentionally does
+            # not include age estimates or provenance/import tables.
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT count(*),
+                      count(*) FILTER (WHERE uuid<>''),
+                      count(*) FILTER (WHERE uuid=''),
+                      count(*) FILTER (WHERE active),
+                      count(*) FILTER (WHERE hp_status='VERIFIED'),
+                      count(*) FILTER (WHERE hp_status='NOT_FOUND'),
+                      count(*) FILTER (WHERE false),
+                      count(*) FILTER (WHERE hp_status IN ('REVIEW','ERROR')),
+                      count(*) FILTER (WHERE signal_count>=2),
+                      count(*) FILTER (WHERE signal_count>=3),
+                      count(*) FILTER (WHERE maps_presence_status IN ('MAPS_MATCHED_WEBSITE','MAPS_MATCHED_NO_WEBSITE')),
+                      count(*) FILTER (WHERE maps_presence_status='MAPS_MATCHED_WEBSITE' AND maps_website_url<>''),
+                      count(*) FILTER (WHERE maps_presence_status='MAPS_NOT_FOUND')
+                    FROM public.clinic_cloudrun_readonly WHERE merged_into IS NULL
+                    """
+                )
+                row = cur.fetchone()
+            labels = (
+                "全マスター", "既存UUIDあり", "新規医院（UUIDなし）", "現存クリニック", "HP確認済み", "HP未発見",
+                "年齢推定済み", "HP要確認", "アツい（2個以上）", "かなりアツい",
+                "Google Maps掲載確認", "Google Maps HP取得", "Google Maps未発見",
+            )
+            result = dict(zip(labels, row))
+            result["年齢推定済み"] = None
+            result["要確認重複（保留レコード）"] = None
+            result["厚生局取込レコード"] = None
+            return result
         # P0-3: 15 independent round trips -> 1. The 10 per-clinics-item counts become FILTER
         # aggregates over a single scan; the 2 provenance-schema counts (different tables, can't
         # join into the same FROM) become scalar subqueries in the same SELECT; the 3 Google Maps

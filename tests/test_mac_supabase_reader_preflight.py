@@ -24,6 +24,9 @@ class Cursor:
     def fetchone(self):
         return next(self.answers)
 
+    def fetchall(self):
+        return []
+
 
 class Connection:
     def __init__(self, answers):
@@ -61,7 +64,7 @@ def successful_answers():
     answers = [("clinic_preview_reader", False, False, False, False, False),
                (False,), (False,), (False,)]
     for name in reader.REQUIRED_TABLES:
-        answers += [(name,), (True,)]
+        answers += [(True,), (name,), (True,)]
     return answers + [(164201,)]
 
 
@@ -74,7 +77,7 @@ class ReaderSafetyTests(unittest.TestCase):
     def test_reader_file_requires_private_permissions(self):
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp) / "reader.env"
-            p.write_text("SUPABASE_RUNTIME_DB_URL=postgresql://example.invalid/db\n")
+            p.write_text("SUPABASE_READONLY_DB_URL=postgresql://example.invalid/db\n")
             p.chmod(0o644)
             with self.assertRaisesRegex(RuntimeError, "600"):
                 reader.load_reader_dsn(p)
@@ -96,11 +99,63 @@ class ReaderSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "書き込み権限"):
             reader.verify_reader("fake-url", connect=lambda *a, **kw: conn)
 
+    def test_schema_without_usage_is_rejected(self):
+        conn = Connection([
+            ("clinic_preview_reader", False, False, False, False, False),
+            (False,), (False,), (False,), (False,),
+        ])
+        with self.assertRaisesRegex(RuntimeError, "スキーマの参照権限"):
+            reader.verify_reader("fake-url", connect=lambda *a, **kw: conn)
+
     def test_valid_reader_is_accepted(self):
         conn = Connection(successful_answers())
         role, count = reader.verify_reader("fake-url", connect=lambda *a, **kw: conn)
         self.assertEqual((role, count), ("clinic_preview_reader", 164201))
         self.assertTrue(conn.rolled_back)
+
+    def test_normal_and_preview_environments_are_separate_and_read_only(self):
+        source = {
+            "CLINIC_DB_PATH": "/must/not/be/used.sqlite3",
+            "CLINIC_DATA_BACKEND": "sqlite",
+            "CLINIC_WRITE_BACKEND": "sqlite",
+            "EMAIL_AUTO_RUN_ENABLED": "true",
+            "OUTREACH_GMAIL_DRAFTS_ENABLED": "true",
+        }
+        normal = reader.runtime_environment("reader-dsn", "readonly", source)
+        preview = reader.runtime_environment("preview-dsn", "preview", source)
+        self.assertNotIn("SUPABASE_RUNTIME_DB_URL", normal)
+        self.assertEqual(normal["CLINIC_DATA_BACKEND"], "supabase")
+        self.assertEqual(normal["CLINIC_READ_ONLY_UI"], "1")
+        self.assertEqual(normal["CLINIC_COMDESK_PREVIEW_ONLY"], "0")
+        self.assertEqual(preview["CLINIC_COMDESK_PREVIEW_ONLY"], "1")
+        self.assertNotIn("CLINIC_DB_PATH", normal)
+        self.assertEqual(normal["EMAIL_AUTO_RUN_ENABLED"], "false")
+        self.assertEqual(normal["OUTREACH_GMAIL_DRAFTS_ENABLED"], "false")
+        self.assertIn("public.clinic_cloudrun_readonly", reader.NORMAL_REQUIRED_TABLES)
+        self.assertIn("hp_research.clinic_hp_research", reader.NORMAL_REQUIRED_TABLES)
+        self.assertNotIn("provenance.google_maps_results", reader.NORMAL_REQUIRED_TABLES)
+        self.assertNotIn("email_research.email_candidates", reader.NORMAL_REQUIRED_TABLES)
+
+    def test_normal_preflight_counts_visible_rows_from_projected_view(self):
+        answers = [("clinic_mac_reader", False, False, False, False, False),
+                   (False,), (False,), (False,)]
+        for relation in reader.NORMAL_HP_REQUIRED_TABLES:
+            schema = relation.split(".", 1)[0]
+            answers += [(True,), (relation,)]
+            answers += [(True,)] * len(reader.NORMAL_HP_REQUIRED_COLUMNS[relation])
+        answers += [(164201,)]
+        conn = Connection(answers)
+        role, count = reader.verify_reader(
+            "fake-url", connect=lambda *a, **kw: conn,
+            required_tables=reader.NORMAL_HP_REQUIRED_TABLES,
+            required_columns=reader.NORMAL_HP_REQUIRED_COLUMNS,
+            count_relation="public.clinic_cloudrun_readonly",
+        )
+        self.assertEqual((role, count), ("clinic_mac_reader", 164201))
+        self.assertTrue(any("SELECT id,clinic_name,phone,address,prefecture,medical_type" in query
+                            for query, _ in conn.cursor_obj.executed))
+        self.assertFalse(any("email_candidates" in query for query, _ in conn.cursor_obj.executed))
+        self.assertFalse(any("app_config.settings" in query for query, _ in conn.cursor_obj.executed))
 
 
 if __name__ == "__main__":

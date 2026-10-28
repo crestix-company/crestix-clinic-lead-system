@@ -1,4 +1,4 @@
-"""Mac preview launcher: require a dedicated least-privilege Supabase reader.
+"""Mac read-only launchers: require dedicated least-privilege Supabase readers.
 
 Credentials are stored outside the repository and are never printed.
 This launcher deliberately does not fall back to the runtime writer or SQLite.
@@ -11,20 +11,54 @@ import subprocess
 import sys
 
 
-READER_FILE = Path.home() / ".config/clinic-lead/preview-reader.env"
-REQUIRED_TABLES = (
+NORMAL_READER_FILE = Path.home() / ".config/clinic-lead/reader.env"
+PREVIEW_READER_FILE = Path.home() / ".config/clinic-lead/preview-reader.env"
+READER_FILE = PREVIEW_READER_FILE  # compatibility for older Preview callers/tests
+PREVIEW_REQUIRED_TABLES = (
+    "public.sales_entity_comdesk_identity",
+    "public.sales_entity_clinics",
     "public.clinics",
-    "provenance.source_records",
     "provenance.comdesk_original_rows",
-    "provenance.google_maps_results",
-    "hp_research.clinic_hp_research",
-    "email_research.clinic_email_status",
-    "email_research.email_candidates",
+    "provenance.templates",
+    "provenance.manual_overrides",
 )
+REQUIRED_TABLES = PREVIEW_REQUIRED_TABLES
+READONLY_REQUIRED_TABLES = (
+    "public.clinic_cloudrun_readonly",
+    "public.clinic_email_enrichment",
+    "provenance.clinic_cloudrun_comdesk_rows",
+    "provenance.templates",
+    "hp_research.clinic_hp_research",
+    "treatment.clinic_treatment_research",
+    "treatment.clinic_research_status",
+    "email_research.clinic_email_status_readonly",
+)
+NORMAL_REQUIRED_TABLES = READONLY_REQUIRED_TABLES  # compatibility name
+HP_REQUIRED_TABLES = (
+    "research.research_jobs",
+    "research.research_job_items",
+)
+NORMAL_HP_REQUIRED_TABLES = (
+    "public.clinic_cloudrun_readonly",
+    "hp_research.clinic_hp_research",
+) + HP_REQUIRED_TABLES
+NORMAL_HP_REQUIRED_COLUMNS = {
+    "public.clinic_cloudrun_readonly": (
+        "id", "clinic_name", "phone", "address", "prefecture", "medical_type",
+        "maps_website_url", "maps_presence_status", "active", "merged_into",
+        "merge_hold", "is_new", "departments_json", "hp_status", "hp_rank", "hp_url",
+    ),
+    "hp_research.clinic_hp_research": (
+        "clinic_id", "fetch_status", "hp_url", "final_url", "machine_hp_rank",
+    ),
+    "research.research_jobs": ("id", "kind", "status", "created_at"),
+    "research.research_job_items": ("job_id", "clinic_id", "state", "result"),
+}
 WRITE_PRIVILEGES = ("INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER")
 
 
-def load_reader_dsn(path=READER_FILE):
+def load_reader_dsn(path=None):
+    path = path or READER_FILE
     if not path.is_file() or path.is_symlink():
         raise RuntimeError(f"専用Reader設定がありません: {path}")
     if path.stat().st_mode & 0o077:
@@ -40,20 +74,24 @@ def load_reader_dsn(path=READER_FILE):
         if len(parts) != 1 or "=" not in parts[0]:
             raise RuntimeError("Reader設定の形式が不正です。")
         key, value = parts[0].split("=", 1)
-        if key != "SUPABASE_RUNTIME_DB_URL" or key in values:
-            raise RuntimeError("Reader設定はSUPABASE_RUNTIME_DB_URLの1行だけにしてください。")
+        if key != "SUPABASE_READONLY_DB_URL" or key in values:
+            raise RuntimeError("Reader設定はSUPABASE_READONLY_DB_URLの1行だけにしてください。")
         values[key] = value
-    if not values.get("SUPABASE_RUNTIME_DB_URL"):
+    if not values.get("SUPABASE_READONLY_DB_URL"):
         raise RuntimeError("Reader接続URLが未設定です。")
-    return values["SUPABASE_RUNTIME_DB_URL"]
+    return values["SUPABASE_READONLY_DB_URL"]
 
 
-def verify_reader(dsn, *, connect=None):
+def verify_reader(
+    dsn, *, connect=None, required_tables=None, required_columns=None,
+    count_relation=None,
+):
     if connect is None:
         import psycopg
         connect = psycopg.connect
     with connect(dsn, connect_timeout=10) as conn:
         with conn.cursor() as cur:
+            cur.execute("SET TRANSACTION READ ONLY")
             cur.execute("""
                 SELECT current_user, r.rolsuper, r.rolbypassrls, r.rolcreatedb,
                        r.rolcreaterole, has_database_privilege(current_user, current_database(), 'CREATE')
@@ -104,47 +142,87 @@ def verify_reader(dsn, *, connect=None):
             """)
             if cur.fetchone()[0]:
                 raise RuntimeError("シーケンス更新権限があります。起動を停止しました。")
-            for table in REQUIRED_TABLES:
+            checked_tables = required_tables if required_tables is not None else REQUIRED_TABLES
+            for table in checked_tables:
+                schema, _name = table.split(".", 1)
+                cur.execute("SELECT has_schema_privilege(current_user, %s, 'USAGE')", (schema,))
+                if not cur.fetchone()[0]:
+                    raise RuntimeError(f"必要なスキーマの参照権限がありません: {schema}")
                 cur.execute("SELECT to_regclass(%s)", (table,))
                 if cur.fetchone()[0] is None:
                     raise RuntimeError(f"必要なテーブルがありません: {table}")
-                cur.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
-                if not cur.fetchone()[0]:
-                    raise RuntimeError(f"参照権限がありません: {table}")
-            cur.execute("SELECT count(*) FROM public.clinics")
+                columns = (required_columns or {}).get(table)
+                if columns:
+                    for column in columns:
+                        cur.execute(
+                            "SELECT has_column_privilege(current_user,%s,%s,'SELECT')",
+                            (table, column),
+                        )
+                        if not cur.fetchone()[0]:
+                            raise RuntimeError(f"必要な列の参照権限がありません: {table}.{column}")
+                    # Parse and authorize the exact projected select without returning data.
+                    cur.execute(f"SELECT {','.join(columns)} FROM {table} LIMIT 0")
+                    cur.fetchall()
+                else:
+                    cur.execute("SELECT has_table_privilege(current_user, %s, 'SELECT')", (table,))
+                    if not cur.fetchone()[0]:
+                        raise RuntimeError(f"参照権限がありません: {table}")
+            count_relation = count_relation or "public.clinics"
+            if count_relation not in {"public.clinics", "public.clinic_cloudrun_readonly"}:
+                raise RuntimeError("医院データ確認先の指定が不正です。")
+            cur.execute(f"SELECT count(*) FROM {count_relation}")
             count = cur.fetchone()[0]
             if count == 0:
                 raise RuntimeError("医院データを参照できません。RLSポリシーを確認してください。")
+            if "email_research.clinic_email_status_readonly" in checked_tables:
+                cur.execute("SELECT count(*) FROM email_research.clinic_email_status_readonly")
+                cur.fetchone()  # zero is valid; confirms view query is usable under RLS
         conn.rollback()
     return role, count
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--headless", action="store_true")
-    parser.add_argument("--port", type=int, default=8502)
-    parser.add_argument("--strict-port", action="store_true")
-    args = parser.parse_args()
-    dsn = load_reader_dsn()
-    role, count = verify_reader(dsn)
-    root = Path(__file__).resolve().parents[1]
-    env = os.environ.copy()
+def runtime_environment(dsn, mode, source=None):
+    """Return a sanitized, fail-closed environment for one Mac read-only launch mode."""
+    if mode not in {"readonly", "preview"}:
+        raise ValueError("起動モードが不正です。")
+    env = dict(os.environ if source is None else source)
     for key in (
-        "SUPABASE_RUNTIME_DB_URL", "CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND",
+        "SUPABASE_RUNTIME_DB_URL", "SUPABASE_READONLY_DB_URL", "CLINIC_DATA_BACKEND", "CLINIC_WRITE_BACKEND",
         "CLINIC_DB_PATH", "CLINIC_DEMO_DB_PATH",
     ):
         env.pop(key, None)
     env.update({
-        "SUPABASE_RUNTIME_DB_URL": dsn,
+        "SUPABASE_READONLY_DB_URL": dsn,
         "CLINIC_DATA_BACKEND": "supabase",
         "CLINIC_WRITE_BACKEND": "supabase",
-        "CLINIC_COMDESK_PREVIEW_ONLY": "1",
+        "CLINIC_COMDESK_PREVIEW_ONLY": "1" if mode == "preview" else "0",
         "CLINIC_READ_ONLY_UI": "1",
         "CLINIC_COMMON_IDENTITY_ENABLED": "0",
         "EMAIL_AUTO_RUN_ENABLED": "false",
         "OUTREACH_GMAIL_DRAFTS_ENABLED": "false",
     })
-    print(f"Supabase Reader確認OK: role={role}, 医院={count}件", flush=True)
+    return env
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--headless", action="store_true")
+    parser.add_argument("--mode", choices=("readonly", "preview"), default="readonly")
+    parser.add_argument("--port", type=int, default=8501)
+    parser.add_argument("--strict-port", action="store_true")
+    args = parser.parse_args()
+    reader_file = NORMAL_READER_FILE if args.mode == "readonly" else PREVIEW_READER_FILE
+    dsn = load_reader_dsn(reader_file)
+    required_tables = PREVIEW_REQUIRED_TABLES if args.mode == "preview" else READONLY_REQUIRED_TABLES
+    count_relation = "public.clinics" if args.mode == "preview" else "public.clinic_cloudrun_readonly"
+    role, count = verify_reader(
+        dsn, required_tables=required_tables,
+        required_columns=(NORMAL_HP_REQUIRED_COLUMNS if args.mode == "readonly" else None),
+        count_relation=count_relation,
+    )
+    root = Path(__file__).resolve().parents[1]
+    env = runtime_environment(dsn, args.mode)
+    print(f"Supabase Reader確認OK: role={role}, 医院={count}件 / mode={args.mode}", flush=True)
     args_list = [sys.executable, str(root / "scripts/launch_v2.py"), "--port", str(args.port), "--strict-port"]
     if args.headless:
         args_list.append("--headless")

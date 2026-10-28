@@ -297,19 +297,21 @@ def test_ui_web_research_six_metrics_displayed(tmp_path, monkeypatch):
     next(s for s in at.selectbox if s.label == "対象データ").set_value(SCOPE_ALL).run()
     assert not at.exception
     metrics = {m.label: m.value for m in at.metric}
-    assert metrics["WebサイトURL取得済み"] == "4件"
-    assert metrics["Webサイト調査完了"] == "2件"
-    assert metrics["Webサイト調査失敗"] == "1件"
-    assert metrics["Webサイト未調査"] == "1件"
+    assert metrics["HP URL取得済み"] == "4件"
+    assert metrics["HP調査完了"] == "2件"
+    assert metrics["HP取得・解析失敗"] == "1件"
+    assert metrics["HP要確認"] == "0件"
+    assert metrics["HP未調査"] == "1件"
     assert metrics["治療カテゴリ検出あり"] == "1件"
     assert metrics["治療カテゴリ検出なし"] == "1件"
     assert not ({"Treatment該当あり", "Treatment該当なし", "Treatment未調査", "HP取得失敗"} & set(metrics))
     helps = {m.label: m.help for m in at.metric}
-    assert helps["WebサイトURL取得済み"] == "医院データにWebサイトURLが登録されている医院数です。"
-    assert helps["Webサイト調査完了"] == "公式HPの内容確認まで完了したクリニック数です。"
-    assert helps["Webサイト調査失敗"] == "Webサイトの取得または解析を正常完了できなかった医院数です。"
-    assert "非アクティブ医院も含む" in helps["Webサイト未調査"]
-    assert "HP調査可能・未調査" in helps["Webサイト未調査"]
+    assert "Maps WebサイトURLが登録済み" in helps["HP URL取得済み"]
+    assert "fetch_status=OK" in helps["HP調査完了"]
+    assert "fetch_statusがOKまたはREVIEW以外" in helps["HP取得・解析失敗"]
+    assert "HP調査履歴行がない" in helps["HP未調査"]
+    assert "active" in helps["自動調査可能・未調査"]
+    assert "現在のAuto Run条件" in helps["今回のAuto Run残件"]
     assert helps["治療カテゴリ検出あり"] == "Webサイトから対象の治療・検査・施術カテゴリが1種類以上確認された医院数です。診療科の件数ではありません。"
     assert helps["治療カテゴリ検出なし"] == "Webサイト調査は完了していますが、現在定義している治療・検査・施術カテゴリが確認されなかった医院数です。"
 

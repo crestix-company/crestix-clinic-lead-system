@@ -679,9 +679,9 @@ class SupabaseProvenanceWriteRepository:
         classification and the website-preservation decision are NOT reimplemented here --
         they call the exact same pure functions (classify_match_status / build_maps_update)
         that the SQLite path calls, so the anti-downgrade business rule cannot drift between
-        backends. Only I/O (table names, placeholder style, jsonb vs text-json) differs.
-        The whole batch is one transaction, matching the SQLite BEGIN IMMEDIATE scope exactly
-        (either the entire batch commits, or none of it does).
+        backends. Maps updates are limited to Maps-specific projection columns; the feature
+        Writer does not refresh HP, UUID, medical_key, or unrelated projections. The whole
+        batch is one transaction (either the entire batch commits, or none of it does).
         """
         from src.master.google_maps import validate_maps_frame, classify_match_status, build_maps_update, _s
 
@@ -695,7 +695,7 @@ class SupabaseProvenanceWriteRepository:
         batch = hashlib.sha256(json.dumps(records, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         counts = {"TOTAL": len(records), "MATCHED": 0, "WEBSITE": 0, "NO_WEBSITE": 0, "NOT_FOUND": 0,
                   "AMBIGUOUS": 0, "EXCLUDED": 0, "ERROR": 0, "UNLINKED": 0, "PRESERVED_WEBSITE": 0}
-        result_rows, base_rows, history_rows = [], [], []
+        result_rows, history_rows = [], []
         clinic_state = {}
         try:
             with self._conn.cursor() as raw_cur:
@@ -732,13 +732,15 @@ class SupabaseProvenanceWriteRepository:
                 started = time.perf_counter()
                 if clinic_ids:
                     cur.execute(
-                        "SELECT id,base_json,uuid,medical_key FROM public.clinics "
+                        "SELECT id,base_json,effective_json FROM public.clinics "
                         "WHERE id=ANY(%s::bigint[]) ORDER BY id FOR UPDATE", (clinic_ids,),
                     )
-                    for cid, raw_base, uuid_value, stored_key in cur.fetchall():
+                    for cid, raw_base, raw_effective in cur.fetchall():
                         clinic_state[int(cid)] = {
-                            "base": self._json_value(raw_base), "uuid": uuid_value,
-                            "medical_key": stored_key,
+                            "base": self._json_value(raw_base),
+                            # effective_json is TEXT by design. Parse and serialize in Python so
+                            # legacy escaped-NUL payloads remain lossless; do not cast to JSONB.
+                            "effective": self._json_value(raw_effective),
                         }
                     absent = set(clinic_ids) - set(clinic_state)
                     if absent:
@@ -762,12 +764,28 @@ class SupabaseProvenanceWriteRepository:
                     if preserved:
                         counts["PRESERVED_WEBSITE"] += 1
                     base.update(maps_update)
+                    # Keep the user-facing JSON projection in sync while touching only Maps
+                    # keys. The previous full projection refresh rewrote unrelated HP,
+                    # identity, and research columns and required broad cross-schema SELECTs.
+                    clinic_state[cid]["effective"].update(maps_update)
                     if before != base:
                         history_rows.append((
                             cid, "Google Maps取込", dumps(before), dumps(base),
                             _s(row.get("maps_match_method")) or method, now(),
                         ))
-                base_rows = [(cid, Jsonb(clinic_state[cid]["base"])) for cid in clinic_ids]
+                maps_projection_rows = []
+                for cid in clinic_ids:
+                    base = clinic_state[cid]["base"]
+                    effective = clinic_state[cid]["effective"]
+                    maps_projection_rows.append((
+                        cid, Jsonb(base), dumps(effective),
+                        str(base.get("maps_presence_status", "")),
+                        str(base.get("maps_profile_url", "")),
+                        str(base.get("maps_website_url", "")),
+                        str(base.get("maps_match_method", "")),
+                        str(base.get("maps_checked_at", "")),
+                        str(base.get("exclude_reason", "")),
+                    ))
                 phase["maps_calculation_seconds"] = time.perf_counter() - started
 
                 started = time.perf_counter()
@@ -782,11 +800,16 @@ class SupabaseProvenanceWriteRepository:
 
                 started = time.perf_counter()
                 self._execute_values(
-                    cur, "UPDATE public.clinics AS c SET base_json=v.base_json FROM (VALUES ",
-                    [(cid, base_json) for cid, base_json in base_rows],
-                    ") AS v(id,base_json) WHERE c.id=v.id",
+                    cur,
+                    "UPDATE public.clinics AS c SET base_json=v.base_json,effective_json=v.effective_json,"
+                    "maps_presence_status=v.maps_presence_status,maps_profile_url=v.maps_profile_url,"
+                    "maps_website_url=v.maps_website_url,maps_match_method=v.maps_match_method,"
+                    "maps_checked_at=v.maps_checked_at,exclude_reason=v.exclude_reason FROM (VALUES ",
+                    maps_projection_rows,
+                    ") AS v(id,base_json,effective_json,maps_presence_status,maps_profile_url,"
+                    "maps_website_url,maps_match_method,maps_checked_at,exclude_reason) WHERE c.id=v.id",
                 )
-                phase["base_json_bulk_write_seconds"] = time.perf_counter() - started
+                phase["maps_projection_bulk_write_seconds"] = time.perf_counter() - started
 
                 started = time.perf_counter()
                 self._execute_values(
@@ -796,14 +819,6 @@ class SupabaseProvenanceWriteRepository:
                     history_rows,
                 )
                 phase["history_bulk_insert_seconds"] = time.perf_counter() - started
-
-                started = time.perf_counter()
-                columns, projection_rows = self._projection_values(cur, clinic_ids, clinic_state, phase)
-                phase["projection_prefetch_and_calculation_seconds"] = time.perf_counter() - started
-
-                started = time.perf_counter()
-                self._bulk_update_projection(cur, columns if clinic_ids else [], projection_rows)
-                phase["projection_bulk_write_seconds"] = time.perf_counter() - started
 
                 cur.execute(
                     "INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
@@ -1463,7 +1478,11 @@ class SupabaseClinicWriteRepository:
         updated = 0
         with self._conn.transaction():
             with self._conn.cursor() as cur:
-                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                # Serialize retries per input hash without granting UPDATE on the
+                # provenance ledger. The row is immutable after insertion; a
+                # transaction advisory lock plus its unique id preserves idempotency.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (batch_id,))
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s", (batch_id,))
                 old = cur.fetchone()
                 if old:
                     value = old[0] if isinstance(old[0], dict) else json.loads(old[0])
@@ -2256,9 +2275,39 @@ class SupabaseJobsWriteRepository:
         jid = uuid.uuid4().hex
         try:
             with self._conn.cursor() as cur:
+                if kind == "hp":
+                    from src.repository.hp_auto_run_repository import (
+                        ACTIVE_AUTO_STATUSES, AUTO_RUN_KEY, SupabaseHpAutoRunRepository,
+                    )
+                    SupabaseHpAutoRunRepository._lock(cur)
+                    cur.execute(
+                        "SELECT value FROM app_config.settings WHERE key=%s FOR UPDATE",
+                        (AUTO_RUN_KEY,),
+                    )
+                    auto_state = SupabaseHpAutoRunRepository._decode(cur.fetchone())
+                    if auto_state and auto_state.get("status") in ACTIVE_AUTO_STATUSES:
+                        raise ValueError("Auto Runが未完了です。HP Jobを作成できません。")
+                    cur.execute(
+                        "SELECT 1 FROM research.research_jobs "
+                        "WHERE kind='hp' AND status='RUNNING' LIMIT 1"
+                    )
+                    if cur.fetchone():
+                        raise ValueError("実行中HP Jobがあります。別のJobを作成できません。")
+                    sql += (
+                        " AND NOT EXISTS (SELECT 1 FROM research.research_job_items queued_i "
+                        "JOIN research.research_jobs queued_j ON queued_j.id=queued_i.job_id "
+                        "WHERE queued_i.clinic_id=clinics.id "
+                        "AND queued_i.state IN ('PENDING','RUNNING') "
+                        "AND queued_j.kind='hp' AND queued_j.status IN ('RUNNING','PAUSED','BUDGET'))"
+                    )
+                    from_sql = "public.clinics AS clinics"
+                    lock_sql = " FOR UPDATE OF clinics SKIP LOCKED"
+                else:
+                    from_sql = "public.clinics"
+                    lock_sql = ""
                 cur.execute(
-                    "SELECT id FROM public.clinics WHERE " + sql
-                    + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s",
+                    "SELECT id FROM " + from_sql + " WHERE " + sql
+                    + " ORDER BY (uuid<>'') DESC,is_new DESC,id LIMIT %s" + lock_sql,
                     (*args, limit),
                 )
                 ids = [row[0] for row in cur.fetchall()]
