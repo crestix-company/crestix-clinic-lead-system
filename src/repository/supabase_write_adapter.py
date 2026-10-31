@@ -419,6 +419,15 @@ class SupabaseProvenanceWriteRepository:
                 name_address_keys.add((name, address))
 
         candidates = {}
+        # Keep every indexed ANY()/unnest statement comfortably below the runtime role's
+        # 15-second statement_timeout.  This only bounds candidate I/O; resolution order and
+        # ambiguity rules remain in _find_target_prefetched().
+        chunk_size = 5_000
+
+        def chunks(values):
+            values = sorted(values)
+            for offset in range(0, len(values), chunk_size):
+                yield values[offset:offset + chunk_size]
 
         def collect_candidate_rows(rows):
             for clinic_id, official_number, clinic_key, phone_key, name_norm, address_norm in rows:
@@ -430,35 +439,48 @@ class SupabaseProvenanceWriteRepository:
                     "address_norm": address_norm,
                 }
 
-        if internal_ids or med_values:
+        for id_chunk in chunks(internal_ids):
             cur.execute(
                 "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
                 "tel_match_key,name_norm,address_norm FROM public.clinics "
-                "WHERE merged_into IS NULL AND (id=ANY(%s::bigint[]) "
-                "OR (COALESCE(base_json->>'clinic_id','')<>'' "
-                "AND base_json->>'clinic_id'=ANY(%s::text[])))",
-                (sorted(internal_ids), sorted(med_values)),
+                "WHERE merged_into IS NULL AND id=ANY(%s::bigint[])",
+                (id_chunk,),
             )
             collect_candidate_rows(cur.fetchall())
 
-        # Legacy official-number identity remains supported through one batch lookup. This may
-        # scan once if no index exists, never once per CSV row. In the current production data
-        # the field is empty; Collector's official identifier maps to base_json.clinic_id.
+        # Match the idx_clinics_active_base_clinic_id partial-index predicate verbatim.  Keeping
+        # internal-ID and canonical-ID lookups separate also avoids a large BitmapOr plan.
+        for med_chunk in chunks(med_values):
+            cur.execute(
+                "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
+                "tel_match_key,name_norm,address_norm FROM public.clinics "
+                "WHERE merged_into IS NULL AND COALESCE(base_json->>'clinic_id','')<>'' "
+                "AND base_json->>'clinic_id'=ANY(%s::text[])",
+                (med_chunk,),
+            )
+            collect_candidate_rows(cur.fetchall())
+
+        # Legacy official-number identity remains supported.  The field has no production
+        # index, so an ANY(input) predicate still performs a Seq Scan.  Scan the nonblank legacy
+        # compatibility population exactly once and filter it in memory, instead of embedding
+        # tens of thousands of input values in that scan (or scanning once per row).
         if med_values:
             cur.execute(
                 "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
                 "tel_match_key,name_norm,address_norm FROM public.clinics "
-                "WHERE merged_into IS NULL AND base_json->>'medical_institution_number'=ANY(%s::text[])",
-                (sorted(med_values),),
+                "WHERE merged_into IS NULL "
+                "AND COALESCE(base_json->>'medical_institution_number','')<>''"
             )
-            collect_candidate_rows(cur.fetchall())
+            collect_candidate_rows(
+                row for row in cur.fetchall() if row[1] in med_values
+            )
 
-        if phone_keys:
+        for phone_chunk in chunks(phone_keys):
             cur.execute(
                 "SELECT id,base_json->>'medical_institution_number',base_json->>'clinic_id',"
                 "tel_match_key,name_norm,address_norm FROM public.clinics "
                 "WHERE merged_into IS NULL AND tel_match_key=ANY(%s::text[])",
-                (sorted(phone_keys),),
+                (phone_chunk,),
             )
             collect_candidate_rows(cur.fetchall())
 
@@ -479,9 +501,9 @@ class SupabaseProvenanceWriteRepository:
             if key[0] and key[1]:
                 by_name_address.setdefault(key, []).append(clinic_id)
 
-        if name_address_keys:
-            pair_names = [pair[0] for pair in sorted(name_address_keys)]
-            pair_addresses = [pair[1] for pair in sorted(name_address_keys)]
+        for pair_chunk in chunks(name_address_keys):
+            pair_names = [pair[0] for pair in pair_chunk]
+            pair_addresses = [pair[1] for pair in pair_chunk]
             cur.execute(
                 "WITH input_pairs AS (SELECT * FROM unnest(%s::text[],%s::text[]) "
                 "AS p(name_norm,address_norm)) "
