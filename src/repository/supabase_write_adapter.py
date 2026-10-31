@@ -1141,6 +1141,28 @@ class SupabaseClinicWriteRepository:
         return all(cur.fetchone())
 
     @classmethod
+    def _comdesk_identity_match_exists(cls, cur, comdesk_uuid, clinic_id):
+        """True if the Comdesk UUID/Clinic pairing is backed by original rows or,
+        when the common-identity schema is available, by the canonical identity
+        link. Skips the sales_entity_* half of the check when that schema is
+        disabled or absent so apply_comdesk_sync never queries dropped/未作成
+        tables unconditionally."""
+        if cls._common_identity_schema_available(cur):
+            cur.execute(
+                "SELECT 1 FROM provenance.comdesk_original_rows WHERE uuid=%s AND clinic_id=%s "
+                "UNION SELECT 1 FROM public.sales_entity_comdesk_identity i "
+                "JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
+                "WHERE i.comdesk_uuid=%s AND ec.clinic_id=%s LIMIT 1",
+                (comdesk_uuid, clinic_id, comdesk_uuid, clinic_id),
+            )
+        else:
+            cur.execute(
+                "SELECT 1 FROM provenance.comdesk_original_rows WHERE uuid=%s AND clinic_id=%s LIMIT 1",
+                (comdesk_uuid, clinic_id),
+            )
+        return cur.fetchone()
+
+    @classmethod
     def _attach_common_identity(cls, cur, candidates, uuids=()):
         """Load canonical identity metadata without copying it into clinics.uuid."""
         if not cls._common_identity_schema_available(cur):
@@ -1493,14 +1515,7 @@ class SupabaseClinicWriteRepository:
                 for item in changes:
                     cur.execute("SELECT uuid,hp_url,hp_rank,hp_status,base_json,effective_json FROM public.clinics WHERE id=%s AND merged_into IS NULL FOR UPDATE", (item["clinic_id"],))
                     row = cur.fetchone()
-                    cur.execute(
-                        "SELECT 1 FROM provenance.comdesk_original_rows WHERE uuid=%s AND clinic_id=%s "
-                        "UNION SELECT 1 FROM public.sales_entity_comdesk_identity i "
-                        "JOIN public.sales_entity_clinics ec USING(common_clinic_id) "
-                        "WHERE i.comdesk_uuid=%s AND ec.clinic_id=%s LIMIT 1",
-                        (item["comdesk_uuid"], item["clinic_id"], item["comdesk_uuid"], item["clinic_id"]),
-                    )
-                    identity = cur.fetchone()
+                    identity = self._comdesk_identity_match_exists(cur, item["comdesk_uuid"], item["clinic_id"])
                     if not row or not identity:
                         raise ValueError("反映直前にComdesk UUIDとClinic内部IDの対応が変わりました。再取込してください。")
                     cur.execute(
