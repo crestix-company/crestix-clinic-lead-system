@@ -244,3 +244,56 @@ def test_comdesk_import_holds_different_uuid_for_same_canonical_entity():
     match, _ = SupabaseClinicWriteRepository._match_common_identity(record, [candidate])
     assert match.status == "AMBIGUOUS"
     assert "UUID" in match.reason
+
+
+def test_comdesk_sync_apply_skips_dropped_sales_entity_tables_when_schema_unavailable(monkeypatch):
+    """apply_comdesk_sync's identity re-check must not unconditionally query
+    public.sales_entity_comdesk_identity/sales_entity_clinics: those tables were
+    intentionally dropped on 2026-10-31 (remove_unused_future_public_tables_and_
+    cloudrun_readonly_view_20261031) and CLINIC_COMMON_IDENTITY_ENABLED is 0 in
+    production. Querying them unconditionally would raise
+    "relation ... does not exist" on every Step7 apply."""
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
+
+    class OriginalRowsOnlyCursor:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, query, params=()):
+            self.queries.append(query)
+            assert "sales_entity" not in query
+
+        def fetchone(self):
+            return (1,)
+
+    monkeypatch.delenv("CLINIC_COMMON_IDENTITY_ENABLED", raising=False)
+    cursor = OriginalRowsOnlyCursor()
+    result = SupabaseClinicWriteRepository._comdesk_identity_match_exists(cursor, "comdesk-uuid-1", 42)
+    assert result == (1,)
+    assert len(cursor.queries) == 1
+    assert "provenance.comdesk_original_rows" in cursor.queries[0]
+
+
+def test_comdesk_sync_apply_also_checks_canonical_identity_when_schema_available(monkeypatch):
+    from src.repository.supabase_write_adapter import SupabaseClinicWriteRepository
+
+    class FullSchemaCursor:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, query, params=()):
+            self.queries.append(query)
+            if "to_regclass" in query:
+                self._regclass_query = True
+
+        def fetchone(self):
+            if getattr(self, "_regclass_query", False):
+                self._regclass_query = False
+                return ("public.sales_entity_clinics", "public.sales_entities", "public.sales_entity_comdesk_identity")
+            return (1,)
+
+    monkeypatch.setenv("CLINIC_COMMON_IDENTITY_ENABLED", "1")
+    cursor = FullSchemaCursor()
+    result = SupabaseClinicWriteRepository._comdesk_identity_match_exists(cursor, "comdesk-uuid-1", 42)
+    assert result == (1,)
+    assert any("sales_entity_comdesk_identity" in q for q in cursor.queries)
