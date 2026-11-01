@@ -30,13 +30,14 @@ def test_nav_hides_outreach_pages_when_read_only():
     is_cloud_run_deployment() (any Cloud Run deployment is nav-locked
     regardless of CLINIC_READ_ONLY_UI -- see app_v2.py's write_disabled
     comment), but read_only must still be one of the ORed conditions, so
-    CLINIC_READ_ONLY_UI=true alone still guarantees NAV[:2] exactly as
-    before this change."""
+    CLINIC_READ_ONLY_UI=true alone keeps email and admin surfaces hidden,
+    while the read-only Clinic Master call screen remains available."""
     text = _app_source()
     assert "nav_locked = read_only or is_cloud_run_deployment()" in text
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in text
+    assert 'nav_options = NAV[:2] + ["コール"] if nav_locked else NAV' in text
     nav_start = text.index("NAV = [")
     nav_line = text[nav_start:text.index("]", nav_start) + 1]
+    assert "コール" in nav_line
     assert "メール送付文章" in nav_line
     assert "Email調査" in nav_line
 
@@ -48,15 +49,15 @@ def test_outreach_email_page_call_passes_read_only():
     assert "read_only=read_only" in call
 
 
-def test_outreach_email_page_threads_read_only_to_both_draft_surfaces():
+def test_call_followup_fields_respect_read_only_and_send_is_always_disabled():
     text = _outreach_ui_source()
     sig_start = text.index("def outreach_email_page(")
     sig = text[sig_start:text.index(":", sig_start)]
     assert "read_only=False" in sig
     body_start = text.index(":", sig_start)
     body = text[body_start:]
-    assert "_tab_results(read_only=read_only)" in body
-    assert "auto_draft_save_page(demo=demo, read_only=read_only)" in body
+    assert 'disabled=read_only' in body
+    assert 'disabled=True' in body
 
 
 def test_manual_draft_save_button_disabled_when_read_only():

@@ -359,4 +359,4 @@ def test_sidebar_has_single_mail_send_text_menu():
     assert "メール送付文章" in app_v2.NAV
     assert "営業メール" not in app_v2.NAV
     assert app_v2.NAV.count("メール送付文章") == 1
-    assert app_v2.NAV[:3] == ["かんたん操作", "営業対象・出力", "Email調査"] and app_v2.NAV[-1] == "詳細設定"
+    assert app_v2.NAV[:4] == ["かんたん操作", "営業対象・出力", "コール", "Email調査"] and app_v2.NAV[-1] == "詳細設定"
