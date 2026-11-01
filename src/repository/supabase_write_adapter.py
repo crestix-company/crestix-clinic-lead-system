@@ -828,6 +828,8 @@ class SupabaseClinicWriteRepository:
         self._conn = conn
 
     def insert_new_clinic(self, record, *, is_new=False, is_authoritative_official_source=False):
+        from src.repository.comdesk_writer_safety import reject_comdesk_clinic_creation
+        reject_comdesk_clinic_creation(record)
         key = generate_medical_key_for_new_clinic(record, is_authoritative_official_source=is_authoritative_official_source)
         ts = now()
         try:
