@@ -839,11 +839,12 @@ def import_ui(store,demo):
         table = upload_table(upload,"comdesk")
         inferred = infer_comdesk_columns(table)
         mapping = {}
-        labels = {"uuid":"UUID・案件ID","clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+                  "clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１","address2":"住所２・建物名","postal_code":"郵便番号",
                   "manager_name":"院長名","url":"HP URL","epark_url":"EPARK URL"}
         with st.expander("列の対応を確認",expanded=True):
-            st.caption("28列形式の「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
+            st.caption("Comdesk UUIDと案件IDは別項目です。28列形式の「UUID」「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
             for field,label in labels.items():
                 choices = [None]+list(range(len(table.headers)))
                 mapping[field] = st.selectbox(label+"の列",choices,index=choices.index(inferred.get(field)),format_func=lambda i:"未設定" if i is None else f"{i+1}列目：{table.headers[i]}",key="comdesk_map_"+field)
@@ -1400,12 +1401,13 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     if upload:
         table = upload_table(upload, key_prefix)
         inferred = infer_comdesk_columns(table)
-        labels = {"uuid":"UUID・案件ID", "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+                  "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
                   "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
         mapping = {}
         with st.expander("列の対応を確認", expanded=False):
-            st.caption("既存の28列形式を含め、UUID・医院名・電話番号・住所を使ってClinic Masterと照合します。")
+            st.caption("Comdesk UUIDはClinic UUIDと別の外部IDです。案件IDも独立して保持し、医院名・電話番号・住所は照合根拠として扱います。")
             for field, label in labels.items():
                 choices = [None]+list(range(len(table.headers)))
                 selected = inferred.get(field)
@@ -2847,8 +2849,22 @@ def main():
     # reasoning. nav_locked, not read_only alone, decides nav visibility.
     from src.cloud_run.deployment_context import is_cloud_run_deployment
     nav_locked = read_only or is_cloud_run_deployment()
+    comdesk_preview_enabled = (
+        os.environ.get("CLINIC_COMDESK_UUID_PREVIEW_ENABLED", "").strip().casefold()
+        in {"1", "true", "yes", "on"}
+        and not is_cloud_run_deployment()
+    )
+    comdesk_review_enabled = (
+        os.environ.get("CLINIC_COMDESK_REVIEW_ENABLED", "").strip().casefold()
+        in {"1", "true", "yes", "on"}
+        and not is_cloud_run_deployment()
+    )
     with st.sidebar:
         nav_options = NAV[:2] if nav_locked else NAV
+        if comdesk_preview_enabled:
+            nav_options = [*nav_options, "Comdesk UUID照合プレビュー"]
+        if comdesk_review_enabled:
+            nav_options = [*nav_options, "Comdesk HOLD確認"]
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
@@ -2867,6 +2883,16 @@ def main():
         st.warning("READ ONLY画面確認モードです。取込・UUID更新・Job操作・データ更新は無効です。")
     elif nav_locked:
         st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
+
+    if nav == "Comdesk UUID照合プレビュー" and comdesk_preview_enabled:
+        from src.comdesk_uuid_preview_ui import render_comdesk_uuid_preview
+        from src.master.samples import sample_records
+        render_comdesk_uuid_preview(sample_records(), master_label="合成Clinic Master（実DB未接続）")
+        return
+    if nav == "Comdesk HOLD確認" and comdesk_review_enabled:
+        from src.comdesk_hold_review_ui import render_comdesk_hold_review_page
+        render_comdesk_hold_review_page()
+        return
 
     from src.repository.backend import active_backend, BACKEND_SUPABASE
     from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
