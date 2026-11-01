@@ -77,7 +77,8 @@ def test_simple_hp_workflow_can_resume_paused_job_and_blocks_duplicate_start():
 
     source = inspect.getsource(app_v2.simple_workflow_ui)
     assert "unfinished" in source
-    assert "disabled=write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
+    assert "write_disabled or runner.running() or unfinished or auto_active or actual == 0" in source
+    assert "or not area_and_medical_type_selected" in source
     assert 'j.get("kind") == "hp"' in source
 
     admin_source = inspect.getsource(app_v2.single_hp_job_recovery_ui)
