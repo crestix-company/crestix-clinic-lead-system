@@ -81,6 +81,8 @@ class EmailAutoRunner:
         return bool(self._thread and self._thread.is_alive())
 
     def start(self, run_id=None):
+        from src.safety.preview_mode import assert_not_comdesk_preview_only
+        assert_not_comdesk_preview_only("Email自動実行")
         with self._lock:
             self.last_start_stage = "running_check"
             if self.running():

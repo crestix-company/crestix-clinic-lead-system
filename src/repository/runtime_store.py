@@ -314,16 +314,31 @@ class SupabaseRuntimeStore:
             output.append(fixed_row(record, headers, mapping, _json(chosen[1])))
         return output
 
-    def _attach_export_metadata(self, records, rows):
+    def _attach_export_metadata(self, records, rows, *, include_unverified_comdesk_email=True):
         """Append formal outbound-only HP rank and official-verified email columns.
 
         The stored/imported Comdesk row remains the legacy 28-column source row.
         These two values are derived from current system-of-record data at export time.
         """
         emails = self._verified_emails_for_ids([record["id"] for record in records])
+        ids = [int(record["id"]) for record in records]
+        if include_unverified_comdesk_email and ids and self._conn.__class__.__module__.startswith("psycopg"):
+            with self._conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id,base_json->>'comdesk_unverified_email' FROM public.clinics WHERE id=ANY(%s::bigint[])",
+                    (ids,),
+                )
+                for clinic_id, email in cur.fetchall():
+                    if email and int(clinic_id) not in emails:
+                        emails[int(clinic_id)] = str(email).strip()
         output = []
         for record, row in zip(records, rows):
-            rank = str(record.get("effective_hp_rank") or "").strip().upper()
+            manual_fields = record.get("manual_fields") or ()
+            if "hp_rank" in manual_fields:
+                rank_value = record.get("hp_rank")
+            else:
+                rank_value = record.get("comdesk_sync_hp_rank") or record.get("effective_hp_rank")
+            rank = str(rank_value or "").strip().upper()
             if rank not in {"A", "B", "C", "D"}:
                 rank = ""
             output.append([*row, rank, emails.get(int(record["id"]), "")])
@@ -370,6 +385,32 @@ class SupabaseRuntimeStore:
         return {"id": row[0], "created_at": row[1], "updated_at": row[2],
                 "target_count": row[3], "done_count": row[4]}
 
+    def latest_exportable_hp_job(self):
+        """Return the latest PAUSED or fully COMPLETED HP job usable as the Step5 anchor.
+
+        A paused job may still contain PENDING/RUNNING items; hp_job_export_summary() only
+        counts/exports DONE items, so pausing creates a stable point where completed work can
+        be exported without waiting for the whole batch to finish. The historical
+        latest_completed_hp_job() contract intentionally remains unchanged.
+        """
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT j.id,j.created_at,j.updated_at,j.status,count(i.clinic_id) AS target_count, "
+                "count(*) FILTER (WHERE i.state='DONE') AS done_count "
+                "FROM research.research_jobs j "
+                "JOIN research.research_job_items i ON i.job_id=j.id "
+                "WHERE j.kind='hp' AND j.status IN ('PAUSED','COMPLETED') "
+                "GROUP BY j.id,j.created_at,j.updated_at,j.status "
+                "HAVING count(i.clinic_id)>0 "
+                "AND (j.status='PAUSED' OR count(*) FILTER (WHERE i.state<>'DONE')=0) "
+                "ORDER BY j.updated_at DESC NULLS LAST,j.created_at DESC,j.id DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "created_at": row[1], "updated_at": row[2],
+                "status": row[3], "target_count": row[4], "done_count": row[5]}
+
     @_retry_closed_read_connection
     def hp_job_export_summary(self, job_id):
         """Current-job metrics plus cumulative UUID-empty HPs, including Human Review positives."""
@@ -408,7 +449,7 @@ class SupabaseRuntimeStore:
                 "AND COALESCE(BTRIM(h.final_url),'')<>'' AND COALESCE(BTRIM(c.uuid),'')='' "
                 "AND c.merged_into IS NULL AND c.merge_hold=false AND NOT " + exclusion + "),'{}') "
                 "FROM research.research_job_items i "
-                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status='COMPLETED' "
+                "JOIN research.research_jobs j ON j.id=i.job_id AND j.kind='hp' AND j.status IN ('PAUSED','COMPLETED') "
                 "LEFT JOIN public.clinics c ON c.id=i.clinic_id "
                 "LEFT JOIN hp_research.clinic_hp_research h ON h.clinic_id=i.clinic_id "
                 "LEFT JOIN research.research_results rr ON rr.clinic_id=i.clinic_id "
@@ -496,7 +537,9 @@ class SupabaseRuntimeStore:
             raise ValueError(
                 "出力中に対象件数が変わったため、欠落の可能性を避けてCSV/Excel出力を中止しました。"
             )
-        rows = self._attach_export_metadata(records, self._export_records(records, read_only=True))
+        rows = self._attach_export_metadata(
+            records, self._export_records(records, read_only=True), include_unverified_comdesk_email=False,
+        )
         for row in rows:
             for header in READ_ONLY_PENDING_EXPORT_HEADERS:
                 row[COMDESK_EXPORT_HEADERS.index(header)] = ""

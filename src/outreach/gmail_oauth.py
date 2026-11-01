@@ -91,6 +91,8 @@ def _write_token_atomic(path: Path, token_json: str) -> None:
 
 
 def _google_dependencies() -> tuple[Any, Any, Any, Any]:
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Gmail OAuth/API接続")
     try:
         from google.auth.transport.requests import Request
         from google.oauth2.credentials import Credentials

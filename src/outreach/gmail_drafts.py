@@ -16,6 +16,8 @@ from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.safety.preview_mode import assert_not_comdesk_preview_only
+
 from .email_template_v2 import (
     ARTICLE_ABSENT,
     ARTICLE_PRESENT,
@@ -174,6 +176,7 @@ def _recipients(value: str) -> tuple[str, ...]:
 
 def list_existing_drafts(service: Any) -> list[ExistingDraft]:
     """Read IDs and selected headers only; draft bodies are intentionally not fetched."""
+    assert_not_comdesk_preview_only("Gmail API access")
     draft_api = service.users().drafts()
     draft_ids: list[str] = []
     page_token: str | None = None
@@ -216,6 +219,7 @@ def list_existing_drafts(service: Any) -> list[ExistingDraft]:
 
 def list_existing_messages(service: Any, *, query: str) -> list[ExistingMessage]:
     """List message metadata only. Never fetch a sent message body."""
+    assert_not_comdesk_preview_only("Gmail API access")
     api = service.users().messages()
     ids: list[tuple[str, str]] = []
     page_token: str | None = None
