@@ -177,6 +177,8 @@ def dispatch_hp_job(job_id, *, clinic_count=0, env=None, execute_fn=None, job_co
     RECONCILE and BUDGET_EXCEEDED are both final, visible outcomes callers
     must not silently retry.
     """
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Cloud Run HP Job起動")
     from src.cloud_run.dispatch_state import may_dispatch, record_dispatch_state
     from src.cloud_run.job_dispatch import REJECTED, DispatchResult, run_hp_worker_job
     from src.cloud_run.usage_budget import release_dispatch_usage, reserve_dispatch_usage

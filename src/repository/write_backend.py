@@ -30,6 +30,8 @@ def build_write_repositories(backend=None, *, sqlite_path=None, supabase_url=Non
     Mirrors src.repository.backend.build_repositories()'s shape for the READ side.
     """
     from src.repository.write_contracts import WriteRepositories
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("WRITE repositoryの作成")
 
     backend = backend or active_write_backend()
     if backend == WRITE_BACKEND_SQLITE:
@@ -102,6 +104,8 @@ def write_repositories_for(store):
     the live-cutover action this function does not perform on its own.
     """
     from src.repository.write_contracts import WriteRepositories
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("WRITE repositoryの取得")
 
     if active_write_backend() == WRITE_BACKEND_SQLITE:
         from src.repository.sqlite_write_adapter import (

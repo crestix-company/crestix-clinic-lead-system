@@ -166,6 +166,8 @@ class SqliteClinicWriteRepository:
         return result
 
     def apply_comdesk_sync(self, changes, file_hash):
+        from src.safety.preview_mode import assert_not_comdesk_preview_only
+        assert_not_comdesk_preview_only("SQLite Comdesk Step7 Apply")
         import json
         from src.master.store import dumps, now
         from src.master.comdesk_sync import HOURS_FIELDS, SUPPORTED_FIELDS

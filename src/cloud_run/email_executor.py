@@ -74,6 +74,8 @@ def _repositories():
 
 def create_email_run(*, env=None, repositories_factory=None, target_reader=None, config=None):
     """Sync the eligible HP-verified URL cohort and create a durable Auto Run."""
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Cloud Run Email Job作成")
     env = os.environ if env is None else env
     # Validate the target Job and bounded execution before creating durable state.
     job_resource_name(env)
@@ -105,6 +107,8 @@ def create_email_run(*, env=None, repositories_factory=None, target_reader=None,
 
 def dispatch_email_worker(run_id, *, env=None, execute_fn=None, dispatch_repository=None):
     """Dispatch one bounded execution. Ambiguous outcomes are surfaced for operator review."""
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Cloud Run Email Job起動")
     env = os.environ if env is None else env
     name = job_resource_name(env)
     max_clinics_per_execution(env)

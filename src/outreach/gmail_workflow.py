@@ -325,6 +325,8 @@ def create_gmail_draft(
     draft_save_review: dict | None = None,
 ) -> DraftWorkflowResult:
     """Create one draft after Gmail/ledger checks. No call to any send endpoint exists."""
+    from src.safety.preview_mode import assert_not_comdesk_preview_only
+    assert_not_comdesk_preview_only("Gmail API操作")
     if not (gmail_drafts_enabled() if enabled is None else enabled):
         return DraftWorkflowResult("DISABLED", reason="OUTREACH_GMAIL_DRAFTS_ENABLED is not true")
     if not campaign_id.strip():
