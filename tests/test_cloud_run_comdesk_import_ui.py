@@ -103,7 +103,8 @@ def test_write_call_is_gated_by_a_confirmed_checkbox_and_submit_button():
     write_pos = block.index("clinics.import_comdesk(")
     assert confirm_pos < button_pos < write_pos
     button_call = block[button_pos:write_pos]
-    assert "disabled=not confirmed" in button_call
+    assert "not confirmed" in button_call
+    assert "not project_scope_confirmed" in button_call
 
 
 def test_idempotency_key_checked_before_file_uploader_result_is_trusted():

@@ -833,16 +833,26 @@ def upload_table(upload,prefix):
 def import_ui(store,demo):
     st.subheader("1. 既存コムデスクを取り込む")
     st.write("厚生局データ・既存コムデスクは、どちらを先に登録しても使えます。両方を登録後、「保存済みデータを再統合」で既存UUIDへ紐づけられます。")
-    st.caption("クリニック名だけでも取り込めます。C列「名前」はクリニック名、AA列「院長名」は先生のお名前です。出力は毎回A〜AB列の28項目になり、不明な項目は空欄です。")
+    from src.repository.write_backend import WRITE_BACKEND_SUPABASE, active_write_backend
+    supabase_writer = active_write_backend() == WRITE_BACKEND_SUPABASE
+    st.caption(
+        "Supabase取込では独立したComdesk案件IDと確認済みプロジェクトスコープが必須です。"
+        if supabase_writer else
+        "Clinic Masterに医院名・電話番号・住所を照合して取り込みます。"
+    )
+    st.caption("C列「名前」は医院名、AA列「院長名」は先生のお名前です。出力は毎回A〜AB列の28項目になり、不明な項目は空欄です。")
     upload = st.file_uploader("コムデスクCSV・Excel",type=["csv","xlsx","xls"],key="comdesk_upload",disabled=demo)
     if upload:
         table = upload_table(upload,"comdesk")
         inferred = infer_comdesk_columns(table)
         mapping = {}
-        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）",
                   "clinic_name":"医院名","phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１","address2":"住所２・建物名","postal_code":"郵便番号",
                   "manager_name":"院長名","url":"HP URL","epark_url":"EPARK URL"}
+        if supabase_writer:
+            labels["comdesk_case_id"] = "Comdesk案件ID・管理ID・リードID"
+            labels["comdesk_project_id"] = "ComdeskプロジェクトID"
         with st.expander("列の対応を確認",expanded=True):
             st.caption("Comdesk UUIDと案件IDは別項目です。28列形式の「UUID」「名前」「Tel1」「住所１・住所２」も自動対応します。分割住所は照合時に結合し、出力用の元の行は保持します。")
             for field,label in labels.items():
@@ -853,9 +863,32 @@ def import_ui(store,demo):
             st.dataframe(preview,hide_index=True)
             st.caption("照合プレビュー（基本28項目。HPランク・メールアドレスは照合キーに使用しません）")
             st.dataframe(pd.DataFrame([fixed_row({},table.headers,mapping,row) for row in table.data.head(5).values.tolist()],columns=COMDESK_HEADERS),hide_index=True,width="stretch")
-        if st.button("既存案件を登録",type="primary"):
+        project_scope_id = ""
+        project_scope_confirmed = False
+        if supabase_writer:
+            project_scope_id = st.text_input(
+                "固定プロジェクトスコープ（ファイルにProject ID列がない場合）",
+                key="comdesk_project_scope",
+            ).strip()
+            project_scope_confirmed = st.checkbox(
+                "このプロジェクトスコープを確認しました",
+                key="comdesk_project_scope_confirmed",
+                disabled=not project_scope_id,
+            )
+        scope_confirmation_missing = bool(project_scope_id) and not project_scope_confirmed
+        if st.button(
+            "既存案件を登録", type="primary",
+            disabled=demo or scope_confirmation_missing,
+        ):
             with st.spinner("既存案件を登録しています…"):
-                result = write_repositories_for(store).clinics.import_comdesk(table,mapping)
+                repository = write_repositories_for(store).clinics
+                if supabase_writer:
+                    result = repository.import_comdesk(
+                        table, mapping, project_scope_id=project_scope_id,
+                        project_scope_confirmed=project_scope_confirmed,
+                    )
+                else:
+                    result = repository.import_comdesk(table, mapping)
             report_import(result)
     st.subheader("2. 厚生局データを統合する")
     if st.button("同梱の東京都マスターを取り込む",disabled=demo):
@@ -930,7 +963,18 @@ def report_import(result):
     if result.get("already_imported"):
         st.info("このファイルは取込済みです。重複登録していません。")
     else:
-        st.success(f"統合 {result['MATCHED']:,}件／新規追加 {result['NEW']:,}件／要確認重複 {result['AMBIGUOUS']:,}件")
+        st.success(
+            f"統合 {result['MATCHED']:,}件／新規追加 {result['NEW']:,}件"
+            f"／要確認重複 {result['AMBIGUOUS']:,}件"
+        )
+    if result.get("REJECTED"):
+        reasons = "、".join(
+            f"{code}: {count}件" for code, count in result.get("rejection_reasons", {}).items()
+        )
+        st.warning(
+            f"不正または未照合の{result['REJECTED']:,}行をClinic Masterへ登録せず、"
+            f"確認用の保留台帳へ保存しました。{reasons}"
+        )
     if result.get("reintegrated"):
         st.caption(f"保存済み厚生局データ {result['source_records']:,}件の再判定結果です。「新規追加」は、既存コムデスクに一致せず独立して残る医院を含みます。今回まとめた重複：{result['merged_clinics']:,}組。")
 
@@ -1428,10 +1472,14 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     if upload:
         table = upload_table(upload, key_prefix)
         inferred = infer_comdesk_columns(table)
-        labels = {"uuid":"Comdesk UUID（UUID列のみ）", "comdesk_case_id":"Comdesk案件ID・管理ID・リードID",
+        from src.repository.write_backend import WRITE_BACKEND_SUPABASE, active_write_backend
+        labels = {"uuid":"Comdesk UUID（UUID列のみ）",
                   "clinic_name":"医院名", "phone":"電話番号（Tel1）", "prefecture":"都道府県",
                   "address":"住所・住所１", "address2":"住所２・建物名", "postal_code":"郵便番号",
                   "manager_name":"院長名", "url":"HP URL", "epark_url":"EPARK URL"}
+        if active_write_backend() == WRITE_BACKEND_SUPABASE:
+            labels["comdesk_case_id"] = "Comdesk案件ID・管理ID・リードID"
+            labels["comdesk_project_id"] = "ComdeskプロジェクトID"
         mapping = {}
         with st.expander("列の対応を確認", expanded=False):
             st.caption("Comdesk UUIDはClinic UUIDと別の外部IDです。案件IDも独立して保持し、医院名・電話番号・住所は照合根拠として扱います。")
@@ -1443,9 +1491,35 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
             preview = table.data.head(5).copy()
             preview.columns = [f"{i+1}｜{v}" for i,v in enumerate(table.headers)]
             st.dataframe(preview, hide_index=True)
-        if st.button(button_label, type="primary", key=key_prefix+"_submit", disabled=write_disabled, use_container_width=True):
+        project_scope_id = ""
+        project_scope_confirmed = False
+        if active_write_backend() == WRITE_BACKEND_SUPABASE:
+            project_scope_id = st.text_input(
+                "固定プロジェクトスコープ（ファイルにProject ID列がない場合）",
+                key=key_prefix+"_project_scope",
+            ).strip()
+            project_scope_confirmed = st.checkbox(
+                "このプロジェクトスコープを確認しました",
+                key=key_prefix+"_project_scope_confirmed",
+                disabled=not project_scope_id,
+            )
+        scope_confirmation_missing = bool(project_scope_id) and not project_scope_confirmed
+        if st.button(
+            button_label,
+            type="primary",
+            key=key_prefix+"_submit",
+            disabled=write_disabled or scope_confirmation_missing,
+            use_container_width=True,
+        ):
             with st.spinner("Comdeskデータを照合・登録しています…"):
-                result = write_repositories_for(store).clinics.import_comdesk(table, mapping)
+                repository = write_repositories_for(store).clinics
+                if active_write_backend() == WRITE_BACKEND_SUPABASE:
+                    result = repository.import_comdesk(
+                        table, mapping, project_scope_id=project_scope_id,
+                        project_scope_confirmed=project_scope_confirmed,
+                    )
+                else:
+                    result = repository.import_comdesk(table, mapping)
             report_import(result)
     # These are independent, separately-gated panels -- they must render
     # regardless of whether the legacy uploader above has a file selected.
@@ -1700,8 +1774,8 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
     permanently blocking this panel regardless of flag/operator/writer
     configuration.)
 
-    Reuses import_comdesk() business logic as-is (same UUID matching,
-    provenance, and import-batch idempotency as the local path), but NOT the
+    Uses import_comdesk() validation, rejection-ledger, and import-batch
+    idempotency, but NOT the
     same connection: writes go through a dedicated, fail-closed Comdesk
     import writer role (src.cloud_run.comdesk_import_writer), never the
     general write backend every other local write path shares. Also adds
@@ -1764,7 +1838,43 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
             return
         table = upload_table(upload, key_prefix + "_cloud")
         mapping = infer_comdesk_columns(table)
-        idempotency_key = comdesk_import_idempotency_key(upload.getvalue(), mapping)
+        with st.expander("案件ID・プロジェクトスコープの対応", expanded=True):
+            choices = [None] + list(range(len(table.headers)))
+            for field, label in (
+                ("comdesk_case_id", "独立したComdesk案件ID"),
+                ("comdesk_project_id", "ComdeskプロジェクトID"),
+            ):
+                hits = [
+                    index for index, header in enumerate(table.headers)
+                    if "".join(str(header).strip().casefold().replace("_", " ").split())
+                    in (
+                        {"案件id", "ケースid", "管理id", "リードid", "leadid", "caseid", "案件番号"}
+                        if field == "comdesk_case_id"
+                        else {"プロジェクトid", "案件プロジェクトid", "projectid", "projectuuid"}
+                    )
+                ]
+                inferred = hits[0] if len(hits) == 1 else None
+                mapping[field] = st.selectbox(
+                    label, choices,
+                    index=choices.index(inferred),
+                    format_func=lambda value: (
+                        "未設定" if value is None
+                        else f"{value + 1}列目：{table.headers[value]}"
+                    ),
+                    key=key_prefix + "_cloud_map_" + field,
+                )
+            project_scope_id = st.text_input(
+                "固定プロジェクトスコープ（Project ID列がない場合）",
+                key=key_prefix + "_cloud_project_scope",
+            ).strip()
+            project_scope_confirmed = st.checkbox(
+                "このプロジェクトスコープを確認しました",
+                key=key_prefix + "_cloud_project_scope_confirmed",
+                disabled=not project_scope_id,
+            )
+        idempotency_key = comdesk_import_idempotency_key(
+            upload.getvalue(), {**mapping, "__project_scope_id__": project_scope_id},
+        )
         applied_key = st.session_state.get(key_prefix + "_cloud_applied_key")
         if applied_key == idempotency_key:
             st.success("この内容は既にこのセッションで取り込み済みです。別のファイルを選択してください。")
@@ -1777,7 +1887,11 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
         st.dataframe(display_preview, hide_index=True)
         confirmed = st.checkbox("内容を確認しました", key=key_prefix + "_cloud_confirm_" + idempotency_key)
         if st.button(
-            "確認のうえ取り込む", type="primary", disabled=not confirmed,
+            "確認のうえ取り込む", type="primary",
+            disabled=(
+                not confirmed
+                or bool(project_scope_id) and not project_scope_confirmed
+            ),
             key=key_prefix + "_cloud_submit",
         ):
             try:
@@ -1786,7 +1900,10 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
                 st.error(str(exc))
                 return
             with st.spinner("Comdeskデータを照合・登録しています…"):
-                result = writer_repositories.clinics.import_comdesk(table, mapping)
+                result = writer_repositories.clinics.import_comdesk(
+                    table, mapping, project_scope_id=project_scope_id,
+                    project_scope_confirmed=project_scope_confirmed,
+                )
             st.session_state[key_prefix + "_cloud_applied_key"] = idempotency_key
             logging.info(
                 "cloud_comdesk_import operator=%s idempotency_key=%s result=%s",

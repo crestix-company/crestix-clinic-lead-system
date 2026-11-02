@@ -18,7 +18,7 @@ COMDESK_HEADERS = [
 COMDESK_EXPORT_HEADERS = [*COMDESK_HEADERS, "HPランク", "メールアドレス"]
 
 EXTRA_ALIASES = {
-    "uuid": ["UUID", "案件ID", "管理ID", "リードID", "lead_id", "id"],
+    "uuid": ["UUID", "Comdesk UUID", "comdesk_uuid"],
     "clinic_name": ["名前"],
     "phone": ["Tel1", "電話番号1"],
     "address": ["住所1", "address1"],

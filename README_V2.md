@@ -13,6 +13,8 @@
 7. 治療、HPランク、広告施策、年齢、昼の検査・手術専用枠などを既存ロジックで判定する
 8. 営業対象フィルターで絞り、**Comdesk A〜ABの28列固定**で出力する
 
+Supabase Comdesk取込は、独立した案件IDと確認済みプロジェクトスコープを必要とします。検証不合格行はClinic Masterへ登録せず、`provenance.comdesk_rejections`へ保留します。テーブル・権限の適用手順と保存内容は[`docs/supabase_migration/38_comdesk_rejection_review.md`](docs/supabase_migration/38_comdesk_rejection_review.md)を参照してください。
+
 ## Google Mapsデータ
 
 「マスター管理」から次を行えます。

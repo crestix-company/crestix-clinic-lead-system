@@ -21,6 +21,7 @@ that rule. Only the SQL/I/O (find_target's queries) is a Postgres-specific port.
 docs/supabase_migration/23_stage4d_gate2_offline_preparation.md and
 tests/test_stage4d_write_repository.py for the parity tests this relies on.
 """
+import hashlib
 import json
 import re
 import time
@@ -384,6 +385,43 @@ class SupabaseProvenanceWriteRepository:
             self._conn.commit()
         except Exception as exc:
             _rollback_and_raise(self._conn, exc)
+
+    @staticmethod
+    def insert_comdesk_rejections(
+        cur, batch_id, mapping, rejections, *, fixed_project_scope_id="",
+        project_scope_confirmed=False,
+    ):
+        mapping_snapshot = {
+            "column_mapping": mapping,
+            "fixed_project_scope_id": fixed_project_scope_id,
+            "project_scope_confirmed": bool(project_scope_confirmed),
+        }
+        rows = [
+            (
+                "コムデスク",
+                batch_id,
+                item.row_number,
+                item.reason_code,
+                item.reason_detail,
+                Jsonb(item.raw_record),
+                Jsonb(item.normalized_record) if item.normalized_record is not None else None,
+                Jsonb(mapping_snapshot),
+                item.project_scope_id,
+                item.source_hash,
+                now(),
+                "OPEN",
+            )
+            for item in rejections
+        ]
+        return SupabaseProvenanceWriteRepository._execute_values(
+            cur,
+            "INSERT INTO provenance.comdesk_rejections"
+            "(source,import_batch_id,row_number,reason_code,reason_detail,raw_record_json,"
+            "normalized_record_json,mapping_snapshot_json,project_scope_id,source_hash,created_at,status) VALUES ",
+            rows,
+            " ON CONFLICT(import_batch_id,row_number,reason_code,source_hash) DO NOTHING",
+            chunk_size=250,
+        )
 
     @staticmethod
     def _prefetch_maps_targets(cur, records):
@@ -1553,30 +1591,29 @@ class SupabaseClinicWriteRepository:
                             (batch_id, "comdesk_sync", Jsonb(result), now()))
         return result
 
-    def import_comdesk(self, table, mapping=None):
-        """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
+    def import_comdesk(
+        self, table, mapping=None, *, project_scope_id=None,
+        project_scope_confirmed=False,
+    ):
+        """Validate a scoped Comdesk batch, persist holds, and import safe existing-clinic matches.
 
-        Business semantics intentionally remain the same as the legacy row-by-row path:
-        UUID/base updates, NEW creation, provenance, original rows, histories, Human Review
-        candidates, projections and import-batch idempotency are all preserved. Only the
-        database access pattern changes.
+        Rejected source rows never enter Clinic Master. Comdesk identifiers remain provenance,
+        and unmatched rows are held rather than used to create canonical clinics.
         """
-        from src.master.comdesk import infer_comdesk_columns, record_from_row
+        from src.master.comdesk import infer_comdesk_columns
         from src.master.matching import match_record
         from src.master.store import digest
+        from src.repository.comdesk_writer_safety import (
+            ComdeskRejection,
+            clinic_master_fields,
+            comdesk_match_record,
+            validate_comdesk_writer_import,
+        )
 
         total_started = time.perf_counter()
         phase = {}
         mapping = dict(mapping or infer_comdesk_columns(table))
-        if "uuid" not in mapping:
-            hits = [
-                i for i, header in enumerate(table.headers)
-                if header.strip().casefold()
-                in {"uuid", "案件id", "管理id", "リードid", "lead_id", "id"}
-            ]
-            mapping["uuid"] = hits[0] if len(hits) == 1 else None
-        if mapping.get("clinic_name") is None:
-            raise ValueError("医院名の列を指定してください。")
+        submitted_mapping = dict(mapping)
         if not all(
             value is None or isinstance(value, int) and 0 <= value < len(table.headers)
             for value in mapping.values()
@@ -1584,24 +1621,29 @@ class SupabaseClinicWriteRepository:
             raise ValueError("対応する列番号を確認してください。")
 
         rows = table.data.values.tolist()
-        batch = digest(["comdesk", table.headers, mapping, rows])
+        batch = digest([
+            "comdesk", table.headers, mapping, rows,
+            str(project_scope_id or "").strip(),
+        ])
         template_id = digest([table.headers, mapping])
 
-        # Validate the whole file before beginning any write transaction. The old path could
-        # spend tens of minutes writing rows and only then discover a malformed late row,
-        # forcing the entire transaction to roll back.
-        prepared = []
-        for index, raw in enumerate(rows):
-            try:
-                record = record_from_row(raw, mapping)
-            except ValueError as exc:
-                raise ValueError(f"{index + 2}行目: {exc}") from exc
-            if not record.get("clinic_name", "").strip():
-                raise ValueError(f"{index + 2}行目の医院名が空白です。取込は取り消しました。")
-            prepared.append((index, raw, record))
+        validation = validate_comdesk_writer_import(
+            table, mapping, project_scope_id=project_scope_id,
+            project_scope_confirmed=project_scope_confirmed,
+        )
+        mapping = validation.mapping
+        mapping_snapshot = {
+            "submitted_column_mapping": submitted_mapping,
+            "validated_column_mapping": mapping,
+        }
+        prepared = validation.accepted_rows
+        rejections = validation.rejections
         phase["preflight_seconds"] = time.perf_counter() - total_started
 
-        counts = {"MATCHED": 0, "NEW": 0, "AMBIGUOUS": 0, "template_id": template_id}
+        counts = {
+            "MATCHED": 0, "NEW": 0, "AMBIGUOUS": 0,
+            "REJECTED": 0, "rejection_reasons": {}, "template_id": template_id,
+        }
         histories = []
         decisions = []
         mutated_ids = set()
@@ -1626,6 +1668,87 @@ class SupabaseClinicWriteRepository:
                     existing = old[0] if isinstance(old[0], dict) else json.loads(old[0])
                     return {**existing, "already_imported": True}
 
+                if prepared:
+                    cur.execute(
+                        "SELECT i.indisunique AND i.indisvalid AND i.indisready "
+                        "AND pg_get_expr(i.indexprs,i.indrelid) LIKE '%comdesk_project_id%' "
+                        "AND pg_get_expr(i.indexprs,i.indrelid) LIKE '%comdesk_case_id%' "
+                        "AND pg_get_expr(i.indpred,i.indrelid) LIKE '%コムデスク%' "
+                        "FROM pg_index i "
+                        "WHERE i.indexrelid=to_regclass('provenance.comdesk_project_case_unique_idx')"
+                    )
+                    index_row = cur.fetchone()
+                    if not index_row or not index_row[0]:
+                        raise RuntimeError(
+                            "Comdesk案件IDの一意制約が未適用です。"
+                            "supabase/migrations/20261021100000_comdesk_project_case_unique.sql を適用してください。"
+                        )
+
+                    existing_pair_keys = set()
+                    pair_rows = [
+                        (item[2]["comdesk_project_id"], item[2]["comdesk_case_id"], item)
+                        for item in prepared
+                    ]
+                    for offset in range(0, len(pair_rows), 500):
+                        chunk = pair_rows[offset:offset + 500]
+                        cur.execute(
+                            "WITH input_pairs AS ("
+                            "SELECT * FROM unnest(%s::text[],%s::text[]) "
+                            "AS p(project_scope_id,case_id)) "
+                            "SELECT DISTINCT p.project_scope_id,p.case_id "
+                            "FROM input_pairs p JOIN provenance.source_records s "
+                            "ON BTRIM(s.record_json->>'comdesk_project_id')=p.project_scope_id "
+                            "AND BTRIM(s.record_json->>'comdesk_case_id')=p.case_id "
+                            "WHERE s.source='コムデスク'",
+                            (
+                                [item[0] for item in chunk],
+                                [item[1] for item in chunk],
+                            ),
+                        )
+                        existing_pair_keys.update(
+                            (str(scope), str(case_id)) for scope, case_id in cur.fetchall()
+                        )
+                    if existing_pair_keys:
+                        retained = []
+                        for index, raw, record in prepared:
+                            pair = (record["comdesk_project_id"], record["comdesk_case_id"])
+                            if pair not in existing_pair_keys:
+                                retained.append((index, raw, record))
+                                continue
+                            rejections.append(ComdeskRejection(
+                                row_number=index + 2,
+                                reason_code="DUPLICATE_CASE_IN_SCOPE",
+                                reason_detail="このプロジェクトの案件IDは既に取込済みです。",
+                                raw_record=raw,
+                                normalized_record=record,
+                                project_scope_id=pair[0],
+                                source_hash=hashlib.sha256(
+                                    dumps(raw).encode("utf-8")
+                                ).hexdigest(),
+                            ))
+                        prepared = retained
+
+                counts["REJECTED"] = len({item.row_number for item in rejections})
+                counts["rejection_reasons"] = {
+                    code: sum(1 for item in rejections if item.reason_code == code)
+                    for code in sorted({item.reason_code for item in rejections})
+                }
+
+                if not prepared:
+                    if rejections:
+                        SupabaseProvenanceWriteRepository.insert_comdesk_rejections(
+                            cur, batch, mapping_snapshot, rejections,
+                            fixed_project_scope_id=str(project_scope_id or "").strip(),
+                            project_scope_confirmed=project_scope_confirmed,
+                        )
+                    cur.execute(
+                        "INSERT INTO provenance.import_batches(id,source,result_json,created_at) "
+                        "VALUES(%s,%s,%s,%s)",
+                        (batch, "コムデスク", Jsonb(counts), now()),
+                    )
+                    self._conn.commit()
+                    return counts
+
                 cur.execute(
                     "INSERT INTO provenance.templates(id,headers_json,mapping_json,created_at) "
                     "VALUES(%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
@@ -1649,8 +1772,13 @@ class SupabaseClinicWriteRepository:
                 started = time.perf_counter()
                 next_temp_id = -1
                 for index, raw, record in prepared:
-                    common_match, canonical_uuid_match = self._match_common_identity(record, candidate_rows)
-                    match = common_match or match_record(matcher, record)
+                    match_record_data = comdesk_match_record(record)
+                    common_match, canonical_uuid_match = self._match_common_identity(
+                        match_record_data, candidate_rows
+                    )
+                    match = common_match or match_record(
+                        matcher, match_record_data, strict_identity=True,
+                    )
                     timestamp = now()
                     resolved_cid = None
 
@@ -1661,12 +1789,10 @@ class SupabaseClinicWriteRepository:
                         base = dict(before)
                         base.update({
                             key: value
-                            for key, value in record.items()
+                            for key, value in clinic_master_fields(record).items()
                             if value and not base.get(key)
                         })
                         state["base_json"] = base
-                        if not canonical_uuid_match:
-                            state["uuid"] = state.get("uuid", "") or record.get("uuid", "")
                         state["last_seen_at"] = timestamp
                         current_as_of = str(state.get("source_as_of_date") or "")
                         incoming_as_of = str(record.get("as_of", "") or "")
@@ -1683,26 +1809,18 @@ class SupabaseClinicWriteRepository:
                             ))
 
                     elif match.status == "NEW":
-                        resolved_cid = next_temp_id
-                        next_temp_id -= 1
-                        state = {
-                            "id": resolved_cid,
-                            "base_json": dict(record),
-                            "uuid": record.get("uuid", ""),
-                            "medical_key": "",
-                            "merge_hold": False,
-                            "source_as_of_date": str(record.get("as_of", "") or ""),
-                            "first_seen_at": timestamp,
-                            "last_seen_at": timestamp,
-                        }
-                        self._comdesk_refresh_match_fields(state)
-                        matcher.upsert(state)
-                        new_temp_ids.append(resolved_cid)
-                        mutated_ids.add(resolved_cid)
-                        histories.append((
-                            resolved_cid, "医院追加", {}, dict(record),
-                            match.reason, timestamp,
+                        rejections.append(ComdeskRejection(
+                            row_number=index + 2,
+                            reason_code="NO_EXISTING_CLINIC_MATCH",
+                            reason_detail="既存Clinic Masterに一致する医院がないため、自動登録せず保留しました。",
+                            raw_record=raw,
+                            normalized_record=record,
+                            project_scope_id=record.get("comdesk_project_id"),
+                            source_hash=hashlib.sha256(
+                                dumps(raw).encode("utf-8")
+                            ).hexdigest(),
                         ))
+                        continue
 
                     decisions.append({
                         "row_number": index,
@@ -1715,6 +1833,18 @@ class SupabaseClinicWriteRepository:
                     })
                     counts[match.status] += 1
                 phase["matching_and_simulation_seconds"] = time.perf_counter() - started
+
+                if rejections:
+                    SupabaseProvenanceWriteRepository.insert_comdesk_rejections(
+                        cur, batch, mapping_snapshot, rejections,
+                        fixed_project_scope_id=str(project_scope_id or "").strip(),
+                        project_scope_confirmed=project_scope_confirmed,
+                    )
+                    counts["REJECTED"] = len({item.row_number for item in rejections})
+                    counts["rejection_reasons"] = {
+                        code: sum(1 for item in rejections if item.reason_code == code)
+                        for code in sorted({item.reason_code for item in rejections})
+                    }
 
                 existing_ids = sorted(cid for cid in mutated_ids if cid > 0)
                 if existing_ids:

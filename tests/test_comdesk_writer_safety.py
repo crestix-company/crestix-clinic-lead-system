@@ -9,6 +9,7 @@ from src.repository.comdesk_writer_safety import (
     comdesk_match_record,
     prepare_comdesk_writer_import,
     reject_comdesk_clinic_creation,
+    validate_comdesk_writer_import,
     validate_comdesk_review_resolution,
 )
 from src.master.matching import ClinicMatchingIndex, match_record
@@ -109,6 +110,39 @@ def test_scoped_case_ids_are_normalized_before_persistence():
     assert prepared[0][2]["comdesk_project_id"] == "PROJECT-1"
 
 
+def test_validation_collects_rejections_and_preserves_accepted_rows():
+    table = _table(_valid_headers(), [
+        ["CD-1", "CASE-1", "PROJECT-1", "合成医院", "03-0000-0000", "東京都千代田区1-1"],
+        ["CD-2", "", "PROJECT-1", "医院B", "03-0000-0001", "東京都千代田区1-2"],
+        ["CD-3", "CASE-3", "", "医院C", "03-0000-0002", "東京都千代田区1-3"],
+        ["CD-4", "CASE-4", "PROJECT-1", "医院D", "03-0000-0003", "東京都千代田区1-4"],
+        ["CD-5", "CASE-4", "PROJECT-1", "医院E", "03-0000-0004", "東京都千代田区1-5"],
+    ])
+
+    result = validate_comdesk_writer_import(table, _valid_mapping())
+
+    assert [row[2]["clinic_name"] for row in result.accepted_rows] == ["合成医院", "医院D"]
+    assert {(item.row_number, item.reason_code) for item in result.rejections} == {
+        (3, "MISSING_CASE_ID"),
+        (4, "MISSING_PROJECT_SCOPE"),
+        (6, "DUPLICATE_CASE_IN_SCOPE"),
+    }
+    assert all(len(item.source_hash) == 64 for item in result.rejections)
+    assert result.rejections[0].raw_record[0] == "CD-2"
+
+
+def test_case_id_mapped_as_comdesk_uuid_becomes_a_structured_rejection():
+    table = _table(["案件ID", "プロジェクトID", "名前"], [["CASE-1", "PROJECT-1", "医院"]])
+
+    result = validate_comdesk_writer_import(
+        table,
+        {"uuid": 0, "clinic_name": 2, "comdesk_case_id": 0, "comdesk_project_id": 1},
+    )
+
+    assert len(result.accepted_rows) == 0
+    assert {item.reason_code for item in result.rejections} == {"INVALID_UUID_MAPPING"}
+
+
 def test_source_ids_do_not_enter_clinic_master_fields_or_uuid_match():
     source = {
         "uuid": "COMDESK-UUID-1",
@@ -198,3 +232,16 @@ def test_expression_unique_index_covers_scoped_case_id_pair():
     assert "BTRIM(record_json->>'comdesk_project_id')" in migration
     assert "BTRIM(record_json->>'comdesk_case_id')" in migration
     assert "source = 'コムデスク'" in migration
+
+
+def test_rejection_ledger_migration_is_private_and_idempotent():
+    migration = Path(
+        "supabase/migrations/20261102100000_comdesk_rejections.sql"
+    ).read_text(encoding="utf-8")
+    assert "CREATE TABLE IF NOT EXISTS provenance.comdesk_rejections" in migration
+    assert "raw_record_json jsonb NOT NULL" in migration
+    assert "normalized_record_json jsonb" in migration
+    assert "mapping_snapshot_json jsonb NOT NULL" in migration
+    assert "UNIQUE (import_batch_id, row_number, reason_code, source_hash)" in migration
+    assert "REVOKE ALL ON TABLE provenance.comdesk_rejections FROM PUBLIC, anon, authenticated" in migration
+    assert "GRANT INSERT ON TABLE provenance.comdesk_rejections TO clinic_comdesk_import_writer" in migration

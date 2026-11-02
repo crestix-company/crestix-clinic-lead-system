@@ -23,11 +23,17 @@ MAPPING = {
     "prefecture": 3,
     "address": 4,
     "address2": 5,
+    "comdesk_case_id": 6,
+    "comdesk_project_id": 7,
+    "manager_name": 8,
 }
 
 
 def _record(prefecture, address, *, name="医院", uuid="", phone=""):
-    return record_from_row([uuid, name, phone, prefecture, address, ""], MAPPING)
+    return record_from_row(
+        [uuid, name, phone, prefecture, address, "", "CASE-1", "PROJECT-1", "担当医"],
+        MAPPING,
+    )
 
 
 @pytest.mark.parametrize(
@@ -223,6 +229,20 @@ class _StatefulCursor:
             )
             return
 
+        if q.startswith("SELECT i.indisunique AND i.indisvalid"):
+            self._result = [(True,)]
+            return
+
+        if q.startswith("WITH input_pairs AS (SELECT * FROM unnest"):
+            self._result = []
+            return
+
+        if q.startswith("INSERT INTO provenance.comdesk_rejections"):
+            width = 12
+            for offset in range(0, len(params), width):
+                self.conn.rejections.append(params[offset:offset + width])
+            return
+
         if q.startswith("INSERT INTO provenance.templates"):
             return
 
@@ -391,6 +411,7 @@ class _StatefulConn:
         self.executed = []
         self.change_history = []
         self.source_records = []
+        self.rejections = []
         self.original_rows = []
         self.match_reviews = []
         self.import_batches = {}
@@ -411,8 +432,17 @@ class _StatefulConn:
 
 
 def _table(rows):
-    headers = ["UUID", "名前", "Tel1", "都道府県", "住所１", "住所２"]
-    frame = pd.DataFrame(rows, columns=headers)
+    headers = [
+        "UUID", "名前", "Tel1", "都道府県", "住所１", "住所２",
+        "案件ID", "プロジェクトID", "院長名",
+    ]
+    expanded_rows = []
+    for index, row in enumerate(rows):
+        expanded_rows.append(
+            [*row, f"CASE-{index + 1}", "PROJECT-1", "担当医"]
+            if len(row) == 6 else [*row, "担当医"]
+        )
+    frame = pd.DataFrame(expanded_rows, columns=headers)
     return InputTable(headers=headers, data=frame)
 
 
@@ -434,7 +464,7 @@ def test_fast_import_preserves_matched_history_provenance_originals_and_idempote
 
     assert result["MATCHED"] == 1 and result["NEW"] == 0 and result["AMBIGUOUS"] == 0
     assert conn.repeatable_read is True
-    assert conn.clinics[1_000_000_001]["uuid"] == "UUID-1"
+    assert conn.clinics[1_000_000_001]["uuid"] == ""
     assert len(conn.change_history) >= 1
     assert len(conn.source_records) == 1
     assert len(conn.original_rows) == 1
@@ -449,7 +479,7 @@ def test_fast_import_preserves_matched_history_provenance_originals_and_idempote
     assert len(conn.original_rows) == 1
 
 
-def test_fast_import_new_then_later_uuid_matches_same_new_clinic():
+def test_fast_import_does_not_create_new_clinics_from_comdesk():
     conn = _StatefulConn()
     repo = SupabaseClinicWriteRepository(conn)
     table = _table([
@@ -459,13 +489,43 @@ def test_fast_import_new_then_later_uuid_matches_same_new_clinic():
 
     result = repo.import_comdesk(table, MAPPING)
 
-    assert result["NEW"] == 1
+    assert result["NEW"] == 0
+    assert result["MATCHED"] == 0
+    assert result["REJECTED"] == 2
+    assert len(conn.clinics) == 0
+    assert len(conn.source_records) == 0
+    assert len(conn.original_rows) == 0
+    assert len(conn.rejections) == 2
+    repeated = repo.import_comdesk(table, MAPPING)
+    assert repeated["already_imported"] is True
+    assert len(conn.rejections) == 2
+
+
+def test_fast_import_commits_valid_rows_and_rejections_together():
+    clinic = _candidate(
+        1_000_000_001,
+        phone="03-1111-2222",
+        name="既存医院",
+        address="東京都千代田区1-1",
+    )
+    conn = _StatefulConn([clinic])
+    repo = SupabaseClinicWriteRepository(conn)
+    table = _table([
+        ["UUID-1", "既存医院", "03-1111-2222", "東京都", "千代田区1-1", ""],
+        ["UUID-2", "医院B", "03-2222-3333", "東京都", "千代田区1-2", "", "", "PROJECT-1"],
+    ])
+
+    result = repo.import_comdesk(table, MAPPING)
+
     assert result["MATCHED"] == 1
-    assert len(conn.clinics) == 1
-    created_id = next(iter(conn.clinics))
-    linked_source_ids = [row[1] for row in conn.source_records]
-    assert linked_source_ids == [created_id, created_id]
-    assert len(conn.original_rows) == 2
+    assert result["REJECTED"] == 1
+    assert result["rejection_reasons"] == {"MISSING_CASE_ID": 1}
+    assert len(conn.source_records) == 1
+    assert len(conn.rejections) == 1
+    snapshot = conn.rejections[0][7].obj
+    assert snapshot["column_mapping"]["submitted_column_mapping"] == MAPPING
+    assert snapshot["fixed_project_scope_id"] == ""
+    assert conn.committed == 1 and conn.rolled_back == 0
 
 
 def test_fast_import_ambiguous_persists_review_candidates():
