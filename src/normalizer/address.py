@@ -16,7 +16,7 @@ def extract_municipality(address):
     残りの先頭から市区町村を1つだけ抜き出す。マッチしなければ空文字。
     DBスキーマは変更しない（query-time専用のpure関数、SQLiteのユーザー定義関数として登録する）。
     """
-    from src.master.comdesk import PREFECTURE  # 遅延import: normalizer -> master の逆依存を避ける
+    from src.services.comdesk import PREFECTURE  # 遅延import: normalizer -> master の逆依存を避ける
 
     text = str(address or "")
     prefix = PREFECTURE.match(text)

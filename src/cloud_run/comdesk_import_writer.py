@@ -1,5 +1,5 @@
 """Dedicated, least-privilege DB connection routing for the Cloud Run Comdesk
-import Writer path (src.master.comdesk_cloud_import / app_v2.cloud_comdesk_
+import Writer path (src.services.comdesk_cloud_import / app_v2.cloud_comdesk_
 import_ui), mirroring src.cloud_run.job_control's proven pattern exactly.
 
 Review finding (Issue #130 PR #131 follow-up): the first version of
@@ -23,8 +23,8 @@ from __future__ import annotations
 
 import os
 
-from src.repository.write_backend import WRITE_BACKEND_SUPABASE
-from src.repository.write_backend import build_write_repositories as _build_write_repositories
+from src.database.write_backend import WRITE_BACKEND_SUPABASE
+from src.database.write_backend import build_write_repositories as _build_write_repositories
 
 COMDESK_IMPORT_WRITER_DB_URL_ENV_VAR = "SUPABASE_COMDESK_IMPORT_WRITER_DB_URL"
 RUNTIME_DB_URL_ENV_VAR = "SUPABASE_RUNTIME_DB_URL"

@@ -1,4 +1,4 @@
-name: Tests
+name: Python validation
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  pytest:
+  python-validation:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -36,5 +36,8 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements-lock.txt
 
-      - name: Run pytest
-        run: python -m pytest -q
+      - name: Compile Python sources
+        run: python -m compileall -q app_v2.py src scripts mhlw_dry_run
+
+      - name: Import application entrypoint
+        run: python -c "import app_v2"

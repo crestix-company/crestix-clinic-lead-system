@@ -5,7 +5,7 @@ import json
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bs4 import BeautifulSoup
-from src.enrichment.epark_checker import EparkChecker, canonical_epark_url
+from src.research.epark_checker import EparkChecker, canonical_epark_url
 from src.utils.config import settings
 
 

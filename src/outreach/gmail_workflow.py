@@ -29,7 +29,7 @@ from src.outreach.gmail_drafts import (
 )
 from src.outreach.gmail_oauth import GmailConnection, REQUIRED_SCOPES
 from src.outreach.pre_send_review import build_draft_save_review
-from src.repository.outreach_delivery_repository import (
+from src.database.outreach_delivery_repository import (
     BLOCKING_STATUSES,
     DraftReservation,
     OutreachDeliveryRepository,

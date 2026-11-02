@@ -5,7 +5,7 @@ Cloud Billing budget alerts do not guarantee a hard stop
 保証しない"). This module is the app-side backstop: it tracks dispatched
 Executions and clinics-requested per month in the existing
 ``app_config.settings`` table (no new schema object, same key-value pattern as
-``src.repository.hp_auto_run_repository``) and refuses to dispatch once either
+``src.database.hp_auto_run_repository``) and refuses to dispatch once either
 cap is reached -- independent of, and in addition to, the per-Execution limits
 enforced elsewhere (1 concurrent Execution via the advisory lock in
 scripts/cloud_hp_worker.py, <=50 clinics via

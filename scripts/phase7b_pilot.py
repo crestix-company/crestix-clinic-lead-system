@@ -17,10 +17,10 @@ import random
 import sqlite3
 import time
 
-from src.enrichment.hp_analysis import Page, identity, is_official_candidate, host, keyword_match, sanitize_text
-from src.enrichment.safe_web import SafeFetcher, PinnedTransport, WebError, crawl
-from src.enrichment.treatment_context import build_evidence_blocks
-from src.enrichment.treatment_taxonomy import (
+from src.research.hp_analysis import Page, identity, is_official_candidate, host, keyword_match, sanitize_text
+from src.research.safe_web import SafeFetcher, PinnedTransport, WebError, crawl
+from src.research.treatment_context import build_evidence_blocks
+from src.research.treatment_taxonomy import (
     RULE_VERSION,
     EVIDENCE_ENGINE_VERSION,
     evaluate_treatment_evidence,

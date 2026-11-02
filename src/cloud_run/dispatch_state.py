@@ -1,7 +1,7 @@
 """Durable record of the last Cloud Run dispatch outcome per HP research job id.
 
 Keyed into the existing ``app_config.settings`` table -- no new schema object,
-same pattern as ``src.repository.hp_auto_run_repository.SupabaseHpAutoRunRepository``.
+same pattern as ``src.database.hp_auto_run_repository.SupabaseHpAutoRunRepository``.
 
 Why this needs to be in the DB, not Streamlit ``session_state``: Cloud Run Web
 runs with min instances = 0, so the container (and every session_state) can be

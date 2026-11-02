@@ -19,10 +19,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.repository.backend import build_repositories, BACKEND_SQLITE, BACKEND_SUPABASE
-from src.repository.errors import BackendNotSupportedError
-from src.master.filters import Filters
-from src.master.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL
+from src.database.backend import build_repositories, BACKEND_SQLITE, BACKEND_SUPABASE
+from src.database.errors import BackendNotSupportedError
+from src.services.filters import Filters
+from src.services.scope import SCOPE_ALL, SCOPE_LEGACY_PRE_NATIONAL
 
 CASES = []
 

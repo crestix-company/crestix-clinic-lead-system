@@ -16,12 +16,12 @@ from time import monotonic
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from src.enrichment.email_research.formal_pipeline import research_clinic
-from src.enrichment.safe_web import PinnedTransport, SafeFetcher
-from src.master.email_auto_run import MeteredTransport
-from src.enrichment.search_provider import SerpApiSearchProvider
-from src.master.email_research_config import load_email_research_config
-from src.master.email_sales_eligibility import AUTO_FALSE, AUTO_TRUE, REVIEW, may_auto_primary
+from src.research.email_research.formal_pipeline import research_clinic
+from src.research.safe_web import PinnedTransport, SafeFetcher
+from src.services.email_auto_run import MeteredTransport
+from src.research.search_provider import SerpApiSearchProvider
+from src.services.email_research_config import load_email_research_config
+from src.services.email_sales_eligibility import AUTO_FALSE, AUTO_TRUE, REVIEW, may_auto_primary
 from src.normalizer.address import extract_municipality
 
 

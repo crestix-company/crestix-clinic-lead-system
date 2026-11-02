@@ -10,10 +10,10 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from openpyxl import load_workbook
 from src.io.input_loader import load_table
-from src.io.output_writer import csv_bytes
-from src.master.comdesk import COMDESK_HEADERS, infer_comdesk_columns
-from src.master.filters import Filters
-from src.master.fixed_export import export_fixed, fixed_row
+from src.exporters.output_writer import csv_bytes
+from src.services.comdesk import COMDESK_HEADERS, infer_comdesk_columns
+from src.services.filters import Filters
+from src.exporters.fixed_export import export_fixed, fixed_row
 
 
 class SnapshotStore:

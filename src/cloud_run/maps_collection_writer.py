@@ -4,8 +4,8 @@ mirroring src.cloud_run.maps_import_writer / comdesk_import_writer's proven
 pattern exactly.
 
 This connection is used for collection-task STATE ONLY (create/assign/hold/
-resume/release/fail/complete, see src.repository.maps_collection_tasks_repository)
--- never for the clinic-record writes src.master.google_maps.
+resume/release/fail/complete, see src.database.maps_collection_tasks_repository)
+-- never for the clinic-record writes src.collectors.google_maps.
 import_maps_results() performs. Those stay on the separate, already-
 established src.cloud_run.maps_import_writer connection. Keeping them
 distinct means a role compromised or misconfigured for one of these two
@@ -20,7 +20,7 @@ screen is unusable by design. This module itself never creates, grants, or
 alters any database role or runs any migration/DDL -- and no migration/DDL
 is needed at all: the task list is stored as one JSON value in the existing
 app_config.settings table (see the repository module's own docstring), the
-same no-new-schema-object approach src.repository.hp_auto_run_repository
+same no-new-schema-object approach src.database.hp_auto_run_repository
 already uses for HP auto-run state.
 """
 from __future__ import annotations
@@ -53,10 +53,10 @@ def maps_collection_tasks_repository(env=None, *, connect=None, repository_cls=N
     the general WriteRepositories bundle (it has nothing to do with clinic
     records) -- it owns its own connection directly, same shape as
     src.cloud_run.job_control's job-control connection."""
-    from src.repository.maps_collection_tasks_repository import (
+    from src.database.maps_collection_tasks_repository import (
         SupabaseMapsCollectionTasksRepository,
     )
-    from src.repository.supabase_adapter import connect as _connect
+    from src.database.supabase_adapter import connect as _connect
 
     url = maps_collection_writer_db_url(env)
     connector = connect or _connect

@@ -21,9 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from scripts.launch_v2 import load_runtime_env
-from src.master.store import dumps
-from src.repository.backend import build_repositories
-from src.repository.write_backend import active_write_backend, build_write_repositories
+from src.services.store import dumps
+from src.database.backend import build_repositories
+from src.database.write_backend import active_write_backend, build_write_repositories
 
 
 SETTING_KEY = "monthly_limit"

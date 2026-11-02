@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from src.master.email_sales_eligibility import classify_email_candidate
+from src.services.email_sales_eligibility import classify_email_candidate
 
 
 DEFAULT_FILES = (
@@ -129,12 +129,12 @@ def _normalize(row, source_file):
 
 
 def classification_role(value):
-    from src.master.email_sales_eligibility import normalize_role
+    from src.services.email_sales_eligibility import normalize_role
     return normalize_role(value)
 
 
 def classification_ownership(value):
-    from src.master.email_sales_eligibility import normalize_ownership
+    from src.services.email_sales_eligibility import normalize_ownership
     return normalize_ownership(value)
 
 

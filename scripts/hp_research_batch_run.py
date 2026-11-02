@@ -19,8 +19,8 @@ from filelock import FileLock, Timeout
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.master.hp_research_batch import run_batch, DEFAULT_SIDECAR_PATH
-from src.master.research_sidecar import research_sidecar_path
+from src.services.hp_research_batch import run_batch, DEFAULT_SIDECAR_PATH
+from src.services.research_sidecar import research_sidecar_path
 
 
 def parse_args(argv=None):

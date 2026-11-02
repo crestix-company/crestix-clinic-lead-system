@@ -12,9 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.repository.backend import build_repositories
-from src.repository.errors import BackendNotSupportedError
-from src.master.filters import Filters
+from src.database.backend import build_repositories
+from src.database.errors import BackendNotSupportedError
+from src.services.filters import Filters
 
 RESULTS = []
 

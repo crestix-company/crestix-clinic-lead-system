@@ -10,8 +10,8 @@ import time
 from urllib.parse import urlsplit
 
 from perf_common import (ROOT, PERF_DIR, NoNetSession, copy_db, golden_ids, run_golden_job, percentile, db_state)
-from src.enrichment import safe_web, hp_analysis, researcher as researcher_mod
-from src.master import store as store_mod
+from src.research import safe_web, hp_analysis, researcher as researcher_mod
+from src.services import store as store_mod
 
 TIMEOUT_SEC = 10          # SafeFetcher の既定 timeout
 per = collections.defaultdict(lambda: collections.defaultdict(float))

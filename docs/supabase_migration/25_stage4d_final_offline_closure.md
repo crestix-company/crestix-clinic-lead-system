@@ -19,7 +19,7 @@ SQLite databases**:
 All persistent writes to the shared DB were already concentrated in one function,
 `write_clinic_atomic()` (DELETE+INSERT on DONE, `ON CONFLICT DO UPDATE` upsert for status,
 always, one transaction) — an already-clean seam. New files:
-`src/repository/treatment_write_contracts.py` (Protocol), `treatment_sqlite_write_adapter.py`
+`src/database/treatment_write_contracts.py` (Protocol), `treatment_sqlite_write_adapter.py`
 (thin delegate to the unmodified `write_clinic_atomic`), `treatment_supabase_write_adapter.py`
 (Postgres port, same semantics). `scripts/research_worker.py`'s `process()` now calls
 `treatment_repo.write_clinic_result(...)` instead of `write_clinic_atomic()` directly;
@@ -31,7 +31,7 @@ unaffected). New tests added: SQLite delegate parity, idempotent same-clinic-twi
 success-no-duplicate, worker-restart-preserves-prior-DONE-result, Supabase SQL-shape
 (DELETE+INSERT+ON CONFLICT), Supabase rollback-not-fallback-on-failure.
 
-## 2. HP worker (`src/master/hp_research_batch.py`) — Repositoryized
+## 2. HP worker (`src/services/hp_research_batch.py`) — Repositoryized
 
 Single target table (`hp_research_batch_results` → `hp_research.clinic_hp_research`), single
 write function (`upsert_result()`, already idempotent `ON CONFLICT(clinic_id) DO UPDATE`). New
@@ -58,10 +58,10 @@ rewired:
 | File | Direct SQLite WRITE at call-site layer |
 |---|---|
 | `app_v2.py` | 0 |
-| `src/master/jobs.py` (excl. Class C `repair_reset_job_items`) | 0 |
-| `src/enrichment/search_provider.py` | 0 |
+| `src/services/jobs.py` (excl. Class C `repair_reset_job_items`) | 0 |
+| `src/research/search_provider.py` | 0 |
 | `scripts/research_worker.py`'s `process()` | 0 (only the `write_clinic_atomic` *definition* remains, as the adapter-layer implementation) |
-| `src/master/hp_research_batch.py`'s `run_batch()` | 0 (only the `upsert_result` *definition* remains, same reasoning) |
+| `src/services/hp_research_batch.py`'s `run_batch()` | 0 (only the `upsert_result` *definition* remains, same reasoning) |
 
 **Global A+B direct SQLite runtime WRITE = 0 at the business/worker call-site layer — now
 measured across the complete Gate1.5 A+B inventory, not just the main app.** The underlying
@@ -95,7 +95,7 @@ on the Supabase port).
 ## 5. UI baseline — directly measured, not Streamlit-dependent, ALL MATCH
 
 New script `scripts/supabase_migration/stage4d_ui_baseline.py`: calls
-`src.repository.backend.build_repositories()` directly (the real, unmodified READ path) with
+`src.database.backend.build_repositories()` directly (the real, unmodified READ path) with
 the exact `Filters` construction `app_v2.py:simple_sales_ui()` builds at its default widget
 state (verified by reading that function's source, not guessed). No Streamlit process, no
 browser. Run against real Production Supabase data:
@@ -120,7 +120,7 @@ This closes the gap from the previous pass (live-browser verification had stalle
 
 No script reproducing the historical "325/325 shadow/comparator" figure was found anywhere in
 `scripts/` or `tests/` — it reads as a one-time count from the live async comparator in
-`src/repository/cutover.py` (`logs/read_cutover.log`), not a repeatable harness. Built a new one,
+`src/database/cutover.py` (`logs/read_cutover.log`), not a repeatable harness. Built a new one,
 `scripts/supabase_migration/stage4d_read_comparator.py` (read-only against both backends, same
 discipline as `parity_harness.py`), covering 38 cases: counts across 5 prefectures, 5
 departments, 5 keywords, both scopes, all uuid_modes, all effective_rank combinations; 5 pages
@@ -139,9 +139,9 @@ mismatch = 1
   ('都道府県', 23433), ('医科・歯科', 13186), ('HP ABC判定', 997), ('最終営業対象', 997)]
 ```
 
-**Root cause, found and verified, not hand-waved**: `src/master/filters.py:clauses()` (SQLite)
+**Root cause, found and verified, not hand-waved**: `src/services/filters.py:clauses()` (SQLite)
 iterates `[ranks, effective_ranks, prefectures, medical_types, hot]` in that order when building
-funnel steps. `src/repository/supabase_filters.py:clauses()` iterates
+funnel steps. `src/database/supabase_filters.py:clauses()` iterates
 `[ranks, prefectures, medical_types, hot]` in its shared loop and handles `effective_ranks`
 **separately, afterward** (necessarily — it requires a JOIN-based SQL expression the simple
 `col IN (...)` loop can't express, see that function's own code). The two backends therefore
@@ -158,7 +158,7 @@ metrics are built from (those call `count()`, not `funnel()`, and `count()`'s mi
 across all 38 cases confirms the actual filtering logic itself agrees).
 
 **Not fixed in this pass, by design — flagged for an explicit decision, not silently patched**:
-`src/repository/supabase_filters.py` is a live, heavily-optimized READ-path file (the module
+`src/database/supabase_filters.py` is a live, heavily-optimized READ-path file (the module
 docstring documents a measured 4.7x query-plan optimization around this exact function) that
 this entire Gate2 WRITE-cutover effort deliberately never touched. Reordering it to match
 SQLite's step order is almost certainly a small, low-risk fix (move the `effective_ranks` block
@@ -233,9 +233,9 @@ The owner reviewed §6/§10 and decided: SQLite's existing funnel step order is 
 behavior; Supabase must be changed to match it (not the reverse), minimal-scope only.
 
 **Root cause reconfirmed before touching any code** (per the owner's own instruction to verify,
-not just trust the prior write-up): `src/master/filters.py:clauses()` has ONE shared loop over
+not just trust the prior write-up): `src/services/filters.py:clauses()` has ONE shared loop over
 `[ranks, effective_ranks, prefectures, medical_types, hot]` because every one of those fields
-reduces to a simple `col IN (...)` SQL fragment in SQLite. `src/repository/supabase_filters.py:clauses()`
+reduces to a simple `col IN (...)` SQL fragment in SQLite. `src/database/supabase_filters.py:clauses()`
 could not put `effective_ranks` in its equivalent loop because the Postgres translation of
 `effective_hp_rank()` requires a JOIN-based SQL expression (correlated `EXISTS` against
 `hp_research.clinic_hp_research`) that doesn't fit a `col IN (...)` template — so it was
@@ -245,7 +245,7 @@ medical_types, hot, effective_ranks, ...]` instead of SQLite's `[ranks, effectiv
 prefectures, medical_types, hot, ...]` whenever `effective_ranks` was combined with
 `prefectures` and/or `medical_types`.
 
-**Fix applied, minimal scope only** (`src/repository/supabase_filters.py`, `clauses()`):
+**Fix applied, minimal scope only** (`src/database/supabase_filters.py`, `clauses()`):
 split the single loop into three parts in canonical order — (1) `ranks` alone, (2)
 `effective_ranks` (the existing JOIN-based block, body byte-for-byte unchanged, only its
 position in the function moved earlier), (3) a loop over the remaining `[prefectures,

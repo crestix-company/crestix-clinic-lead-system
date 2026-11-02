@@ -10,10 +10,10 @@ from __future__ import annotations
 import os
 import uuid
 
-from src.master.email_auto_run import build_default_research_one
-from src.master.email_research_config import load_email_research_config
-from src.repository.email_database import build_email_repositories
-from src.repository.email_target_reader import connect_email_target_reader
+from src.services.email_auto_run import build_default_research_one
+from src.services.email_research_config import load_email_research_config
+from src.database.email_database import build_email_repositories
+from src.database.email_target_reader import connect_email_target_reader
 
 EXECUTOR_ENV = "EMAIL_AUTO_EXECUTOR"
 JOB_NAME_ENV = "CLOUD_RUN_EMAIL_WORKER_JOB_NAME"
@@ -185,7 +185,7 @@ def reconcile_email_worker_no_execution(run_id, *, reviewer, repositories_factor
 def build_worker_runner(*, repositories_factory=None, research_one=None, config=None,
                         env=None):
     """Construct a worker with a fixed, already-synced cohort (no continual target refresh)."""
-    from src.master.email_auto_run import EmailAutoRunner
+    from src.services.email_auto_run import EmailAutoRunner
     env = os.environ if env is None else env
     maximum = max_clinics_per_execution(env)
     factory = repositories_factory or (lambda: _repositories().email_research)

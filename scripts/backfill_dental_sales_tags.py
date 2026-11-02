@@ -13,9 +13,9 @@ import json
 import os
 from pathlib import Path
 
-from src.master.dental_sales_tags import classify_dental_sales_tags, primary_dental_sales_tag
-from src.repository.dental_sales_tag_repository import SupabaseDentalSalesTagRepository
-from src.repository.supabase_adapter import connect
+from src.services.dental_sales_tags import classify_dental_sales_tags, primary_dental_sales_tag
+from src.database.dental_sales_tag_repository import SupabaseDentalSalesTagRepository
+from src.database.supabase_adapter import connect
 
 
 def _json(value):

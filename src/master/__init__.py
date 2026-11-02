@@ -1,1 +1,1 @@
-"""永続営業マスター。旧一時判定パイプラインから独立。"""
+"""Legacy import bridge for protected mhlw_dry_run tools; new code uses src.services."""

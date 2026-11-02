@@ -1,3 +1,5 @@
+> **Legacy notice (2026-11-03):** The one-time patcher described below is archived under `old/legacy_scripts/` and must not be run against the reorganized code. This page is historical reference only.
+
 # HP調査の誤判定修正（2026-09-14）
 
 ## 対象となった不具合

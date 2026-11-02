@@ -16,11 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.enrichment import safe_web, researcher as researcher_mod  # noqa: E402
-from src.enrichment.search_provider import TavilySearchProvider  # noqa: E402
-from src.master.jobs import run_job, job_status  # noqa: E402
-from src.master.store import ClinicStore  # noqa: E402
-from src.master.filters import AD_COUNT_SQL  # noqa: E402
+from src.research import safe_web, researcher as researcher_mod  # noqa: E402
+from src.research.search_provider import TavilySearchProvider  # noqa: E402
+from src.services.jobs import run_job, job_status  # noqa: E402
+from src.services.store import ClinicStore  # noqa: E402
+from src.services.filters import AD_COUNT_SQL  # noqa: E402
 
 PERF_DIR = ROOT / ".perf-replay"
 GOLDEN = ROOT / "scripts/perf/golden/golden_clinics.json"
