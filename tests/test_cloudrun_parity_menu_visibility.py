@@ -1,4 +1,4 @@
-"""Issue #126 P1: ローカル版の5メニュー構成・処理順序をREAD ONLY画面でも
+"""Issue #126 P1: ローカル版メニュー構成をREAD ONLY画面でも
 「存在と順序が分かる」ようにする一方で、Email調査／メール送付文章／詳細設定の
 Gmail下書き・Job操作ボタンは絶対に新たな到達経路を作らないことを検証する。
 
@@ -6,14 +6,13 @@ tests/test_simple_workflow_cleanup.py の
 test_read_only_ui_skips_startup_writes_and_auto_resume と
 tests/test_outreach_read_only_isolation.py の
 test_nav_hides_outreach_pages_when_read_only は、
-"nav_options = NAV[:2] if nav_locked else NAV" を意図的にピン留めしている
-（Gmail下書き系ボタンを含むページをnav自体から隠す、二重ゲートの一枚）。
+"nav_options = NAV[:2] + [\"コール\"] if nav_locked else NAV" とし、
+読取専用のコール画面だけを追加表示する。
 元々はread_onlyのみで判定していたが、Issue #130 PR #131のレビューで
 「CLINIC_READ_ONLY_UI=falseのCloud Runデプロイが既存の取込・HP Job・Email・
 設定画面を意図せず全開放してしまう」という指摘を受け、
 nav_locked = read_only or is_cloud_run_deployment() に拡張した
-（app_v2.pyのwrite_disabledコメント参照）。read_only単体がNAV[:2]を
-保証する性質そのものは変わらない。メニュー構成の可視化は、新しい
+（app_v2.pyのwrite_disabledコメント参照）。read_only単体でもメールや設定画面を表示しない。メニュー構成の可視化は、新しい
 st.radio/st.button等の操作可能ウィジェットではなく、静的なst.caption/
 st.expanderのテキストのみで行う。
 """
@@ -45,7 +44,7 @@ def _simple_workflow_read_only_block():
 def test_nav_pin_still_intact_after_menu_visibility_change():
     main = _main_source()
     assert "nav_locked = read_only or is_cloud_run_deployment()" in main
-    assert "nav_options = NAV[:2] if nav_locked else NAV" in main
+    assert 'nav_options = NAV[:2] + ["コール"] if nav_locked else NAV' in main
     assert 'nav = st.radio("メニュー", nav_options, key="navigation")' in main
 
 
@@ -56,7 +55,7 @@ def test_sidebar_shows_full_local_menu_structure_as_static_text_only():
     block_end = main.index("else:", block_start)
     block = main[block_start:block_end]
 
-    # Renders every NAV entry (all 5 local menu items), not a hardcoded subset.
+    # Renders every NAV entry, not a hardcoded subset.
     assert "for name in NAV:" in block
     assert "st.radio" not in block
     assert "st.button" not in block

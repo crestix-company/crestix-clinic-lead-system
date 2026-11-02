@@ -1,4 +1,4 @@
-"""「メール送付文章」画面（4タブ）。
+"""「メール送付文章」画面。
 
 Clinic Master・Email Research・記事原本・Gmail履歴は読み取り専用で照合する。
 メール送信・予約送信はなく、明示設定と個別確認後のGmail drafts.createのみ許可する。
@@ -788,20 +788,25 @@ def _tab_import_preview():
 
 def outreach_email_page(store, demo=False, *, formal_email_page=None, read_only=False):
     st.header("メール送付文章")
-    st.info("Email Research正式利用可の医院を対象に、履歴照合・記事判定・文章生成・プレビューを行います。メール送信・予約送信は行いません。")
-    tabs = st.tabs(["① 対象選択", "② 文章生成", "③ プレビュー", "④ 生成結果", "⑤ 下書き一括保存", "⑥ 案件・状態", "⑦ 取込プレビュー"])
-    with tabs[0]:
-        _tab_targets(store, demo, formal_email_page=formal_email_page)
-    with tabs[1]:
-        _tab_generate()
-    with tabs[2]:
-        _tab_preview()
-    with tabs[3]:
-        _tab_results(read_only=read_only)
-    with tabs[4]:
-        from src.outreach.auto_draft_ui import auto_draft_save_page
-        auto_draft_save_page(demo=demo, read_only=read_only)
-    with tabs[5]:
-        _tab_cases(demo)
-    with tabs[6]:
-        _tab_import_preview()
+    st.info("コール後に作成されたメール案を担当者が確認する画面です。通話・要約・メールキューとの連携は未実装です。")
+    st.dataframe(
+        pd.DataFrame(columns=["医院", "担当者", "宛先", "コール日時", "状態"]),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption("確認待ちのメールはありません。メールキューのDB連携後に一覧が表示されます。")
+
+    st.subheader("メール内容の確認")
+    st.text_input("医院", key="call_email_clinic", disabled=read_only)
+    st.text_input("担当者", key="call_email_assignee", disabled=read_only)
+    st.text_input("宛先", key="call_email_recipient", disabled=read_only)
+    st.text_input("件名", key="call_email_subject", disabled=read_only)
+    st.text_area("AI要約", key="call_email_summary", height=100, disabled=read_only)
+    st.text_area("メール本文", key="call_email_body", height=260, disabled=read_only)
+    st.button(
+        "送信",
+        disabled=True,
+        help="送信機能は未実装です。画面からメールが送られることはありません。",
+        key="call_email_send",
+    )
+    st.caption("この画面で入力した内容は保存されず、メールも送信されません。")
