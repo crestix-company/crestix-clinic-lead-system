@@ -2895,11 +2895,7 @@ def main():
         and not is_cloud_run_deployment()
     )
     with st.sidebar:
-        nav_options = NAV[:2] if nav_locked else NAV
-        if comdesk_preview_enabled:
-            nav_options = [*nav_options, "Comdesk UUID照合プレビュー"]
-        if comdesk_review_enabled:
-            nav_options = [*nav_options, "Comdesk HOLD確認"]
+        nav_options = NAV[:2] + ["コール"] if nav_locked else NAV
         nav = st.radio("メニュー", nav_options, key="navigation")
         if nav_locked:
             demo = False
