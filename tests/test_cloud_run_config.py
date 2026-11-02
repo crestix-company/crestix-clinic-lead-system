@@ -1,7 +1,8 @@
-"""Phase A: Cloud Run Web (clinic-lead-web) 起動・設定・READ ONLY検証のテスト。
+"""Phase A: Cloud Run Web (clinic-lead-web) 設定・READ ONLY検証のテスト。
 
-実際のDocker buildやGCPへの接続は行わない。Dockerfile.cloudrun/.dockerignoreの
-テキスト内容と、scripts/verify_cloud_runtime.pyのロジックのみを検証する。
+実際のDocker buildやGCPへの接続は行わない。scripts/verify_cloud_runtime.pyの
+ロジックのみを検証する（Dockerfile.cloudrun/.dockerignore自体はMac/Windows運用の
+対象外のため削除済み。関連するテキスト内容の検証もあわせて削除した）。
 """
 from pathlib import Path
 
@@ -12,69 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def _read(name):
     return (ROOT / name).read_text(encoding="utf-8")
-
-
-def test_dockerfile_cloudrun_uses_python312_slim():
-    text = _read("Dockerfile.cloudrun")
-    assert "FROM python:3.12-slim" in text
-
-
-def test_dockerfile_cloudrun_listens_on_injected_port_and_all_interfaces():
-    text = _read("Dockerfile.cloudrun")
-    assert "--server.address=0.0.0.0" in text
-    assert "--server.port=$PORT" in text
-    assert "streamlit run app_v2.py" in text
-
-
-def test_dockerfile_cloudrun_runs_as_non_root():
-    text = _read("Dockerfile.cloudrun")
-    assert "USER clinicapp" in text
-    assert "useradd" in text
-
-
-def test_dockerfile_cloudrun_uses_requirements_txt_not_lock():
-    text = _read("Dockerfile.cloudrun")
-    assert "requirements.txt" in text
-    assert "requirements-lock.txt" not in text
-
-
-def test_dockerfile_cloudrun_never_copies_data_or_secret_paths():
-    text = _read("Dockerfile.cloudrun")
-    for forbidden in ("COPY data", "COPY .env", "COPY .supabase-runtime.env.local", "COPY code_backup"):
-        assert forbidden not in text
-
-
-def test_dockerignore_defaults_to_excluding_everything():
-    text = _read(".dockerignore")
-    lines = [line.strip() for line in text.splitlines()]
-    assert "*" in lines
-
-
-def test_dockerignore_excludes_real_clinic_data_and_credentials():
-    text = _read(".dockerignore")
-    for pattern in (
-        "*.sqlite3*",
-        "*.csv",
-        ".env",
-        ".supabase-runtime.env.local",
-        "config/email_research.env.local",
-        "config/gmail_oauth_client.json",
-        "config/gmail_oauth_token.json",
-    ):
-        assert pattern in text, f"{pattern!r} should be denied in .dockerignore"
-
-
-def test_dockerignore_allowlists_only_the_app_runtime_paths():
-    text = _read(".dockerignore")
-    allowed = {line.lstrip("!").strip() for line in text.splitlines() if line.startswith("!")}
-    expected = {"app_v2.py", "requirements.txt", "src", "src/**", "config", "config/**"}
-    # Phase B's one-shot Worker image needs its single entrypoint script.
-    # Keep the strict allowlist: do not grant a general scripts/** exception.
-    if (ROOT / "Dockerfile.cloudrun.worker").is_file():
-        expected.add("scripts/cloud_hp_worker.py")
-    if (ROOT / "Dockerfile.cloudrun.email-worker").is_file():
-        expected.add("scripts/cloud_email_worker.py")
-    assert allowed == expected
 
 
 class _FakeCursor:
