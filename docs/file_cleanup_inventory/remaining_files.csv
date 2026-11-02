@@ -1,0 +1,695 @@
+file_path,function_category,role_description,reference_status,windows_mac_dependency,verdict,reason
+.gitattributes,リポジトリ設定,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+.github/workflows/test.yml,リポジトリ設定,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+.gitignore,リポジトリ設定,分類未確定（個別確認が必要）,5件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+CODEX_HANDOFF_MINIMAL.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs/verification_handoff_minimal.mdから参照。現行アーキテクチャと一致する設計文書
+CURRENT_SYSTEM_STATUS.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] コード上の参照はゼロだが『別PC引継ぎ時は最初にこのファイルを確認』と明記された運用ドキュメント
+ClinicLead.bat,Windows起動,Windows版起動チェーンの構成ファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+README.md,リポジトリ設定,分類未確定（個別確認が必要）,10件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+README_V2.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs/verification_v2.mdから現役参照あり
+VERSION,リポジトリ設定,分類未確定（個別確認が必要）,36件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+VERSION_RESEARCH,リポジトリ設定,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+app.py,旧v1,旧バージョン(v1)の実装またはその起動・テストファイル,8件の参照あり,旧v1、start_windows.bat経由でWindowsからも起動可能,保留,[再精査:追加確認必要] 旧v1実装。start_windows.batから参照が残り他環境での利用可能性を排除できない
+app_v2.py,Streamlit UI,Mac/Windows/Cloud Run共通のStreamlit単一エントリポイント（全画面を内包）,56件の参照あり,Mac/Windows/Cloud Run共通,必須,Mac/Windows共通のStreamlitエントリポイント
+artifacts/sales_target_reclassification/sales_target_classification_v3_candidate.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,必須,営業対象・出力画面のSales Tier分類表示で読み込まれていることを本セッションのUI確認で実証。
+assets/call_desk/call.css,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,テスト・UIからの参照有無を個別確認していないため保留
+assets/call_desk/call.html,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,テスト・UIからの参照有無を個別確認していないため保留
+config/age_model.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/email_research.env.example,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/hp_ranking.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/outreach_email_v2.example.json,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/outreach_is_staff.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_companies.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_data_version.json,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_runtime.env,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/settings.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/treatment_taxonomy.yml,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+data/backups/clinics_before_reintegration_20260914_143032_150645.sqlite3,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,3件の参照あり,個別確認が必要,必須,本番データの復旧用バックアップ。唯一性のあるデータのため削除禁止方針の対象。
+data/backups/clinics_before_reintegration_20260914_205408_956098.sqlite3,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,2件の参照あり,個別確認が必要,必須,本番データの復旧用バックアップ。唯一性のあるデータのため削除禁止方針の対象。
+data/cache/doctor_license_cache.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,2件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/cache/epark_cache.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,2件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/clinics.sqlite3.before-maps-v4.bak,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,Maps統合前のDBスナップショット。復旧用バックアップとして保護。
+data/clinics.sqlite3.before-tel-key-v3.bak,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,電話照合キー変更前のDBスナップショット。復旧用バックアップとして保護。
+data/clinics_before_v21_20260915_211529.sqlite3,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,"本セッションのMacローカル起動検証で実際に読み込まれ、かんたん操作・営業対象画面に実データ（厚生局162,242件等）を供給したローカルDB本体。"
+data/demo.sqlite3,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,2件の参照あり,個別確認が必要,必須,サンプルモードのデモDB本体としてapp_v2.pyから直接参照（CLINIC_DEMO_DB_PATH既定値）。
+data/demo.sqlite3.before-tel-key-v3.bak,データ・サンプル,SQLiteデータベース本体またはそのバックアップ,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,デモDBの変更前スナップショット。復旧用バックアップとして保護。
+data/master/doctor_license_template.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/master/enrichment_template.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/master/epark_confirmed_template.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/master/kouseikyoku_template.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/master/tokyo_current.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/master/tokyo_current.metadata.json,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+"""data/raw/131\343\202\263\343\203\274\343\203\211\345\206\205\345\256\271\345\210\245\344\270\200\350\246\247\350\241\250\357\274\210\345\214\273\347\247\221\357\274\211\346\235\261\344\272\254r0809.xlsx""",その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+"""data/raw/131\347\271\247\357\275\263\347\271\235\357\275\274\347\271\235\347\211\231\343\203\273\350\236\263\357\275\271\350\233\273\357\275\245\350\215\263\302\200\351\232\225\357\275\247\351\231\246\357\275\250\343\203\273\344\272\245\347\217\276\351\201\230\346\211\230\357\275\274\347\224\273\346\223\262\350\216\240\357\275\254r0809.xlsx""",その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+data/v254_full_run_state.json,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+data/v254_full_run_state_v2.json,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,必須,ローカルDB本体・バックアップ・ソースデータ
+docs/DEPARTMENT_ABBREVIATIONS.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['src/normalizer/departments.py']）
+docs/EMAIL_AUTO_MAC_RUNTIME_RUNBOOK.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/HP_RESEARCH_FIX.md,ドキュメント,Markdown/設計ドキュメント,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] 他ファイルから2件参照あり（['update_hp_research_fix.py', 'update_midday_procedure_signal.py']）"
+docs/MIDDAY_PROCEDURE_SIGNAL.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['update_midday_procedure_signal.py']）
+docs/OUTREACH_EMAIL_TEMPLATE_V2.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/OUTREACH_GMAIL_DRAFT_CREATE.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/OUTREACH_GMAIL_OAUTH_CANARY.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/age_model.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/architecture_v2.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/clinic_identity_readonly_audit.sql,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/clinic_identity_runtime_readiness.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/comdesk_snapshot_diff_import.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/comdesk_sync_release_runbook.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/db_integration/A_readonly_diagnosis.sql,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/B_migration.sql,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/C_post_migration_verification.sql,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/D_recovery_procedure.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/db_integration/B_migration.sql']）
+docs/db_integration/E_send_count_queries.sql,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/epark.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/mac_supabase_reader_launch.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/national_expansion.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/outreach_auto_gmail_batch_phase1.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/outreach_gas_bridge_python_client.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/outreach_gas_sheet_bridge_phase1.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['src/outreach/gas_email_lookup.py']）
+docs/succession_and_ranking.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/20_stage4b7_performance_closure.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/21_stage4c_read_cutover.md,ドキュメント,Markdown/設計ドキュメント,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'scripts/supabase_migration/stage4d_read_comparator.py', 'scripts/supabase_migration/stage4d_ui_baseline.py']）"
+docs/supabase_migration/22_stage4d_write_inventory_gate.md,ドキュメント,Markdown/設計ドキュメント,4件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（4件: ['scripts/supabase_migration/stage4d_runtime_write_schema.sql', 'src/master/identity_contract.py', 'src/repository/high_range_id.py']）"
+docs/supabase_migration/23_stage4d_gate2_offline_preparation.md,ドキュメント,Markdown/設計ドキュメント,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['scripts/supabase_migration/stage4d_runtime_write_schema.sql', 'src/repository/supabase_write_adapter.py']）"
+docs/supabase_migration/24_stage4d_live_cutover_readiness.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['src/repository/sqlite_write_adapter.py']）
+docs/supabase_migration/25_stage4d_final_offline_closure.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/26_stage4d_live_gate1_ddl_apply.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/supabase_migration/stage4d_runtime_write_schema.sql']）
+docs/supabase_migration/27_stage4d_live_gate2_rollback_failure.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/28_stage4d_persistent_canary.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/supabase_migration/29_stage4d_production_write_runtime_closure.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/30_stage4d_write_cutover.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/31_stage5_remove_sqlite_runtime_dependencies.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/32_stage5_external_acceptance.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/31_stage5_remove_sqlite_runtime_dependencies.md']）
+docs/supabase_migration/33_latest_hp_ledger_reconciliation.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/33_stage3_maps_performance_hotfix.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/supabase_migration/stage3_google_maps_clinic_id_index.sql']）
+docs/supabase_migration/34_stage3_full_write_path_optimization.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/35_stage3_batch_projection_type_hotfix.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/36_step4_dynamic_hp_targets.md,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/37_outreach_migration_history_reconciliation.md,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/OUTREACH_SHEETS_GMAIL_INTEGRATION_DESIGN.md']）
+docs/supabase_migration/review/clinic_email_target_reader_comdesk_select.sql,ドキュメント,Markdown/設計ドキュメント,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/review/clinic_email_target_reader_role.sql,ドキュメント,Markdown/設計ドキュメント,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_target_reader_role_sql.py']）
+extensions/google-maps-clinic-collector/CHECKSUMS.txt,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/MULTI_PC_SETUP.md,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/CHANGED_FILES.md,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/README.md,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/TEST_RESULTS.md,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/background.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/config/areas.json,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/config/genres.json,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/content.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon128.png,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon16.png,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon48.png,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/manifest.json,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/offscreen.html,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/offscreen.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/orchestrator.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-queue.html,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-queue.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.css,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.html,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/queue-logic.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/queue-mode.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/service-worker-v3.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/test_queue_logic.js,Google Maps・HP調査,Chrome拡張（Google Maps Business Profile収集ツール）,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+mhlw_dry_run/.gitignore,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/README.md,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/TREATMENT_RESEARCH_CONTRACT.md,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/build_sidecar_db.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/crestix_department_mapping.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/final_hp_promotion_decisions.csv,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/finalize_mhlw_sidecar.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/mhlw_source_manifest.json,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/normalize_v2.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/paths.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase2_build_department_master.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase3_build_crestix_mapping.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase4_join.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase4_join_v2.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase5_6.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase6_5_hp_url_audit.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/rule_c_hp_identity_verification.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/rule_c_identity_rules.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/summarize_safe_matched.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/verify_filter.py,医院マスター・Comdesk,厚生局データ統合・治療研究サイドカーDB構築パイプライン,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_3pc_app.py,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,必須,src/master/national_maps_queue.py経由でGoogle Maps調査キュー機能から現役利用。
+national_maps_output/20260918_190045/README_FIRST.txt,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/manifest.json,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_all.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc1.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc2.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc3.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/national_kouseikyoku_master.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/README_FIRST.txt,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/manifest.json,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_all.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc1.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc2.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc3.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/national_kouseikyoku_master.csv,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/national_maps_3pc_20260918_190045.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/national_maps_3pc_20260918_201021.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/chugoku.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/chugoku_dental.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/hokkaido_clinic.xlsx,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/hokkaido_dental.xlsx,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kanto_shinetsu.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kanto_shinetsu_dental.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kinki.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kinki_dental.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_fukuoka.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_kagoshima.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_kumamoto.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_miyazaki.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_nagasaki.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_oita.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_okinawa.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_saga.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/shikoku.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/shikoku_dental.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tohoku.xlsx,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tohoku_dental.xlsx,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tokai_hokuriku.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tokai_hokuriku_dental.zip,Google Maps・HP調査,全国版Google Mapsキュー生成・収集の出力/ステージングまたは本体スクリプト,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+pyproject.toml,リポジトリ設定,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+requirements-lock.txt,リポジトリ設定,分類未確定（個別確認が必要）,9件の参照あり,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+requirements.txt,リポジトリ設定,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,リポジトリ運用・CI設定ファイル
+samples/comdesk_template_28.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/html/hpl900000002.html,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/html/hpl900000003.html,データ・サンプル,サンプル/テンプレート/出力データファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/excluded.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/final_comdesk_import.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,15件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/judged_all.xlsx,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/needs_review.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,4件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk.xlsx,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk_cp932.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,1件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_doctor_license.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_enrichment.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_epark_confirmed.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_kouseikyoku.csv,データ・サンプル,サンプル/テンプレート/出力データファイル,3件の参照あり,個別確認が必要,保留,テスト・UIからの参照有無を個別確認していないため保留
+scripts/analyze_phase4b_robots_failures.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase4b_robots_diagnosis.py']）
+scripts/audit_outreach_historical_choices.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['scripts/validate_recommender_against_history.py', 'scripts/outreach_phase12_report.py', 'tests/test_audit_outreach_historical_choices.py']）"
+scripts/backfill_dental_sales_tags.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/build_outreach_email_v2_review.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_outreach_email_template_v2.py']）
+scripts/build_release.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/clinic_email_canary.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_canary_command.py']）
+scripts/comdesk_import_parity.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/compare_epark_html.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/epark.md']）
+scripts/create_mac_desktop_launcher.sh,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['scripts/setup_mac_one_click.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/create_windows_desktop_shortcut.ps1,Windows起動,Windows版起動チェーンの構成ファイル,3件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+scripts/email_human_audit_replay.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_human_audit_replay.py']）
+scripts/export_dental_priority_list.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/export_sales_list_to_comdesk.py,その他,分類未確定（個別確認が必要）,5件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（4件: ['scripts/sales_phase4_task8_uuid_join_prep.py', 'scripts/sales_phase4_task9_comdesk_v2_export.py', 'CURRENT_SYSTEM_STATUS.md']）"
+scripts/gas_outreach_readonly_canary.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_gas_outreach_readonly_canary.py']）
+scripts/generate_samples.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/hp_research_batch_run.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/hybrid_phase4a_pilot.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/hybrid_phase4b_full_research.py']）
+scripts/hybrid_phase4b_full_research.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_hybrid_phase4b_retry.py']）
+scripts/import_tokyo.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['app_v2.py']）
+scripts/launch_v2.py,その他,分類未確定（個別確認が必要）,25件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['README.md', 'README_V2.md', 'app_v2.py']）"
+scripts/launch_v2_mac.sh,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['README.md', 'docs/mac_supabase_reader_launch.md', 'scripts/update_and_launch_mac.sh']）"
+scripts/launch_v2_mac_reader.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['scripts/launch_v2_mac.sh', 'tests/test_mac_supabase_reader_preflight.py']）"
+scripts/launch_v2_windows.ps1,Windows起動,Windows版起動チェーンの構成ファイル,5件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+scripts/migrate_sidecar_v2.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/national_append_only_import.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'tests/test_national_append_only_import.py']）"
+scripts/outreach_canary_review.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_outreach_canary_review.py']）
+scripts/outreach_gmail_create_drafts.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['docs/OUTREACH_GMAIL_DRAFT_CREATE.md', 'docs/OUTREACH_GMAIL_OAUTH_CANARY.md', 'tests/test_outreach_gmail_draft_create.py']）"
+scripts/outreach_gmail_history_backfill.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/gmail_history_backfill_328_readiness.md']）
+scripts/outreach_gmail_oauth.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['docs/OUTREACH_GMAIL_OAUTH_CANARY.md', 'tests/test_outreach_gmail_oauth_command.py']）"
+scripts/outreach_legacy_import_preview.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/outreach_mail_canary.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['config/email_research.env.example', 'scripts/launch_v2.py', 'src/outreach/gas_email_lookup.py']）"
+scripts/perf/baseline_live.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/perf/golden/expected.json,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] 他ファイルから2件参照あり（['scripts/perf/perf_common.py', 'scripts/perf/replay.py']）"
+scripts/perf/golden/golden_clinics.json,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/perf/perf_common.py']）
+scripts/perf/perf_common.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,"[再精査:維持確定] 他ファイルから2件参照あり（['scripts/perf/baseline_live.py', 'scripts/perf/replay.py']）"
+scripts/perf/replay.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（21件: ['.gitignore', 'docs/OUTREACH_GMAIL_DRAFT_CREATE.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md']）"
+scripts/phase4b_human_review_summary.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['scripts/phase4b_quality_audit_and_diff.py', 'tests/test_phase4b_human_review_summary.py']）"
+scripts/phase4b_migration_apply.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase4b_migration_dry_run.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase7b_audit_aggregate.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase7b_audit_aggregate.py']）
+scripts/phase7b_audit_queue.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase7b_audit_queue.py']）
+scripts/phase7b_pilot.py,その他,分類未確定（個別確認が必要）,12件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（10件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'scripts/build_research_manifest.py', 'scripts/research_worker.py']）"
+scripts/phase7c_canary.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,"[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'scripts/build_research_manifest.py', 'scripts/migrate_sidecar_v2.py']）"
+scripts/prepare_email_canary_cohort.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_prepare_email_canary_cohort.py']）
+scripts/repair_cancelled_reset_items.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_research_job_cancelled.py']）
+scripts/report_article_master_exclusions.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[再精査:追加確認必要] 静的参照ゼロ
+scripts/reprocess_hp_name_only_mismatch.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_hp_name_only_mismatch_auto_verify.py']）
+scripts/reproject_legacy_departments.py,その他,分類未確定（個別確認が必要）,4件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'tests/test_reproject_legacy_departments.py', 'tests/test_normalized_departments_ssot.py']）"
+scripts/research_worker.py,その他,分類未確定（個別確認が必要）,17件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（21件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+scripts/sales_target_reclassification.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（17件: ['scripts/sales_target_classification_v3_population_update.py', 'scripts/export_sales_list_to_comdesk.py', 'scripts/sales_ai_review_resolution.py']）"
+scripts/setup_mac_one_click.sh,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['scripts/create_mac_desktop_launcher.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/supabase_migration/clinic_email_enrichment_normalized_email.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/clinic_email_enrichment_runtime_select.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/dental_sales_tags_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_human_review_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,3件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_research_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,5件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_runtime_role_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/hp_human_review_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/parity_harness.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,4件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/reconcile_latest_hp_ledger.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/shadow_read_harness.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_full_write_benchmark.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_google_maps_clinic_id_index.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_google_maps_match_benchmark.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4b7_keyword_search_indexes.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_persistent_canary_cleanup.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_read_comparator.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_runtime_write_schema.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,5件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_scope_fix_revoke_out_of_scope_sequence_grants.sql,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_ui_baseline.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_write_cutover_verify.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage5_external_acceptance.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,4件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage5_windows_acceptance.ps1,Windows起動,Windows版起動チェーンの構成ファイル,2件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+scripts/treatment_guard_offline_dry_run.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['scripts/audit_no_new_treatment_rows.py', 'scripts/hybrid_phase3_offline_replay.py', 'tests/test_treatment_guard_offline_dry_run.py']）"
+scripts/update_and_launch_mac.sh,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['docs/EMAIL_AUTO_MAC_RUNTIME_RUNBOOK.md', 'scripts/create_mac_desktop_launcher.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/update_and_launch_windows.ps1,Windows起動,Windows版起動チェーンの構成ファイル,7件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+scripts/validate_recommender_against_history.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/outreach_phase12_report.py']）
+scripts/verify_cloud_runtime.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['tests/test_cloud_run_config.py']）
+scripts/verify_fixed_export.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/22_stage4d_write_inventory_gate.md']）
+setup_v2_windows.bat,Windows起動,Windows版起動チェーンの構成ファイル,4件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+setup_v2_windows.ps1,Windows起動,Windows版起動チェーンの構成ファイル,2件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+src/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/call_desk_ui.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['app_v2.py', 'tests/test_call_desk_ui.py']）"
+src/cloud_run/__init__.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/comdesk_import_writer.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,7件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/deployment_context.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,3件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/dispatch_state.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,4件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/email_executor.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,3件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/feature_flags.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,3件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/hp_executor.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,4件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/job_control.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,13件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/job_dispatch.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,4件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/kouseikyoku_import_writer.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,2件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/maps_collection_writer.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,4件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/maps_import_writer.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,4件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/operator_identity.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,5件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/cloud_run/usage_budget.py,Cloud Run共通依存,Cloud Run専用ロジックだがapp_v2.pyが直接importする共通依存モジュール,3件の参照あり,Mac/Windows共通（app_v2.py経由）+ Cloud Run,必須,app_v2.pyがモジュールレベルでimportしており削除するとMac/Windows起動が壊れる
+src/comdesk_hold_review_ui.py,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/comdesk_uuid_preview_ui.py,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/dental_sales_tags_ui.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['tests/test_dental_sales_tags_ui.py', 'app_v2.py']）"
+src/email_human_review_ui.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/email_research_ui.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/__init__.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/alias_rescue.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/candidate_map.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,11件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/consultation_schedule.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/doctor_license.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/__init__.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/ai_overview_adapter.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/candidate_prefetch.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/candidate_verifier.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/clinic_identity.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_context_extractor.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_extraction.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_role_classifier.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/formal_pipeline.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/official_hp_email_crawler.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/official_site_trust.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/pipeline.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/primary_email_selector.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/search_candidate_adapter.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/search_provider_factory.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/epark_checker.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/hp_analysis.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,55件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/hybrid_treatment.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/kouseikyoku_source.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/profiles.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/researcher.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,15件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/safe_web.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,43件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/search_provider.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,41件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/treatment_context.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/treatment_taxonomy.py,Google Maps・HP調査,HP自動調査・Google Maps関連のenrichmentロジック,31件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/hp_human_review_ui.py,その他,分類未確定（個別確認が必要）,5件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（4件: ['tests/test_hp_human_review.py', 'tests/test_hp_human_review_fail_soft.py', 'tests/test_hp_name_only_mismatch_auto_verify.py']）"
+src/io/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/io/input_loader.py,その他,分類未確定（個別確認が必要）,31件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（31件: ['app.py', 'app_v2.py', 'scripts/comdesk_import_parity.py']）"
+src/io/output_writer.py,その他,分類未確定（個別確認が必要）,19件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（19件: ['app.py', 'app_v2.py', 'scripts/generate_samples.py']）"
+src/master/__init__.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/clinic_identity.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,55件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_cloud_import.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_hold_review.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_reconciliation.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_snapshot.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_snapshot_import.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_sync.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/data_paths.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,11件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/dental_sales_tags.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_auto_run.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_human_review.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_research_config.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_sales_eligibility.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,13件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/filters.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,65件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/fixed_export.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,11件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/google_maps.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,26件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_auto_run.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_auto_state.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_batch_metrics.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_effective_rank.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,12件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_human_review.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_research_batch.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,13件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_site_type.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,10件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/identity_contract.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/jobs.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,38件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/kouseikyoku_cloud_import.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/maps_cloud_import.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/maps_collection_tasks.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/matching.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,18件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/national_maps_queue.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/reintegration.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/research_sidecar.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,14件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/sales_classification.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/sales_treatments.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/samples.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,29件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/scope.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,18件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/store.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,80件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/treatment_incremental.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/matching/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/matching/kouseikyoku_matcher.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['src/pipeline.py', 'tests/test_matching.py']）"
+src/normalizer/__init__.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/address.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,31件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/clinic_name.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,27件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/departments.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,11件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/phone.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,24件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/__init__.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/article_adapter.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/article_recommender.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/auto_draft_batch.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/auto_draft_ui.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/batch_preview.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/canary.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/compose.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_readonly_access.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_template.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,11件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_template_v2.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,8件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_client.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_ledger.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_orchestrator.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_transport.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_email_lookup.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_sheet_bridge.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/generation.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,13件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_drafts.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,12件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_history_backfill.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_oauth.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_workflow.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,9件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/history.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/legacy_import_preview.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/pre_send_review.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/pre_send_ui.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/readonly_access.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/secure_artifacts.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/source_import.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/staff.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/sync_plan.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/targets.py,マイナビ記事連携,マイナビクリニックナビ記事の紐づけ・送付文面・PR判定に関する実装,14件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach_ui.py,Streamlit UI,Streamlit UI補助モジュールまたは設定ファイル,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/pipeline.py,その他,分類未確定（個別確認が必要）,8件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（21件: ['src/enrichment/email_research/email_role_classifier.py', 'src/enrichment/email_research/primary_email_selector.py', 'src/enrichment/email_research/search_candidate_adapter.py']）"
+src/repository/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/repository/backend.py,その他,分類未確定（個別確認が必要）,21件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（73件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'src/hp_human_review_ui.py']）"
+src/repository/comdesk_preview.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（17件: ['app_v2.py', 'docs/mac_supabase_reader_launch.md', 'src/cloud_run/email_executor.py']）"
+src/repository/comdesk_snapshot_repository.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['src/master/comdesk_snapshot_import.py']）
+src/repository/comdesk_writer_safety.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（2件: ['src/repository/supabase_write_adapter.py', 'tests/test_comdesk_writer_safety.py']）"
+src/repository/connection_diagnostics.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（7件: ['app_v2.py', 'src/repository/email_database.py', 'src/repository/email_human_review_repository.py']）"
+src/repository/contracts.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（12件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+src/repository/cutover.py,その他,分類未確定（個別確認が必要）,5件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（17件: ['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/supabase_migration/stage4d_read_comparator.py']）"
+src/repository/dental_sales_tag_repository.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['tests/test_dental_sales_tags_ui.py', 'scripts/backfill_dental_sales_tags.py', 'src/repository/write_backend.py']）"
+src/repository/email_cohort.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['src/repository/email_database.py', 'tests/test_email_cohort.py', 'tests/test_email_db_failure_fail_soft.py']）"
+src/repository/email_database.py,その他,分類未確定（個別確認が必要）,16件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（17件: ['tests/test_email_db_failure_fail_soft.py', 'app_v2.py', 'scripts/outreach_mail_canary.py']）"
+src/repository/email_human_review_repository.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,5件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/email_research_repository.py,メール自動調査,医院メールアドレスの自動調査パイプライン・UI・リポジトリ,12件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/email_target_reader.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（15件: ['scripts/supabase_migration/email_research_schema.sql', 'tests/test_email_research_repository.py', 'config/email_research.env.example']）"
+src/repository/errors.py,その他,分類未確定（個別確認が必要）,9件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（74件: ['app_v2.py', 'data/clinics.sqlite3.before-maps-v4.bak', 'data/clinics_before_v21_20260915_211529.sqlite3']）"
+src/repository/high_range_id.py,その他,分類未確定（個別確認が必要）,4件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（4件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'src/repository/supabase_write_adapter.py', 'src/repository/write_contracts.py']）"
+src/repository/hp_auto_run_repository.py,その他,分類未確定（個別確認が必要）,6件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（8件: ['app_v2.py', 'src/cloud_run/dispatch_state.py', 'src/cloud_run/maps_collection_writer.py']）"
+src/repository/hp_human_review_repository.py,その他,分類未確定（個別確認が必要）,4件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['tests/test_hp_name_only_mismatch_auto_verify.py', 'src/repository/write_backend.py', 'tests/test_hp_human_review.py']）"
+src/repository/hp_sqlite_write_adapter.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/hp_write_backend.py', 'tests/test_stage4d_write_repository.py']）"
+src/repository/hp_supabase_write_adapter.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,6件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/hp_targets.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['src/repository/hp_auto_run_repository.py', 'src/repository/runtime_store.py', 'tests/test_hp_auto_run.py']）"
+src/repository/hp_write_backend.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] app_v2.py/src/配下またはテストから参照（1件: ['src/master/hp_research_batch.py']）
+src/repository/hp_write_contracts.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/25_stage4d_final_offline_closure.md']）
+src/repository/maps_collection_tasks_repository.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（5件: ['app_v2.py', 'src/cloud_run/maps_collection_writer.py', 'tests/test_cloud_run_maps_collection_admin_ui.py']）"
+src/repository/outreach_delivery_repository.py,その他,分類未確定（個別確認が必要）,13件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（13件: ['docs/outreach_gas_bridge_python_client.md', 'src/outreach/gas_bridge_orchestrator.py', 'scripts/gas_outreach_readonly_canary.py']）"
+src/repository/runtime_store.py,その他,分類未確定（個別確認が必要）,17件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（18件: ['tests/test_cloudrun_exclusion_id_process_cache.py', 'tests/test_hp_name_only_mismatch_auto_verify.py', 'app_v2.py']）"
+src/repository/shadow.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'scripts/supabase_migration/shadow_read_harness.py', 'src/repository/supabase_pool.py']）"
+src/repository/sqlite_adapter.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（7件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+src/repository/sqlite_write_adapter.py,その他,分類未確定（個別確認が必要）,11件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（13件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/write_contracts.py']）"
+src/repository/supabase_adapter.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,29件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_filters.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,7件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_pool.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_write_adapter.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,22件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/treatment_sqlite_write_adapter.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/treatment_write_backend.py', 'tests/test_stage4d_write_repository.py']）"
+src/repository/treatment_supabase_write_adapter.py,Supabase・PostgreSQL,Supabase/PostgreSQL接続・移行関連コード,4件の参照あり,Mac/Windows/Cloud Run共通バックエンド,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/treatment_write_backend.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,必須,[再精査:維持確定] 他ファイルから1件参照あり（['scripts/research_worker.py']）
+src/repository/treatment_write_contracts.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,"[再精査:維持確定] docs配下の運用手順から参照（['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/research_worker.py']）"
+src/repository/write_backend.py,その他,分類未確定（個別確認が必要）,33件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（35件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'src/hp_human_review_ui.py', 'tests/test_dental_sales_tags.py']）"
+src/repository/write_contracts.py,その他,分類未確定（個別確認が必要）,7件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（7件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/research_worker.py']）"
+src/safety/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/safety/preview_mode.py,その他,分類未確定（個別確認が必要）,16件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（16件: ['app_v2.py', 'src/cloud_run/email_executor.py', 'src/cloud_run/hp_executor.py']）"
+src/scoring/__init__.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/age_estimator.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,6件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_recalibration.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,7件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_recalibration_v2.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,4件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_v2_features.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,1件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/lead_ranker.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,2件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/research_scoring.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,22件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/succession_detector.py,医院マスター・Comdesk,医院マスター・Comdesk統合・正規化・採点ロジック,3件の参照あり,Mac/Windows共通（app_v2.py経由で利用）,保留,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/utils/__init__.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,必須,[再精査:維持確定] Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/utils/cache.py,その他,分類未確定（個別確認が必要）,3件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（95件: ['.github/workflows/test.yml', '.gitignore', 'app.py']）"
+src/utils/config.py,その他,分類未確定（個別確認が必要）,35件の参照あり,個別確認が必要,必須,"[再精査:維持確定] Windows/Mac起動チェーンから参照（['.gitignore', 'README.md', 'README_V2.md']）"
+src/utils/date_utils.py,その他,分類未確定（個別確認が必要）,23件の参照あり,個別確認が必要,必須,"[再精査:維持確定] app_v2.py/src/配下またはテストから参照（24件: ['app.py', 'app_v2.py', 'scripts/national_append_only_import.py']）"
+start_v2_windows.bat,Windows起動,Windows版起動チェーンの構成ファイル,6件の参照あり,Windows専用起動チェーン,必須,Windows起動チェーンの一部（本セッションでfcfde81からの差分ゼロを確認済み）
+start_windows.bat,旧v1,旧バージョン(v1)の実装またはその起動・テストファイル,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,旧v1、start_windows.bat経由でWindowsからも起動可能,保留,[再精査:追加確認必要] 旧v1(app.py)を直接起動するレガシーバッチ。他PCでの使用有無が未確認
+supabase/migrations/20261016172806_outreach_email_delivery_records.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,5件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019064657_clinic_sales_entity_identity.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019120000_harden_clinic_sales_entity_identity_acl.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019140000_outreach_email_delivery_records_trashed_status.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019140100_outreach_contact_events_bridge.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019140200_outreach_clinic_email_summary_grant.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019143000_clinic_runtime_sales_entity_access.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019144000_clinic_runtime_audit_conflict_read.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019150000_gmail_history_backfill_support.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019151000_clinic_draft_guard.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019160000_outreach_full_sheets_gmail_integration.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019183211_comdesk_crm_snapshot_diff.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261019195000_cloudrun_readonly_clinic_view.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,2件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+supabase/migrations/20261021100000_comdesk_project_case_unique.sql,Supabase・PostgreSQL,Supabaseスキーマmigration（DDL）,1件の参照あり,Mac/Windows/Cloud Run共通バックエンド,必須,Supabaseスキーマのmigration本体
+scripts/manual_ops/test_midday_real_clinic.py,その他,分類未確定（個別確認が必要）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,個別確認が必要,保留,[第3段階整理で移動] 参照ゼロの手動運用ツールのため scripts/manual_ops/ へ移動。[再精査:追加確認必要] update_midday_procedure_signal.pyと同じ機能トピックの手動検証スクリプト。連動して個別確認が必要
+tests/__init__.py,テスト,pytestテストケース（__init__が検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/conftest.py,テスト,pytestテストケース（conftestが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/fixtures/email_confidence_cases.json,テスト,pytestテストケース（email_confidence_casesが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/fixtures/email_role_v6_human_audit.json,テスト,pytestテストケース（email_role_v6_human_auditが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/fixtures/email_trusted_directory_false_negative_cases.json,テスト,pytestテストケース（email_trusted_directory_false_negative_casesが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/support/__init__.py,テスト,pytestテストケース（__init__が検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/support/mock_gas_bridge_server.py,テスト,pytestテストケース（mock_gas_bridge_serverが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_age_estimator.py,テスト,pytestテストケース（test_age_estimatorが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_ai_overview_adapter.py,テスト,pytestテストケース（test_ai_overview_adapterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_alias_rescue.py,テスト,pytestテストケース（test_alias_rescueが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_app.py,旧v1,旧バージョン(v1)の実装またはその起動・テストファイル,1件の参照あり,旧v1、start_windows.bat経由でWindowsからも起動可能,保留,[再精査:追加確認必要] 旧v1(app.py)専用テスト。app.py自体の要否と連動
+tests/test_app_v2_email_integration.py,テスト,pytestテストケース（test_app_v2_email_integrationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_audit_outreach_historical_choices.py,テスト,pytestテストケース（test_audit_outreach_historical_choicesが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_auto_draft_batch.py,テスト,pytestテストケース（test_auto_draft_batchが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_call_desk_ui.py,テスト,pytestテストケース（test_call_desk_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_candidate_map.py,テスト,pytestテストケース（test_candidate_mapが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_candidate_prefetch.py,テスト,pytestテストケース（test_candidate_prefetchが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_candidate_union.py,テスト,pytestテストケース（test_candidate_unionが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_candidate_verifier.py,テスト,pytestテストケース（test_candidate_verifierが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_clinic_identity.py,テスト,pytestテストケース（test_clinic_identityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_comdesk_import_apptest.py,テスト,pytestテストケース（test_cloud_comdesk_import_apptestが検証する機能のリグレッションテスト）,3件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_hp_email_ui_safety.py,テスト,pytestテストケース（test_cloud_hp_email_ui_safetyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_hp_executor.py,テスト,pytestテストケース（test_cloud_hp_executorが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_kouseikyoku_import_apptest.py,テスト,pytestテストケース（test_cloud_kouseikyoku_import_apptestが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_maps_collection_admin_apptest.py,テスト,pytestテストケース（test_cloud_maps_collection_admin_apptestが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_maps_import_apptest.py,テスト,pytestテストケース（test_cloud_maps_import_apptestが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_comdesk_import_ui.py,テスト,pytestテストケース（test_cloud_run_comdesk_import_uiが検証する機能のリグレッションテスト）,3件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_config.py,テスト,pytestテストケース（test_cloud_run_configが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_job_control.py,テスト,pytestテストケース（test_cloud_run_job_controlが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,[第3段階整理で復元] tests/test_cloud_hp_executor.pyがFakeSettingsConnectionをこのファイルからimportしており削除すると収集エラーになることを削除実行後に確認。削除候補から除外し維持確定に訂正。
+tests/test_cloud_run_kouseikyoku_import_ui.py,テスト,pytestテストケース（test_cloud_run_kouseikyoku_import_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_maps_collection_admin_ui.py,テスト,pytestテストケース（test_cloud_run_maps_collection_admin_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_maps_import_ui.py,テスト,pytestテストケース（test_cloud_run_maps_import_uiが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_read_only_export.py,テスト,pytestテストケース（test_cloud_run_read_only_exportが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloud_run_read_only_isolation.py,テスト,pytestテストケース（test_cloud_run_read_only_isolationが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloudrun_exclusion_id_process_cache.py,テスト,pytestテストケース（test_cloudrun_exclusion_id_process_cacheが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloudrun_parity_menu_visibility.py,テスト,pytestテストケース（test_cloudrun_parity_menu_visibilityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_cloudrun_parity_prefecture_search.py,テスト,pytestテストケース（test_cloudrun_parity_prefecture_searchが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_clinic_sync.py,テスト,pytestテストケース（test_comdesk_clinic_syncが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_cloud_import.py,テスト,pytestテストケース（test_comdesk_cloud_importが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_email_export.py,テスト,pytestテストケース（test_comdesk_email_exportが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_fast_import_v2.py,テスト,pytestテストケース（test_comdesk_fast_import_v2が検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_hold_review.py,テスト,pytestテストケース（test_comdesk_hold_reviewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_id_separation.py,テスト,pytestテストケース（test_comdesk_id_separationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_paused_job_export.py,テスト,pytestテストケース（test_comdesk_paused_job_exportが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_preview_only.py,テスト,pytestテストケース（test_comdesk_preview_onlyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_reconciliation.py,テスト,pytestテストケース（test_comdesk_reconciliationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_snapshot_diff.py,テスト,pytestテストケース（test_comdesk_snapshot_diffが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_uuid_preview_ui.py,テスト,pytestテストケース（test_comdesk_uuid_preview_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_comdesk_writer_safety.py,テスト,pytestテストケース（test_comdesk_writer_safetyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_count_invariant.py,テスト,pytestテストケース（test_count_invariantが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_data_paths.py,テスト,pytestテストケース（test_data_pathsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_dental_sales_tags.py,テスト,pytestテストケース（test_dental_sales_tagsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_dental_sales_tags_ui.py,テスト,pytestテストケース（test_dental_sales_tags_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_effective_hp_rank.py,テスト,pytestテストケース（test_effective_hp_rankが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_auto_run.py,テスト,pytestテストケース（test_email_auto_runが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_canary_command.py,テスト,pytestテストケース（test_email_canary_commandが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_cohort.py,テスト,pytestテストケース（test_email_cohortが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_context_extractor.py,テスト,pytestテストケース（test_email_context_extractorが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_database_boundary.py,テスト,pytestテストケース（test_email_database_boundaryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_db_failure_fail_soft.py,テスト,pytestテストケース（test_email_db_failure_fail_softが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_extraction.py,テスト,pytestテストケース（test_email_extractionが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_http_resilience.py,テスト,pytestテストケース（test_email_http_resilienceが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_human_audit_replay.py,テスト,pytestテストケース（test_email_human_audit_replayが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_human_review.py,テスト,pytestテストケース（test_email_human_reviewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_human_review_cached_reconnect_fail_soft.py,テスト,pytestテストケース（test_email_human_review_cached_reconnect_fail_softが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_listing_pagination.py,テスト,pytestテストケース（test_email_listing_paginationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_ownership_government_directory.py,テスト,pytestテストケース（test_email_ownership_government_directoryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_research_config.py,テスト,pytestテストケース（test_email_research_configが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_research_db_reconnect.py,テスト,pytestテストケース（test_email_research_db_reconnectが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_research_pipeline.py,テスト,pytestテストケース（test_email_research_pipelineが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_research_repository.py,テスト,pytestテストケース（test_email_research_repositoryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_role_classifier.py,テスト,pytestテストケース（test_email_role_classifierが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_sales_eligibility.py,テスト,pytestテストケース（test_email_sales_eligibilityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_target_reader.py,テスト,pytestテストケース（test_email_target_readerが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_email_target_reader_role_sql.py,テスト,pytestテストケース（test_email_target_reader_role_sqlが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_enrichment.py,テスト,pytestテストケース（test_enrichmentが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_export_sales_list_to_comdesk.py,テスト,pytestテストケース（test_export_sales_list_to_comdeskが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_bridge_client.py,テスト,pytestテストケース（test_gas_bridge_clientが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_bridge_ledger.py,テスト,pytestテストケース（test_gas_bridge_ledgerが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_bridge_mock_connection.py,テスト,pytestテストケース（test_gas_bridge_mock_connectionが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_bridge_transport.py,テスト,pytestテストケース（test_gas_bridge_transportが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_email_lookup.py,テスト,pytestテストケース（test_gas_email_lookupが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_outreach_readonly_canary.py,テスト,pytestテストケース（test_gas_outreach_readonly_canaryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gas_sheet_bridge.py,テスト,pytestテストケース（test_gas_sheet_bridgeが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_gmail_history_backfill.py,テスト,pytestテストケース（test_gmail_history_backfillが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_google_maps_integration.py,テスト,pytestテストケース（test_google_maps_integrationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hide_tavily_error_ui.py,テスト,pytestテストケース（test_hide_tavily_error_uiが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_abc_ui_export.py,テスト,pytestテストケース（test_hp_abc_ui_exportが検証する機能のリグレッションテスト）,5件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_analysis_malformed_links.py,テスト,pytestテストケース（test_hp_analysis_malformed_linksが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_auto_progress_kpi.py,テスト,pytestテストケース（test_hp_auto_progress_kpiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_auto_progress_ui.py,テスト,pytestテストケース（test_hp_auto_progress_uiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_auto_run.py,テスト,pytestテストケース（test_hp_auto_runが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_batch_metrics.py,テスト,pytestテストケース（test_hp_batch_metricsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_human_review.py,テスト,pytestテストケース（test_hp_human_reviewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_human_review_fail_soft.py,テスト,pytestテストケース（test_hp_human_review_fail_softが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_name_only_mismatch_auto_verify.py,テスト,pytestテストケース（test_hp_name_only_mismatch_auto_verifyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_rank_export_gap.py,テスト,pytestテストケース（test_hp_rank_export_gapが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_rank_recalibration.py,テスト,pytestテストケース（test_hp_rank_recalibrationが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_rank_recalibration_v2.py,テスト,pytestテストケース（test_hp_rank_recalibration_v2が検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_rank_v2_direction_audit.py,テスト,pytestテストケース（test_hp_rank_v2_direction_auditが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_research_batch.py,テスト,pytestテストケース（test_hp_research_batchが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_site_type.py,テスト,pytestテストケース（test_hp_site_typeが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hp_treatment_research_filter.py,テスト,pytestテストケース（test_hp_treatment_research_filterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hybrid_phase4b_retry.py,テスト,pytestテストケース（test_hybrid_phase4b_retryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_hybrid_treatment.py,テスト,pytestテストケース（test_hybrid_treatmentが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_io_and_pipeline.py,テスト,pytestテストケース（test_io_and_pipelineが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_kouseikyoku_cloud_import.py,テスト,pytestテストケース（test_kouseikyoku_cloud_importが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_launch_v2_env.py,テスト,pytestテストケース（test_launch_v2_envが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_lead_ranker.py,テスト,pytestテストケース（test_lead_rankerが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_legacy_scope.py,テスト,pytestテストケース（test_legacy_scopeが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mac_one_click_launcher.py,テスト,pytestテストケース（test_mac_one_click_launcherが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mac_runtime_single_instance.py,テスト,pytestテストケース（test_mac_runtime_single_instanceが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mac_supabase_reader_preflight.py,テスト,pytestテストケース（test_mac_supabase_reader_preflightが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_maps_access_restricted.py,テスト,pytestテストケース（test_maps_access_restrictedが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_maps_cloud_import.py,テスト,pytestテストケース（test_maps_cloud_importが検証する機能のリグレッションテスト）,3件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_maps_collection_tasks.py,テスト,pytestテストケース（test_maps_collection_tasksが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_maps_collection_tasks_repository.py,テスト,pytestテストケース（test_maps_collection_tasks_repositoryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_maps_hp_no_tavily.py,テスト,pytestテストケース（test_maps_hp_no_tavilyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_marketing_filters.py,テスト,pytestテストケース（test_marketing_filtersが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_matching.py,テスト,pytestテストケース（test_matchingが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mhlw_crestix_mapping.py,テスト,pytestテストケース（test_mhlw_crestix_mappingが検証する機能のリグレッションテスト）,4件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mhlw_deterministic_sidecar.py,テスト,pytestテストケース（test_mhlw_deterministic_sidecarが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_mhlw_final_sidecar.py,テスト,pytestテストケース（test_mhlw_final_sidecarが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_midday_procedure_signal.py,テスト,pytestテストケース（test_midday_procedure_signalが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_municipality_filter.py,テスト,pytestテストケース（test_municipality_filterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_national_append_only_import.py,テスト,pytestテストケース（test_national_append_only_importが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_national_maps_queue.py,テスト,pytestテストケース（test_national_maps_queueが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_normalized_departments_ssot.py,テスト,pytestテストケース（test_normalized_departments_ssotが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_official_hp_email_crawler.py,テスト,pytestテストケース（test_official_hp_email_crawlerが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_official_site_trust.py,テスト,pytestテストケース（test_official_site_trustが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_orthodontic_generic_alias_guard.py,テスト,pytestテストケース（test_orthodontic_generic_alias_guardが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_app_test.py,テスト,pytestテストケース（test_outreach_app_testが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_article_adapter.py,テスト,pytestテストケース（test_outreach_article_adapterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_article_recommender.py,テスト,pytestテストケース（test_outreach_article_recommenderが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_batch_preview.py,テスト,pytestテストケース（test_outreach_batch_previewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_batch_size.py,テスト,pytestテストケース（test_outreach_batch_sizeが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_canary_50.py,テスト,pytestテストケース（test_outreach_canary_50が検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_canary_review.py,テスト,pytestテストケース（test_outreach_canary_reviewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_delivery_clinic_statuses.py,テスト,pytestテストケース（test_outreach_delivery_clinic_statusesが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_delivery_repository.py,テスト,pytestテストケース（test_outreach_delivery_repositoryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_email_readonly_access.py,テスト,pytestテストケース（test_outreach_email_readonly_accessが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_email_template.py,テスト,pytestテストケース（test_outreach_email_templateが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_email_template_v2.py,テスト,pytestテストケース（test_outreach_email_template_v2が検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_formal_target_paging.py,テスト,pytestテストケース（test_outreach_formal_target_pagingが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_full_integrations_local.py,テスト,pytestテストケース（test_outreach_full_integrations_localが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_gmail_draft_create.py,テスト,pytestテストケース（test_outreach_gmail_draft_createが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_gmail_drafts.py,テスト,pytestテストケース（test_outreach_gmail_draftsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_gmail_oauth.py,テスト,pytestテストケース（test_outreach_gmail_oauthが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_gmail_oauth_command.py,テスト,pytestテストケース（test_outreach_gmail_oauth_commandが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_gmail_workflow.py,テスト,pytestテストケース（test_outreach_gmail_workflowが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_history_workflow.py,テスト,pytestテストケース（test_outreach_history_workflowが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_legacy_import_preview.py,テスト,pytestテストケース（test_outreach_legacy_import_previewが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_mail_send_text.py,テスト,pytestテストケース（test_outreach_mail_send_textが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_read_only_isolation.py,テスト,pytestテストケース（test_outreach_read_only_isolationが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_realdata_prep.py,テスト,pytestテストケース（test_outreach_realdata_prepが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_outreach_secure_artifacts.py,テスト,pytestテストケース（test_outreach_secure_artifactsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_page_soup_cache.py,テスト,pytestテストケース（test_page_soup_cacheが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_parallel_jobs.py,テスト,pytestテストケース（test_parallel_jobsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase4_join_v2.py,テスト,pytestテストケース（test_phase4_join_v2が検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase4b_human_review_summary.py,テスト,pytestテストケース（test_phase4b_human_review_summaryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase4b_robots_diagnosis.py,テスト,pytestテストケース（test_phase4b_robots_diagnosisが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase7b_audit_aggregate.py,テスト,pytestテストケース（test_phase7b_audit_aggregateが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase7b_audit_queue.py,テスト,pytestテストケース（test_phase7b_audit_queueが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phase7b_pilot.py,テスト,pytestテストケース（test_phase7b_pilotが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_phone_normalizer.py,テスト,pytestテストケース（test_phone_normalizerが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_pipeline.py,テスト,pytestテストケース（test_pipelineが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_prepare_email_canary_cohort.py,テスト,pytestテストケース（test_prepare_email_canary_cohortが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_primary_email_selector.py,テスト,pytestテストケース（test_primary_email_selectorが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_production_db_path_required.py,テスト,pytestテストケース（test_production_db_path_requiredが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_redirect_rescue.py,テスト,pytestテストケース（test_redirect_rescueが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_reproject_legacy_departments.py,テスト,pytestテストケース（test_reproject_legacy_departmentsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_research_job_cancelled.py,テスト,pytestテストケース（test_research_job_cancelledが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_research_worker.py,テスト,pytestテストケース（test_research_workerが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_robots_redirect_policy.py,テスト,pytestテストケース（test_robots_redirect_policyが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_rule_c_identity.py,テスト,pytestテストケース（test_rule_c_identityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_runtime_connection_stability.py,テスト,pytestテストケース（test_runtime_connection_stabilityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_runtime_store_hp_targets.py,テスト,pytestテストケース（test_runtime_store_hp_targetsが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_safe_web_transient_retry.py,テスト,pytestテストケース（test_safe_web_transient_retryが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_sales_classification.py,テスト,pytestテストケース（test_sales_classificationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_sales_classification_v3_priority.py,テスト,pytestテストケース（test_sales_classification_v3_priorityが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_sales_department_treatment_filter.py,テスト,pytestテストケース（test_sales_department_treatment_filterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_sales_treatment_sidecar_union.py,テスト,pytestテストケース（test_sales_treatment_sidecar_unionが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_search_candidate_adapter.py,テスト,pytestテストケース（test_search_candidate_adapterが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_search_provider_serpapi.py,テスト,pytestテストケース（test_search_provider_serpapiが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_shadow_read.py,テスト,pytestテストケース（test_shadow_readが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_simple_workflow_cleanup.py,テスト,pytestテストケース（test_simple_workflow_cleanupが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_stage4c_read_cutover.py,テスト,pytestテストケース（test_stage4c_read_cutoverが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_stage4d_write_repository.py,テスト,pytestテストケース（test_stage4d_write_repositoryが検証する機能のリグレッションテスト）,6件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_stage5_supabase_only_runtime.py,テスト,pytestテストケース（test_stage5_supabase_only_runtimeが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_step4_step5_workflow.py,テスト,pytestテストケース（test_step4_step5_workflowが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_succession_detector.py,テスト,pytestテストケース（test_succession_detectorが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_supabase_effective_rank_sql.py,テスト,pytestテストケース（test_supabase_effective_rank_sqlが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_supabase_filters_regression.py,テスト,pytestテストケース（test_supabase_filters_regressionが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_category_filter.py,テスト,pytestテストケース（test_treatment_category_filterが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_context.py,テスト,pytestテストケース（test_treatment_contextが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_department_context_guard.py,テスト,pytestテストケース（test_treatment_department_context_guardが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_guard_offline_dry_run.py,テスト,pytestテストケース（test_treatment_guard_offline_dry_runが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_incremental.py,テスト,pytestテストケース（test_treatment_incrementalが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_taxonomy_phase7a.py,テスト,pytestテストケース（test_treatment_taxonomy_phase7aが検証する機能のリグレッションテスト）,3件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_taxonomy_phase7b_focus.py,テスト,pytestテストケース（test_treatment_taxonomy_phase7b_focusが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_taxonomy_phase7b_v3_fixes.py,テスト,pytestテストケース（test_treatment_taxonomy_phase7b_v3_fixesが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_treatment_taxonomy_phase7c_v4_fixes.py,テスト,pytestテストケース（test_treatment_taxonomy_phase7c_v4_fixesが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_unlinked_comdesk_export.py,テスト,pytestテストケース（test_unlinked_comdesk_exportが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v255_regression.py,テスト,pytestテストケース（test_v255_regressionが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_app.py,テスト,pytestテストケース（test_v2_appが検証する機能のリグレッションテスト）,4件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_fixed_export.py,テスト,pytestテストケース（test_v2_fixed_exportが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_kanto.py,テスト,pytestテストケース（test_v2_kantoが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_master.py,テスト,pytestテストケース（test_v2_masterが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_network_jobs.py,テスト,pytestテストケース（test_v2_network_jobsが検証する機能のリグレッションテスト）,3件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v2_scoring.py,テスト,pytestテストケース（test_v2_scoringが検証する機能のリグレッションテスト）,1件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v3_hp_false_positives.py,テスト,pytestテストケース（test_v3_hp_false_positivesが検証する機能のリグレッションテスト）,2件の参照あり,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_v3_reintegration.py,テスト,pytestテストケース（test_v3_reintegrationが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_windows_desktop_shortcut.py,テスト,pytestテストケース（test_windows_desktop_shortcutが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+tests/test_windows_release_launcher.py,テスト,pytestテストケース（test_windows_release_launcherが検証する機能のリグレッションテスト）,参照ゼロ（静的grepベース。直接実行/動的import等は別途考慮）,Mac/Windows共通（CI/ローカルpytestで実行）,必須,既存pytestスイートの一部（削除するとカバレッジが失われる）
+update_hp_research_fix.py,その他,分類未確定（個別確認が必要）,2件の参照あり,個別確認が必要,必須,[再精査:維持確定] docs/HP_RESEARCH_FIX.mdがWindows向け適用手順として明示的に参照
+update_midday_procedure_signal.py,その他,分類未確定（個別確認が必要）,1件の参照あり,個別確認が必要,保留,[再精査:追加確認必要] config/treatment_keywords.ymlが本worktreeに無く前提コードと不一致の未適用パッチ候補。IDEで作業中の形跡あり
