@@ -1,3 +1,5 @@
+> **Legacy notice (2026-11-03):** The one-time patcher described below is archived under `old/legacy_scripts/` and must not be run against the reorganized code. This page is historical reference only.
+
 # 昼の検査・手術専用枠の加点（2026-09-15）
 
 医院のHPに「通常の午前診療と午後診療の間に、検査・手術の専用枠を設けている」と分かる時間表がある場合、集客投資シグナルに「昼の検査・手術専用枠」を追加する。

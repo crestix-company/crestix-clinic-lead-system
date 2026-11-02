@@ -1,0 +1,307 @@
+file_path,function_category,candidate_type,reason
+CURRENT_SYSTEM_STATUS.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] コード上の参照はゼロだが『別PC引継ぎ時は最初にこのファイルを確認』と明記された運用ドキュメント
+app.py,旧v1,追加調査が必要,[再精査:追加確認必要] 旧v1実装。start_windows.batから参照が残り他環境での利用可能性を排除できない
+assets/call_desk/call.css,Streamlit UI,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+assets/call_desk/call.html,Streamlit UI,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+config/age_model.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/email_research.env.example,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/hp_ranking.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/outreach_email_v2.example.json,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/outreach_is_staff.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_companies.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_data_version.json,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/production_runtime.env,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/settings.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+config/treatment_taxonomy.yml,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+"""data/raw/131\343\202\263\343\203\274\343\203\211\345\206\205\345\256\271\345\210\245\344\270\200\350\246\247\350\241\250\357\274\210\345\214\273\347\247\221\357\274\211\346\235\261\344\272\254r0809.xlsx""",その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+"""data/raw/131\347\271\247\357\275\263\347\271\235\357\275\274\347\271\235\347\211\231\343\203\273\350\236\263\357\275\271\350\233\273\357\275\245\350\215\263\302\200\351\232\225\357\275\247\351\231\246\357\275\250\343\203\273\344\272\245\347\217\276\351\201\230\346\211\230\357\275\274\347\224\273\346\223\262\350\216\240\357\275\254r0809.xlsx""",その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/EMAIL_AUTO_MAC_RUNTIME_RUNBOOK.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/OUTREACH_EMAIL_TEMPLATE_V2.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/OUTREACH_GMAIL_DRAFT_CREATE.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/OUTREACH_GMAIL_OAUTH_CANARY.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/age_model.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/architecture_v2.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/clinic_identity_readonly_audit.sql,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/clinic_identity_runtime_readiness.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/comdesk_snapshot_diff_import.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/comdesk_sync_release_runbook.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/db_integration/E_send_count_queries.sql,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/epark.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/mac_supabase_reader_launch.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/national_expansion.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/outreach_auto_gmail_batch_phase1.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/outreach_gas_bridge_python_client.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/succession_and_ranking.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/20_stage4b7_performance_closure.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/25_stage4d_final_offline_closure.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/27_stage4d_live_gate2_rollback_failure.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/28_stage4d_persistent_canary.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/supabase_migration/29_stage4d_production_write_runtime_closure.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/30_stage4d_write_cutover.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/31_stage5_remove_sqlite_runtime_dependencies.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/33_latest_hp_ledger_reconciliation.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/34_stage3_full_write_path_optimization.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/35_stage3_batch_projection_type_hotfix.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/36_step4_dynamic_hp_targets.md,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+docs/supabase_migration/review/clinic_email_target_reader_comdesk_select.sql,ドキュメント,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+extensions/google-maps-clinic-collector/CHECKSUMS.txt,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/MULTI_PC_SETUP.md,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/CHANGED_FILES.md,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/README.md,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/TEST_RESULTS.md,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/background.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/config/areas.json,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/config/genres.json,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/content.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon128.png,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon16.png,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/icons/icon48.png,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/manifest.json,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/offscreen.html,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/offscreen.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/orchestrator.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-queue.html,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-queue.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.css,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.html,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/popup-v3.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/queue-logic.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/queue-mode.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/service-worker-v3.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+extensions/google-maps-clinic-collector/google-maps-clinic-collector/test_queue_logic.js,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+mhlw_dry_run/.gitignore,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/README.md,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/TREATMENT_RESEARCH_CONTRACT.md,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/build_sidecar_db.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/crestix_department_mapping.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/final_hp_promotion_decisions.csv,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/finalize_mhlw_sidecar.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/mhlw_source_manifest.json,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/normalize_v2.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/paths.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase2_build_department_master.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase3_build_crestix_mapping.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase4_join.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase4_join_v2.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase5_6.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/phase6_5_hp_url_audit.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/rule_c_hp_identity_verification.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/rule_c_identity_rules.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/summarize_safe_matched.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+mhlw_dry_run/verify_filter.py,医院マスター・Comdesk,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/README_FIRST.txt,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/manifest.json,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_all.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc1.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc2.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/maps_queue_pc3.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_190045/national_kouseikyoku_master.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/README_FIRST.txt,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/manifest.json,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_all.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc1.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc2.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/maps_queue_pc3.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/20260918_201021/national_kouseikyoku_master.csv,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/national_maps_3pc_20260918_190045.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_output/national_maps_3pc_20260918_201021.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/chugoku.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/chugoku_dental.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/hokkaido_clinic.xlsx,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/hokkaido_dental.xlsx,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kanto_shinetsu.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kanto_shinetsu_dental.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kinki.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kinki_dental.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_fukuoka.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_kagoshima.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_kumamoto.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_miyazaki.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_nagasaki.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_oita.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_okinawa.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/kyushu_saga.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/shikoku.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/shikoku_dental.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tohoku.xlsx,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tohoku_dental.xlsx,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tokai_hokuriku.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+national_maps_staging/downloads/20260901/tokai_hokuriku_dental.zip,Google Maps・HP調査,追加調査が必要,過去の調査で『現役パイプラインの一部』と報告されているが、日付付き成果物は一回限りの出力の可能性があり個別の未使用判定は未実施
+samples/comdesk_template_28.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/html/hpl900000002.html,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/html/hpl900000003.html,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/excluded.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/final_comdesk_import.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/judged_all.xlsx,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/outputs/needs_review.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk.xlsx,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_comdesk_cp932.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_doctor_license.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_enrichment.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_epark_confirmed.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+samples/sample_kouseikyoku.csv,データ・サンプル,追加調査が必要,テスト・UIからの参照有無を個別確認していないため保留
+scripts/backfill_dental_sales_tags.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/build_release.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/comdesk_import_parity.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/export_dental_priority_list.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/generate_samples.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/hp_research_batch_run.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/migrate_sidecar_v2.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/outreach_legacy_import_preview.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/perf/baseline_live.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/phase4b_migration_apply.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase4b_migration_dry_run.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/report_article_master_exclusions.py,その他,追加調査が必要,[再精査:追加確認必要] 静的参照ゼロ
+scripts/supabase_migration/clinic_email_enrichment_normalized_email.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/clinic_email_enrichment_runtime_select.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/dental_sales_tags_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_human_review_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_research_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/email_runtime_role_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/hp_human_review_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/parity_harness.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/reconcile_latest_hp_ledger.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/shadow_read_harness.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_full_write_benchmark.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_google_maps_clinic_id_index.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage3_google_maps_match_benchmark.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4b7_keyword_search_indexes.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_persistent_canary_cleanup.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_read_comparator.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_runtime_write_schema.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_scope_fix_revoke_out_of_scope_sequence_grants.sql,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_ui_baseline.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage4d_write_cutover_verify.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+scripts/supabase_migration/stage5_external_acceptance.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/comdesk_hold_review_ui.py,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/comdesk_uuid_preview_ui.py,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/email_human_review_ui.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/email_research_ui.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/__init__.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/alias_rescue.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/candidate_map.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/consultation_schedule.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/doctor_license.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/__init__.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/ai_overview_adapter.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/candidate_prefetch.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/candidate_verifier.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/clinic_identity.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_context_extractor.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_extraction.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/email_role_classifier.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/formal_pipeline.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/official_hp_email_crawler.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/official_site_trust.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/pipeline.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/primary_email_selector.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/search_candidate_adapter.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/email_research/search_provider_factory.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/epark_checker.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/hp_analysis.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/hybrid_treatment.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/kouseikyoku_source.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/profiles.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/researcher.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/safe_web.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/search_provider.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/treatment_context.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/enrichment/treatment_taxonomy.py,Google Maps・HP調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/__init__.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/clinic_identity.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_cloud_import.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_hold_review.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_reconciliation.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_snapshot.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_snapshot_import.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/comdesk_sync.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/data_paths.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/dental_sales_tags.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_auto_run.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_human_review.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_research_config.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/email_sales_eligibility.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/filters.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/fixed_export.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/google_maps.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_auto_run.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_auto_state.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_batch_metrics.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_effective_rank.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_human_review.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_research_batch.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/hp_site_type.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/identity_contract.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/jobs.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/kouseikyoku_cloud_import.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/maps_cloud_import.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/maps_collection_tasks.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/matching.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/national_maps_queue.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/reintegration.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/research_sidecar.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/sales_classification.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/sales_treatments.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/samples.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/scope.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/store.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/master/treatment_incremental.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/__init__.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/address.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/clinic_name.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/departments.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/normalizer/phone.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/__init__.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/article_adapter.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/article_recommender.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/auto_draft_batch.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/auto_draft_ui.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/batch_preview.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/canary.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/compose.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_readonly_access.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_template.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/email_template_v2.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_client.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_ledger.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_orchestrator.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_bridge_transport.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_email_lookup.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gas_sheet_bridge.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/generation.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_drafts.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_history_backfill.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_oauth.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/gmail_workflow.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/history.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/legacy_import_preview.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/pre_send_review.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/pre_send_ui.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/readonly_access.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/secure_artifacts.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/source_import.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/staff.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/sync_plan.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach/targets.py,マイナビ記事連携,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/outreach_ui.py,Streamlit UI,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/email_human_review_repository.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/email_research_repository.py,メール自動調査,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/hp_supabase_write_adapter.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_adapter.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_filters.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_pool.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/supabase_write_adapter.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/repository/treatment_supabase_write_adapter.py,Supabase・PostgreSQL,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/__init__.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/age_estimator.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_recalibration.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_recalibration_v2.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/hp_rank_v2_features.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/lead_ranker.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/research_scoring.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+src/scoring/succession_detector.py,医院マスター・Comdesk,追加調査が必要,本棚卸しでは個別の参照検証まで実施していないため暫定判定
+start_windows.bat,旧v1,追加調査が必要,[再精査:追加確認必要] 旧v1(app.py)を直接起動するレガシーバッチ。他PCでの使用有無が未確認
+tests/test_app.py,旧v1,追加調査が必要,[再精査:追加確認必要] 旧v1(app.py)専用テスト。app.py自体の要否と連動
+update_midday_procedure_signal.py,その他,追加調査が必要,[再精査:追加確認必要] config/treatment_keywords.ymlが本worktreeに無く前提コードと不一致の未適用パッチ候補。IDEで作業中の形跡あり

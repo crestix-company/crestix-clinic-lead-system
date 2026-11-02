@@ -29,7 +29,7 @@ connection covering the preserve-website path and the `already_imported` idempot
 ## 2. Runtime call-site migration — app_v2.py, jobs.py, search_provider.py fully rewired
 
 `CLINIC_WRITE_BACKEND` stays default `sqlite`. Every call site below now goes through
-`src.repository.write_backend.write_repositories_for(store)`, which for the sqlite path wraps
+`src.database.write_backend.write_repositories_for(store)`, which for the sqlite path wraps
 the caller's own existing `store`/`store_for(path)` object (not a freshly-constructed one — see
 that function's docstring for why this matters: it rules out a fresh `ClinicStore` silently
 resolving a different path than the session's, e.g. under demo mode). The underlying SQLite
@@ -44,7 +44,7 @@ every file).
 (dropped its own inline `INSERT`, now calls `jobs.create_job(...)`), and all `pause_job`/
 `reset_job`/`job_limit`/`create_job` UI call sites (×2 each, simple + advanced screens).
 
-**src/master/jobs.py**: `create_job`, `pause_job`, `reset_job`, `job_limit` are now one-line
+**src/services/jobs.py**: `create_job`, `pause_job`, `reset_job`, `job_limit` are now one-line
 delegates to `SqliteJobsWriteRepository`. `_run_locked`'s startup recovery (3-statement atomic
 block), the sequential-mode claim/complete loop, the parallel-lanes claim-specific-item call,
 and `_research_one`'s budget-requeue and finish-item blocks were moved into five new, narrowly
@@ -57,7 +57,7 @@ tried to write `NULL` into a NOT NULL column — caught and fixed before this sh
 Unused `uuid`/`dumps`/`where` imports were removed. `repair_reset_job_items` (Class C, deferred
 admin repair) was intentionally left untouched.
 
-**src/enrichment/search_provider.py**: `CachedSearch.search()`'s entire pre-network-call
+**src/research/search_provider.py**: `CachedSearch.search()`'s entire pre-network-call
 transaction (cache lookup, same-job replay check, monthly/job/session budget checks, and the
 reservation `INSERT`) moved into one new method, `SqliteSearchWriteRepository.check_cache_or_reserve`
 — kept as a single atomic `BEGIN IMMEDIATE`, not split into separate read-then-write calls,
@@ -76,10 +76,10 @@ or better before moving to the next file.
 | File | Direct SQLite WRITE (INSERT/UPDATE/DELETE/BEGIN IMMEDIATE/executemany) remaining | Status |
 |---|---|---|
 | `app_v2.py` | None, except `store.reintegrate_existing()` | Intentional — Class C (Gate1.5 deferred admin reintegration), never in mandatory scope |
-| `src/master/jobs.py` | None, except inside `repair_reset_job_items` | Intentional — Class C (deferred maintenance repair, default `dry_run=True`) |
-| `src/enrichment/search_provider.py` | None | Closed |
-| `src/master/store.py` | Unchanged (`_upsert`, `_project`, `save_research`, `override`, `set_setting`, `resolve_review`, `refresh_age_model`, `import_comdesk`, `import_master`, `reintegrate_existing`) | **By design, not an oversight** — this is the "SQLite Adapter implementation" layer the Repository calls *into* (same relationship as the pre-existing READ-side `sqlite_adapter.py` → `ClinicStore`). Item 7 of the Owner's brief explicitly permits this: "store.py自体を全削除する必要はない...SQLite Adapter実装として残す場合は可." |
-| `src/master/google_maps.py` | Unchanged (`import_maps_results` itself) | Same reasoning — it's now called *through* `SqliteProvenanceWriteRepository.import_maps_results`, not directly by `app_v2.py` anymore |
+| `src/services/jobs.py` | None, except inside `repair_reset_job_items` | Intentional — Class C (deferred maintenance repair, default `dry_run=True`) |
+| `src/research/search_provider.py` | None | Closed |
+| `src/services/store.py` | Unchanged (`_upsert`, `_project`, `save_research`, `override`, `set_setting`, `resolve_review`, `refresh_age_model`, `import_comdesk`, `import_master`, `reintegrate_existing`) | **By design, not an oversight** — this is the "SQLite Adapter implementation" layer the Repository calls *into* (same relationship as the pre-existing READ-side `sqlite_adapter.py` → `ClinicStore`). Item 7 of the Owner's brief explicitly permits this: "store.py自体を全削除する必要はない...SQLite Adapter実装として残す場合は可." |
+| `src/collectors/google_maps.py` | Unchanged (`import_maps_results` itself) | Same reasoning — it's now called *through* `SqliteProvenanceWriteRepository.import_maps_results`, not directly by `app_v2.py` anymore |
 
 **A+B direct SQLite runtime WRITE at the actual UI/worker call-site layer (app_v2.py,
 jobs.py, search_provider.py) = 0, measured, not assumed** (re-grepped after every edit). The
@@ -91,7 +91,7 @@ mirroring the existing READ-side architecture.
   process** per the codebase's own comment ("Research Worker（別worktree/別プロセス）がWRITEし").
   It was not read in full and not touched. Repositoryizing it requires first reading it
   completely and building Treatment-schema Repository methods that don't exist yet.
-- `src/master/hp_research_batch.py` (328 lines, HP batch worker) — writes to its own standalone
+- `src/services/hp_research_batch.py` (328 lines, HP batch worker) — writes to its own standalone
   sidecar schema via its own connection management, entirely independent of `ClinicStore`.
   Not touched.
 
@@ -168,7 +168,7 @@ re-measurement, not an assumption.
 **325/325 comparator: not reproduced this pass.** No standalone script for this figure was
 found — `grep` across `scripts/supabase_migration/` and `tests/` found only the parity harness
 above. The "325/325 shadow/comparator PASS" figure in `21_stage4c_read_cutover.md` reads as a
-one-time count from `src/repository/cutover.py`'s live async comparator (which logs
+one-time count from `src/database/cutover.py`'s live async comparator (which logs
 SQLite-vs-Supabase mismatches during actual interactive app usage, see `logs/read_cutover.log`),
 not a repeatable harness. Reproducing it would mean driving the live UI through 325 real
 operations, which is what the abandoned live-browser check below was attempting a small piece
@@ -205,7 +205,7 @@ as "very likely unaffected, not confirmed."
 ## 8. Treatment worker / HP worker Repositoryization — not done
 
 Explicitly not completed (see §3). `scripts/research_worker.py` is a separate, possibly
-independently-running process and was not read in full or modified. `src/master/hp_research_batch.py`
+independently-running process and was not read in full or modified. `src/services/hp_research_batch.py`
 writes to its own standalone sidecar and was read (schema/header only) but not rewired. No
 Repository methods exist yet for `treatment.clinic_research_status`/`treatment.clinic_treatment_research`
 write paths or for the HP batch's `ON CONFLICT(clinic_id) DO UPDATE` upsert pattern beyond what

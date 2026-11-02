@@ -7,7 +7,7 @@ Treatmentカテゴリは一切使わない（HP ABC判定とTreatmentを独立�
 import re
 from urllib.parse import urlparse
 
-from src.enrichment.hp_analysis import is_official_candidate, page_soup, host
+from src.research.hp_analysis import is_official_candidate, page_soup, host
 from src.scoring.research_scoring import production_companies
 
 FREE_BUILDER_SUFFIXES = (

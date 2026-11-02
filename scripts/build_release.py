@@ -4,7 +4,7 @@ import re
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-SKIP_DIRS={".venv","venv","__pycache__",".pytest_cache",".git","node_modules",".cache"}
+SKIP_DIRS={".venv","venv","__pycache__",".pytest_cache",".git","node_modules",".cache","old"}
 
 
 def build(output=None):

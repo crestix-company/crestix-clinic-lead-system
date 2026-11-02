@@ -18,7 +18,7 @@ implements no write method.
 
 Clinic ID (``public.clinics.id``, bigint) is the only identifier this module
 accepts. ``public.clinics.uuid`` -- the Comdesk UUID -- is copied in only by
-``src.master.comdesk``'s CSV import (from Comdesk's own case/lead-id column; no
+``src.services.comdesk``'s CSV import (from Comdesk's own case/lead-id column; no
 code anywhere generates one) and is therefore empty for any clinic never matched
 into Comdesk. It is an external, often-empty identifier unrelated to Clinic
 Master or Email Research row addressing, and must never gate this lookup --
@@ -71,7 +71,7 @@ def lookup_primary_emails(clinic_ids, *, environ=None,
     ids = sorted({_require_clinic_id(cid) for cid in clinic_ids})
     if not ids:
         return {}
-    from src.repository.email_database import build_email_repositories
+    from src.database.email_database import build_email_repositories
     factory = build_repositories or build_email_repositories
     bundle, status = factory(environ=environ)
     if bundle is None:

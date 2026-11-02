@@ -65,7 +65,7 @@ def check_read_only_db_session(url=None, *, connect=None):
     if not url:
         return {"skipped": True, "reason": "SUPABASE_RUNTIME_DB_URL is not set"}
     if connect is None:
-        from src.repository.supabase_adapter import connect as connect
+        from src.database.supabase_adapter import connect as connect
     conn = connect(url)
     try:
         with conn.cursor() as cur:

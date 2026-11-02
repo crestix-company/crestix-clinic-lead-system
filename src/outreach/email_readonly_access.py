@@ -82,7 +82,7 @@ class EmailReadOnlyReader:
     def primary_emails_by_clinic_id(self, clinic_ids: list[int]) -> dict[int, str]:
         """clinic_id -> Primary Emailのみ返す（Clinic UUIDへの変換は呼び出し側でpublic.clinics経由で行う）。
 
-        既存のHuman Review優先ロジック・final_sales_eligibleの判定（src.master.email_sales_eligibility）
+        既存のHuman Review優先ロジック・final_sales_eligibleの判定（src.services.email_sales_eligibility）
         はPrimary選定時点（email_research側のset_primary_candidate）で既に適用済みという前提の上で、
         このSELECTでも final_sales_eligible = true を明示的に要求し、未承認・低信頼・除外対象
         （final_sales_eligibleがtrue以外）の候補を一切返さない。
@@ -136,7 +136,7 @@ def open_readonly_email_reader(environ=None, connect_fn=None):
     """Returns (reader, conn). Closes the connection and raises if not provably read-only."""
     url = readonly_url(environ)
     if connect_fn is None:
-        from src.repository.supabase_adapter import connect
+        from src.database.supabase_adapter import connect
         conn = connect(url, autocommit=True)
     else:
         conn = connect_fn(url)

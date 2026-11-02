@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.master.scope import LEGACY_PRE_NATIONAL_CUTOFF  # noqa: E402
+from src.services.scope import LEGACY_PRE_NATIONAL_CUTOFF  # noqa: E402
 from src.normalizer.departments import normalize_departments  # noqa: E402
 
 BEAUTY_UNION_LABEL = "美容外科系（美容整形外科+美容外科の合算・audit専用、Production列には書き込まない）"

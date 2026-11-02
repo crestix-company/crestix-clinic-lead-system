@@ -47,6 +47,8 @@ UUID,種別,名前,カナ,郵便番号,都道府県,住所１,住所２,住所�
 
 ## Windows
 
+階層再編ブランチの安全な移送・検証は[Windows検証ガイド](docs/WINDOWS_TEST_GUIDE.md)を参照してください。
+
 ### ISリーダー向け正式手順
 
 標準データフォルダーは次の場所です。3DBはGit管理せず、リポジトリ外へ配置します。
@@ -66,9 +68,7 @@ UUID,種別,名前,カナ,郵便番号,都道府県,住所１,住所２,住所�
 4. `setup_v2_windows.bat`をダブルクリックする。
 5. 完了後、`start_v2_windows.bat`をダブルクリックする。
 
-以後は`start_v2_windows.bat`だけで、未コミット変更がないことを確認し、`git pull --ff-only`で
-GitHubのmainを最新版へ更新してから、3DBをREAD ONLYでpreflightし、アプリを1つ起動します。
-不足DBがある場合は空DBを作成せず、ファイル名を日本語で表示して停止します。
+`start_v2_windows.bat`と`ClinicLead.bat`は、現在checkoutされているブランチとHEADを表示して起動します。起動時にブランチ切替・fetch・pullはしません。未コミット変更があれば停止します。検証対象のブランチを確認してから起動してください。
 
 個別パスを変更する場合、既存env varが`CLINIC_DATA_DIR`より優先されます。
 
@@ -80,14 +80,7 @@ HP_RESEARCH_BATCH_DB_PATH
 CLINIC_DATA_DIR（未設定時は %USERPROFILE%\CrestixData\clinic-lead）
 ```
 
-最新版へ手動更新する場合:
-
-1. アプリを`Ctrl+C`で停止する。
-2. `git status --short`で変更がないことを確認する。
-3. `git switch main`を実行する。
-4. `git pull --ff-only origin main`を実行する。
-5. 必要な場合だけ、管理者から受領した3DBのsnapshotへ入れ替える。
-6. `start_v2_windows.bat`をダブルクリックする。
+別のコミットを検証するときは、現在のブランチと作業内容を確認し、管理者から受領したGit bundleを使って別フォルダに検証用cloneを作成してください。通常の業務クローンでブランチを自動切替したり、起動時にリモート更新したりしません。
 
 禁止事項:
 

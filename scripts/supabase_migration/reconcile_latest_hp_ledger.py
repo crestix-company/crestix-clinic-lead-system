@@ -19,10 +19,10 @@ ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.master.jobs import _hp_ledger_payload
-from src.repository.hp_supabase_write_adapter import SupabaseHpWriteRepository
-from src.repository.runtime_store import SupabaseRuntimeStore, _maps_hp_target_predicate
-from src.repository.supabase_adapter import (
+from src.services.jobs import _hp_ledger_payload
+from src.database.hp_supabase_write_adapter import SupabaseHpWriteRepository
+from src.database.runtime_store import SupabaseRuntimeStore, _maps_hp_target_predicate
+from src.database.supabase_adapter import (
     SupabaseClinicRepository,
     SupabaseHpResearchRepository,
     connect,

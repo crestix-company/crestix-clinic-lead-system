@@ -3,11 +3,11 @@ from copy import deepcopy
 from urllib.parse import urlparse, urljoin
 import re
 from bs4 import BeautifulSoup
-from src.enrichment.hp_analysis import identity, Page, host, domain_is, keyword_match, is_official_candidate, page_soup
-from src.enrichment.consultation_schedule import SIGNAL_NAME as MIDDAY_SIGNAL,midday_procedure
+from src.research.hp_analysis import identity, Page, host, domain_is, keyword_match, is_official_candidate, page_soup
+from src.research.consultation_schedule import SIGNAL_NAME as MIDDAY_SIGNAL,midday_procedure
 from src.utils.config import ROOT, read_config
 from src.normalizer.departments import normalize_departments
-from src.enrichment.treatment_taxonomy import treatment_keyword_view, load_taxonomy
+from src.research.treatment_taxonomy import treatment_keyword_view, load_taxonomy
 
 SIGNAL_NAMES = [
     "Googleスポンサー広告確認済み","EPARK課金済み確認","Doctors File掲載","Medical DOC掲載","マイナビ記事掲載",
@@ -526,7 +526,7 @@ def rank_hp(pages,treatment,signals,config=None):
 
 
 def analyze(record,pages,results=()):
-    from src.enrichment.profiles import estimate_profile_age
+    from src.research.profiles import estimate_profile_age
     treatment=treatments(pages,record=record)
     signals=dedupe_signals(hp_signals(record,pages)+media_signals(record,results))
     return {**treatment,**rank_hp(pages,treatment,signals),**estimate_profile_age(record,pages),**production_companies(pages),

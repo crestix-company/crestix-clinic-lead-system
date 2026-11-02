@@ -66,7 +66,7 @@ def open_readonly_clinic_repository(environ=None, connect_fn=None):
     """Returns (repository, conn). Closes the connection and raises if not provably read-only."""
     url = readonly_url(environ)
     if connect_fn is None:
-        from src.repository.supabase_adapter import connect
+        from src.database.supabase_adapter import connect
         conn = connect(url, autocommit=True)
     else:
         conn = connect_fn(url)
@@ -74,7 +74,7 @@ def open_readonly_clinic_repository(environ=None, connect_fn=None):
         verify_read_only_role(conn)
         with conn.cursor() as cur:  # belt and braces; the role check above is the real guarantee
             cur.execute("SET default_transaction_read_only = on")
-        from src.repository.supabase_adapter import SupabaseClinicRepository, SupabaseHpResearchRepository
+        from src.database.supabase_adapter import SupabaseClinicRepository, SupabaseHpResearchRepository
         return SupabaseClinicRepository(conn, SupabaseHpResearchRepository(conn)), conn
     except Exception:
         conn.close()

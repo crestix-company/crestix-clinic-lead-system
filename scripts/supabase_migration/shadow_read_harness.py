@@ -18,9 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.repository.backend import build_repositories
-from src.master.filters import Filters
-from src.master.data_paths import production_db_path
+from src.database.backend import build_repositories
+from src.services.filters import Filters
+from src.services.data_paths import production_db_path
 from scripts.supabase_migration.full_shadow_import import ro
 
 LATENCIES = {"sqlite": [], "supabase": []}

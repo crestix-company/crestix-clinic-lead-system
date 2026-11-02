@@ -17,9 +17,9 @@ import statistics
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from src.enrichment.candidate_map import department_candidates
-from src.enrichment.hp_analysis import keyword_match
-from src.enrichment.treatment_taxonomy import phase7b_research_categories
+from src.research.candidate_map import department_candidates
+from src.research.hp_analysis import keyword_match
+from src.research.treatment_taxonomy import phase7b_research_categories
 
 
 RESULTS = (

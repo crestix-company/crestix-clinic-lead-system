@@ -77,7 +77,7 @@ def max_single_job_count(mode):
 
 def allow_unlimited_auto_run(mode):
     """"未調査がなくなるまで自動調査" is an unbounded, indefinitely-long-running
-    controller (src.master.hp_auto_run.AutoHpRunner). Cloud Run Jobs here are
+    controller (src.services.hp_auto_run.AutoHpRunner). Cloud Run Jobs here are
     always one bounded, explicitly user-triggered Execution per the implementation
     plan (PR B/C) -- so this mode is never offered once CLINIC_HP_EXECUTOR=cloud_run.
     """

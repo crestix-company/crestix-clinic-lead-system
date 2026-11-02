@@ -19,11 +19,11 @@ import time
 
 from perf_common import (ROOT, PERF_DIR, EXPECTED, NoNetSession, copy_db, golden_ids, run_golden_job,
                          normalized_results, db_state)
-from src.enrichment import safe_web, researcher as researcher_mod
-from src.enrichment.safe_web import WebError, WebResponse
+from src.research import safe_web, researcher as researcher_mod
+from src.research.safe_web import WebError, WebResponse
 from src.scoring import age_estimator
 from src.utils import date_utils
-from src.master import store as store_mod
+from src.services import store as store_mod
 
 REPLAY_DIR = PERF_DIR / "replay"
 SNAPSHOT = REPLAY_DIR / "db_snapshot.sqlite3"
@@ -42,7 +42,7 @@ prof = {"bs_calls": collections.Counter(), "bs_sec": collections.Counter(), "cli
 def _install_profiler():
     """BeautifulSoup生成回数・時間（呼び出し元関数別）、判定時間、医院別時間を計測する（判定には影響しない）。"""
     import bs4
-    from src.enrichment import hp_analysis
+    from src.research import hp_analysis
     orig_bs = bs4.BeautifulSoup.__init__
 
     def bs_init(self, *a, **k):

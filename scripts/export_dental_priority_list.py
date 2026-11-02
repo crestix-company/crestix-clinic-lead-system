@@ -12,7 +12,7 @@ import json
 import os
 from pathlib import Path
 
-from src.repository.supabase_adapter import connect
+from src.database.supabase_adapter import connect
 
 
 def _rows(conn, priorities):

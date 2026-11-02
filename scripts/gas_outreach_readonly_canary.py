@@ -7,7 +7,7 @@ Clinic ID解決件数・PRIMARYメール取得件数・GASペイロード完成�
 下書き/送信済みによる除外件数を集計する。
 
 Clinic ID（public.clinics.id、常時付与）とComdesk UUID（public.clinics.uuid、
-src.master.comdeskのCSV取込時にComdeskの案件ID/管理ID/リードID列から複写される
+src.services.comdeskのCSV取込時にComdeskの案件ID/管理ID/リードID列から複写される
 外部ID。新規にUUIDを生成するコードは存在せず、Comdesk未取込の医院では常に空文字）
 は別の識別子であり、用途も異なる。
 
@@ -51,7 +51,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.outreach.gas_email_lookup import GasEmailLookupError, lookup_primary_emails  # noqa: E402
 from src.outreach.readonly_access import ReadOnlyAccessError, open_readonly_clinic_repository  # noqa: E402
-from src.repository.outreach_delivery_repository import (  # noqa: E402
+from src.database.outreach_delivery_repository import (  # noqa: E402
     BLOCKING_STATUSES, OutreachDatabaseError, OutreachDeliveryRepository,
 )
 
@@ -66,8 +66,8 @@ def stop(code, message):
 def _fetch_clinic_master_records(args, connect_fn):
     repository, conn = open_readonly_clinic_repository(connect_fn=connect_fn)
     try:
-        from src.master.filters import Filters
-        from src.master.scope import SCOPE_ALL
+        from src.services.filters import Filters
+        from src.services.scope import SCOPE_ALL
         return repository.query(Filters(
             active_only=True, hp_only=False, prefectures=args.prefecture, municipalities=args.municipality,
             departments=args.department, effective_ranks=args.rank, scope=SCOPE_ALL), args.scan)
@@ -137,7 +137,7 @@ def main(argv=None, *, clinic_connect_fn=None, outreach_connect_fn=None, email_b
     # --- Readiness: two distinct metrics, deliberately not conflated ---
     # email_ready: Clinic ID + Primary Email + not Gmail-excluded. Comdesk UUID
     # (clinic_uuid) is informational only and never gates this -- a clinic with no
-    # Comdesk UUID yet (never imported via src.master.comdesk) is just as eligible
+    # Comdesk UUID yet (never imported via src.services.comdesk) is just as eligible
     # for a GAS Email payload as one that has one.
     # gas_case_registration_ready: the subset that can ALSO be sent through
     # gas_bridge_client.GasCaseRegistrationRequest today, which still requires a

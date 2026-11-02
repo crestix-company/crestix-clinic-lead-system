@@ -10,7 +10,7 @@ it does not change Maps matching, projection rules, or production clinic data.
 
 ## Implementation
 
-`src/repository/supabase_write_adapter.py` now defines the fixed
+`src/database/supabase_write_adapter.py` now defines the fixed
 `POSTGRES_PROJECTION_TYPES` map and applies a static cast to every placeholder
 in the batch VALUES source. Data remains parameterized. Numeric values are
 normalized to `float | None` and `int`; nullable booleans remain `None` or bool.

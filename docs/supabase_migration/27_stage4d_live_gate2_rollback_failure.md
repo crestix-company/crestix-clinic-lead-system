@@ -69,7 +69,7 @@ and no new canary table was created (per instruction — only existing schema/co
 
 ## 10. medical_key guard — live verification basis
 
-The `medical_key` transition rule itself is pure Python (`src/master/identity_contract.py`),
+The `medical_key` transition rule itself is pure Python (`src/services/identity_contract.py`),
 intentionally backend-independent — it runs identically regardless of which database executes
 the resulting SQL, and is already exhaustively covered by `tests/test_stage4d_write_repository.py`
 (all 6 required transitions + edges, re-run in §13 below, still PASS). What *is* specifically a
@@ -108,10 +108,10 @@ duplicates a business row.
 
 ## 17. No silent fallback
 
-`src/repository/supabase_write_adapter.py` was re-inspected: every write method's exception
+`src/database/supabase_write_adapter.py` was re-inspected: every write method's exception
 handling path is `except Exception as exc: self._conn.rollback(); raise exc` — there is no
 branch anywhere in that file, or in any Supabase adapter file, that calls into
-`src.repository.sqlite_write_adapter` or `ClinicStore` on failure. This was true before this
+`src.database.sqlite_write_adapter` or `ClinicStore` on failure. This was true before this
 Gate and is unchanged by it (no code was touched this Gate). Empirically: every failure
 injection in §11–15 raised its exception back to the caller; `CLINIC_WRITE_BACKEND` stayed
 `sqlite` (its untouched default) throughout; Production SQLite SHA-256 is unchanged (re-verified

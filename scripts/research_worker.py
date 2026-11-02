@@ -44,11 +44,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from scripts.phase7b_pilot import choose_identity_url
-from src.enrichment.candidate_map import candidate_union
-from src.enrichment.hp_analysis import Page, host, identity, is_official_candidate
-from src.enrichment.safe_web import PinnedTransport, SafeFetcher, WebError, crawl
-from src.enrichment.treatment_context import build_evidence_blocks
-from src.enrichment.treatment_taxonomy import (
+from src.research.candidate_map import candidate_union
+from src.research.hp_analysis import Page, host, identity, is_official_candidate
+from src.research.safe_web import PinnedTransport, SafeFetcher, WebError, crawl
+from src.research.treatment_context import build_evidence_blocks
+from src.research.treatment_taxonomy import (
     EVIDENCE_ENGINE_VERSION,
     RULE_VERSION,
     active_treatment_category_names,
@@ -363,7 +363,7 @@ def write_clinic_atomic(db: sqlite3.Connection, clinic_id: int, rows: list[dict]
 
 
 def _build_treatment_repo(final_db_conn):
-    from src.repository.treatment_write_backend import build_treatment_write_repository
+    from src.database.treatment_write_backend import build_treatment_write_repository
     return build_treatment_write_repository(final_db_conn)
 
 
@@ -578,7 +578,7 @@ def run_worker(manifest_path: Path, retry_failed: bool, concurrency: int, batch_
     records = _load_records_for_manifest(manifest_rows)
     progress_db = open_progress_db(paths["progress_db"])
     cache_db = open_cache_db(paths["cache_db"])
-    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
+    from src.database.write_backend import active_write_backend, WRITE_BACKEND_SQLITE
     # Local cache/progress DBs are non-authoritative resumability aids.  The persistent
     # Treatment SoT is opened only in explicit SQLite mode; production writes directly to
     # treatment.* through clinic_runtime.

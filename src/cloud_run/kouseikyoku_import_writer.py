@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import os
 
-from src.repository.write_backend import WRITE_BACKEND_SUPABASE
-from src.repository.write_backend import build_write_repositories as _build_write_repositories
+from src.database.write_backend import WRITE_BACKEND_SUPABASE
+from src.database.write_backend import build_write_repositories as _build_write_repositories
 
 KOUSEIKYOKU_IMPORT_WRITER_DB_URL_ENV_VAR = "SUPABASE_KOUSEIKYOKU_IMPORT_WRITER_DB_URL"
 RUNTIME_DB_URL_ENV_VAR = "SUPABASE_RUNTIME_DB_URL"

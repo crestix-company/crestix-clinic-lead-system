@@ -1,5 +1,5 @@
 """Dedicated, least-privilege DB connection routing for the Cloud Run Google
-Maps import Writer path (src.master.maps_cloud_import / app_v2.cloud_maps_
+Maps import Writer path (src.services.maps_cloud_import / app_v2.cloud_maps_
 import_ui), mirroring src.cloud_run.comdesk_import_writer's proven pattern
 exactly (which itself mirrors src.cloud_run.job_control).
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import os
 
-from src.repository.write_backend import WRITE_BACKEND_SUPABASE
-from src.repository.write_backend import build_write_repositories as _build_write_repositories
+from src.database.write_backend import WRITE_BACKEND_SUPABASE
+from src.database.write_backend import build_write_repositories as _build_write_repositories
 
 MAPS_IMPORT_WRITER_DB_URL_ENV_VAR = "SUPABASE_MAPS_IMPORT_WRITER_DB_URL"
 RUNTIME_DB_URL_ENV_VAR = "SUPABASE_RUNTIME_DB_URL"
@@ -45,7 +45,7 @@ def maps_import_writer_repositories(env=None, *, build_write_repositories=None):
     unrelated writes -- those stay on the general write backend via
     write_repositories_for(). The same connection is also used, read-only
     (SELECT-only prefetch, always rolled back, never committed), for the
-    matching-outcome preview in src.master.maps_cloud_import.preview_maps_import --
+    matching-outcome preview in src.services.maps_cloud_import.preview_maps_import --
     not a second, separately-provisioned reader connection, since the
     preview reuses the exact same least-privilege role and the exact same
     matching queries the real write later runs."""

@@ -5,17 +5,17 @@
 | 層 | 実装 |
 |---|---|
 | 営業画面 | app_v2.py：5画面、日本語表示、ページング、詳細、手動修正、バックアップ |
-| 永続マスター | src/master/store.py：SQLite/WAL、元行とテンプレート、原データ、差分、履歴、手動値 |
-| 同一医院判定 | src/master/matching.py：県＋医科歯科＋医療機関番号、電話裏付け、名前住所、類似候補保留 |
-| SQL検索 | src/master/filters.py：複合条件と段階別件数、JSON配列の診療科・治療・施策検索 |
-| コムデスク列対応 | src/master/comdesk.py：28列の名前・Tel1・分割住所を内部形式へ対応し、既存元行と新規行の出力を分離 |
-| 調査ジョブ | src/master/jobs.py：永続対象リスト、停止再開、ファイルロックによる二重起動防止 |
-| Web検索 | src/enrichment/search_provider.py：Tavily REST basic、差し替え可能なProtocol、永続キャッシュと試行予約 |
-| HTTP取得 | src/enrichment/safe_web.py：DNS固定、公開IP、リダイレクト検査、robots、件数・サイズ・時間制限 |
-| 本人確認 | src/enrichment/hp_analysis.py：医院名の見出し一致＋電話または住所の一致、非公式媒体除外 |
-| 調査手順 | src/enrichment/researcher.py：HP・EPARK・媒体を独立処理、公式HP内を直接解析 |
+| 永続マスター | src/services/store.py：SQLite/WAL、元行とテンプレート、原データ、差分、履歴、手動値 |
+| 同一医院判定 | src/services/matching.py：県＋医科歯科＋医療機関番号、電話裏付け、名前住所、類似候補保留 |
+| SQL検索 | src/services/filters.py：複合条件と段階別件数、JSON配列の診療科・治療・施策検索 |
+| コムデスク列対応 | src/services/comdesk.py：28列の名前・Tel1・分割住所を内部形式へ対応し、既存元行と新規行の出力を分離 |
+| 調査ジョブ | src/services/jobs.py：永続対象リスト、停止再開、ファイルロックによる二重起動防止 |
+| Web検索 | src/research/search_provider.py：Tavily REST basic、差し替え可能なProtocol、永続キャッシュと試行予約 |
+| HTTP取得 | src/research/safe_web.py：DNS固定、公開IP、リダイレクト検査、robots、件数・サイズ・時間制限 |
+| 本人確認 | src/research/hp_analysis.py：医院名の見出し一致＋電話または住所の一致、非公式媒体除外 |
+| 調査手順 | src/research/researcher.py：HP・EPARK・媒体を独立処理、公式HP内を直接解析 |
 | 各種評価 | src/scoring/research_scoring.py：治療・HP機能・集客シグナルを分離 |
-| 年齢 | src/enrichment/profiles.py：院長の医学部卒業年、医籍登録年、矛盾検出、既存仮定分布 |
+| 年齢 | src/research/profiles.py：院長の医学部卒業年、医籍登録年、矛盾検出、既存仮定分布 |
 
 ## 不変条件
 

@@ -4,7 +4,7 @@
 Calls the exact same Repository/Filters functions app_v2.py's simple_sales_ui() calls, with the
 exact same default widget values (read directly from app_v2.py: scope=SCOPE_ALL, medical
 type default "医科", prefecture default ["東京都"] when present, HP rank preset default "A+B",
-all else unset). READ ONLY -- builds repositories via src.repository.backend.build_repositories()
+all else unset). READ ONLY -- builds repositories via src.database.backend.build_repositories()
 (the live, unmodified READ path) and never writes.
 
 Run: source .supabase-db.env.local && .venv/bin/python3 scripts/supabase_migration/stage4d_ui_baseline.py
@@ -16,9 +16,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from src.repository.backend import build_repositories, BACKEND_SUPABASE
-from src.master.filters import Filters
-from src.master.scope import SCOPE_ALL
+from src.database.backend import build_repositories, BACKEND_SUPABASE
+from src.services.filters import Filters
+from src.services.scope import SCOPE_ALL
 
 
 def baseline_filters():

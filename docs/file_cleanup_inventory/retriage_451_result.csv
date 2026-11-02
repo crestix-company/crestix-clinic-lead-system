@@ -1,0 +1,197 @@
+file_path,function_category,verdict,reason
+.agents/skills/developing-with-streamlit,その他,削除可能,壊れたシンボリックリンク。リンク先.venv_mac/...がこのworktreeに存在せず、参照ゼロを確認済み
+.claude/skills/developing-with-streamlit,その他,削除可能,同上
+CODEX_HANDOFF_MINIMAL.md,ドキュメント,維持確定,docs/verification_handoff_minimal.mdから参照。現行アーキテクチャと一致する設計文書
+CURRENT_SYSTEM_STATUS.md,ドキュメント,追加確認必要,コード上の参照はゼロだが『別PC引継ぎ時は最初にこのファイルを確認』と明記された運用ドキュメント
+README_V2.md,ドキュメント,維持確定,docs/verification_v2.mdから現役参照あり
+app.py,旧v1,追加確認必要,旧v1実装。start_windows.batから参照が残り他環境での利用可能性を排除できない
+"""data/raw/131\343\202\263\343\203\274\343\203\211\345\206\205\345\256\271\345\210\245\344\270\200\350\246\247\350\241\250\357\274\210\345\214\273\347\247\221\357\274\211\346\235\261\344\272\254r0809.xlsx""",その他,追加確認必要,静的参照ゼロ
+"""data/raw/131\347\271\247\357\275\263\347\271\235\357\275\274\347\271\235\347\211\231\343\203\273\350\236\263\357\275\271\350\233\273\357\275\245\350\215\263\302\200\351\232\225\357\275\247\351\231\246\357\275\250\343\203\273\344\272\245\347\217\276\351\201\230\346\211\230\357\275\274\347\224\273\346\223\262\350\216\240\357\275\254r0809.xlsx""",その他,追加確認必要,静的参照ゼロ
+docs/AUTONOMOUS_PIPELINE_STATUS.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/DEPARTMENT_ABBREVIATIONS.md,ドキュメント,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['src/normalizer/departments.py']）
+docs/EMAIL_AUTO_MAC_RUNTIME_RUNBOOK.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/HP_RESEARCH_FIX.md,ドキュメント,維持確定,"他ファイルから2件参照あり（['update_hp_research_fix.py', 'update_midday_procedure_signal.py']）"
+docs/MIDDAY_PROCEDURE_SIGNAL.md,ドキュメント,維持確定,他ファイルから1件参照あり（['update_midday_procedure_signal.py']）
+docs/OUTREACH_EMAIL_TEMPLATE_V2.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/OUTREACH_GMAIL_DRAFT_CREATE.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/OUTREACH_GMAIL_OAUTH_CANARY.md,ドキュメント,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/OUTREACH_SHEETS_GMAIL_INTEGRATION_DESIGN.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/age_model.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/architecture_v2.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/clinic_identity_readonly_audit.sql,ドキュメント,追加確認必要,静的参照ゼロ
+docs/clinic_identity_runtime_readiness.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/comdesk_snapshot_diff_import.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/comdesk_sync_release_runbook.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/db_integration/A_readonly_diagnosis.sql,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/B_migration.sql,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/C_post_migration_verification.sql,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/db_integration/D_recovery_procedure.md']）
+docs/db_integration/D_recovery_procedure.md,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/db_integration/B_migration.sql']）
+docs/db_integration/E_send_count_queries.sql,ドキュメント,追加確認必要,静的参照ゼロ
+docs/epark.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/gmail_history_backfill_328_readiness.md,ドキュメント,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/mac_supabase_reader_launch.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/national_expansion.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/outreach_auto_gmail_batch_phase1.md,ドキュメント,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/outreach_gas_bridge_python_client.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/outreach_gas_sheet_bridge_phase1.md,ドキュメント,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['src/outreach/gas_email_lookup.py']）
+docs/succession_and_ranking.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/20_stage4b7_performance_closure.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/21_stage4c_read_cutover.md,ドキュメント,維持確定,"docs配下の運用手順から参照（['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'scripts/supabase_migration/stage4d_read_comparator.py', 'scripts/supabase_migration/stage4d_ui_baseline.py']）"
+docs/supabase_migration/22_stage4d_write_inventory_gate.md,ドキュメント,維持確定,"app_v2.py/src/配下またはテストから参照（4件: ['scripts/supabase_migration/stage4d_runtime_write_schema.sql', 'src/master/identity_contract.py', 'src/repository/high_range_id.py']）"
+docs/supabase_migration/23_stage4d_gate2_offline_preparation.md,ドキュメント,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['scripts/supabase_migration/stage4d_runtime_write_schema.sql', 'src/repository/supabase_write_adapter.py']）"
+docs/supabase_migration/24_stage4d_live_cutover_readiness.md,ドキュメント,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['src/repository/sqlite_write_adapter.py']）
+docs/supabase_migration/25_stage4d_final_offline_closure.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/26_stage4d_live_gate1_ddl_apply.md,ドキュメント,維持確定,他ファイルから1件参照あり（['scripts/supabase_migration/stage4d_runtime_write_schema.sql']）
+docs/supabase_migration/27_stage4d_live_gate2_rollback_failure.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/28_stage4d_persistent_canary.md,ドキュメント,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+docs/supabase_migration/29_stage4d_production_write_runtime_closure.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/30_stage4d_write_cutover.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/31_stage5_remove_sqlite_runtime_dependencies.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/32_stage5_external_acceptance.md,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/supabase_migration/31_stage5_remove_sqlite_runtime_dependencies.md']）
+docs/supabase_migration/33_latest_hp_ledger_reconciliation.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/33_stage3_maps_performance_hotfix.md,ドキュメント,維持確定,他ファイルから1件参照あり（['scripts/supabase_migration/stage3_google_maps_clinic_id_index.sql']）
+docs/supabase_migration/34_stage3_full_write_path_optimization.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/35_stage3_batch_projection_type_hotfix.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/36_step4_dynamic_hp_targets.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/37_outreach_migration_history_reconciliation.md,ドキュメント,維持確定,docs配下の運用手順から参照（['docs/OUTREACH_SHEETS_GMAIL_INTEGRATION_DESIGN.md']）
+docs/supabase_migration/review/clinic_email_target_reader_comdesk_select.sql,ドキュメント,追加確認必要,静的参照ゼロ
+docs/supabase_migration/review/clinic_email_target_reader_role.sql,ドキュメント,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_target_reader_role_sql.py']）
+docs/verification.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/verification_handoff_minimal.md,ドキュメント,追加確認必要,静的参照ゼロ
+docs/verification_v2.md,ドキュメント,追加確認必要,静的参照ゼロ
+generate_treatment_human_review.py,その他,追加確認必要,本番DBパス（~/CrestixData/...）に直接接続する人手レビューCSV生成ツール。治療データ・継続学習領域のため個別確認必要
+hp_test_5_integrated.csv,その他,追加確認必要,過去の調査で検証ドキュメントから参照されている可能性を指摘。要再確認
+rerun_latest_hp_job_v251.py,その他,追加確認必要,本番相当のSQLite DBにINSERT/UPDATEする実行可能スクリプト（過去調査でプロンプトインジェクション攻撃の標的になった経緯あり、慎重な個別確認が必要）
+rerun_latest_hp_job_v252.py,その他,追加確認必要,同上
+run_remaining_tokyo_hp_v254.py,その他,追加確認必要,同上。data/v254_full_run_state.jsonを状態ファイルとして使用する現存スクリプト
+run_remaining_tokyo_hp_v254_v2.py,その他,追加確認必要,同上。data/v254_full_run_state_v2.jsonを使用
+scripts/analyze_fetch_failed.py,その他,追加確認必要,静的参照ゼロ
+scripts/analyze_phase4b_robots_failures.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase4b_robots_diagnosis.py']）
+scripts/analyze_redirects.py,その他,追加確認必要,静的参照ゼロ
+scripts/analyze_robots_redirects.py,その他,追加確認必要,静的参照ゼロ
+scripts/audit_legacy_new_treatment_funnel.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/audit_no_new_treatment_rows.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/audit_outreach_historical_choices.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['scripts/validate_recommender_against_history.py', 'scripts/outreach_phase12_report.py', 'tests/test_audit_outreach_historical_choices.py']）"
+scripts/backfill_dental_sales_tags.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/build_outreach_email_v2_review.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_outreach_email_template_v2.py']）
+scripts/build_release.py,その他,追加確認必要,静的参照ゼロ
+scripts/build_research_manifest.py,その他,追加確認必要,静的参照ゼロ
+scripts/clinic_email_canary.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_canary_command.py']）
+scripts/comdesk_import_parity.py,その他,追加確認必要,静的参照ゼロ
+scripts/compare_epark_html.py,その他,維持確定,docs配下の運用手順から参照（['docs/epark.md']）
+scripts/create_mac_desktop_launcher.sh,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['scripts/setup_mac_one_click.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/email_human_audit_replay.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_email_human_audit_replay.py']）
+scripts/export_dental_priority_list.py,その他,追加確認必要,静的参照ゼロ
+scripts/export_sales_list_to_comdesk.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（4件: ['scripts/sales_phase4_task8_uuid_join_prep.py', 'scripts/sales_phase4_task9_comdesk_v2_export.py', 'CURRENT_SYSTEM_STATUS.md']）"
+scripts/gas_outreach_readonly_canary.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_gas_outreach_readonly_canary.py']）
+scripts/generate_samples.py,その他,追加確認必要,静的参照ゼロ
+scripts/hp_research_batch_run.py,その他,追加確認必要,静的参照ゼロ
+scripts/hybrid_phase3_offline_replay.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/hybrid_phase4a_pilot.py,その他,維持確定,他ファイルから1件参照あり（['scripts/hybrid_phase4b_full_research.py']）
+scripts/hybrid_phase4b_full_research.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_hybrid_phase4b_retry.py']）
+scripts/import_tokyo.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['app_v2.py']）
+scripts/launch_v2.py,その他,維持確定,"Windows/Mac起動チェーンから参照（['README.md', 'README_V2.md', 'app_v2.py']）"
+scripts/launch_v2_mac.sh,その他,維持確定,"Windows/Mac起動チェーンから参照（['README.md', 'docs/mac_supabase_reader_launch.md', 'scripts/update_and_launch_mac.sh']）"
+scripts/launch_v2_mac_reader.py,その他,維持確定,"Windows/Mac起動チェーンから参照（['scripts/launch_v2_mac.sh', 'tests/test_mac_supabase_reader_preflight.py']）"
+scripts/migrate_sidecar_v2.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/national_append_only_import.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'tests/test_national_append_only_import.py']）"
+scripts/outreach_canary_review.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_outreach_canary_review.py']）
+scripts/outreach_gmail_create_drafts.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['docs/OUTREACH_GMAIL_DRAFT_CREATE.md', 'docs/OUTREACH_GMAIL_OAUTH_CANARY.md', 'tests/test_outreach_gmail_draft_create.py']）"
+scripts/outreach_gmail_history_backfill.py,その他,維持確定,docs配下の運用手順から参照（['docs/gmail_history_backfill_328_readiness.md']）
+scripts/outreach_gmail_oauth.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['docs/OUTREACH_GMAIL_OAUTH_CANARY.md', 'tests/test_outreach_gmail_oauth_command.py']）"
+scripts/outreach_legacy_import_preview.py,その他,追加確認必要,静的参照ゼロ
+scripts/outreach_mail_canary.py,その他,維持確定,"Windows/Mac起動チェーンから参照（['config/email_research.env.example', 'scripts/launch_v2.py', 'src/outreach/gas_email_lookup.py']）"
+scripts/outreach_phase12_report.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/perf/baseline_live.py,その他,追加確認必要,静的参照ゼロ
+scripts/perf/golden/expected.json,その他,維持確定,"他ファイルから2件参照あり（['scripts/perf/perf_common.py', 'scripts/perf/replay.py']）"
+scripts/perf/golden/golden_clinics.json,その他,維持確定,他ファイルから1件参照あり（['scripts/perf/perf_common.py']）
+scripts/perf/perf_common.py,その他,維持確定,"他ファイルから2件参照あり（['scripts/perf/baseline_live.py', 'scripts/perf/replay.py']）"
+scripts/perf/replay.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（21件: ['.gitignore', 'docs/OUTREACH_GMAIL_DRAFT_CREATE.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md']）"
+scripts/phase4b_finalize_human_labels.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase4b_human_review_summary.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['scripts/phase4b_quality_audit_and_diff.py', 'tests/test_phase4b_human_review_summary.py']）"
+scripts/phase4b_migration_apply.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase4b_migration_dry_run.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase4b_quality_audit_and_diff.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase7b_audit_aggregate.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase7b_audit_aggregate.py']）
+scripts/phase7b_audit_queue.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_phase7b_audit_queue.py']）
+scripts/phase7b_pilot.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（10件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'scripts/build_research_manifest.py', 'scripts/research_worker.py']）"
+scripts/phase7c_canary.py,その他,維持確定,"docs配下の運用手順から参照（['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'scripts/build_research_manifest.py', 'scripts/migrate_sidecar_v2.py']）"
+scripts/phase7c_canary_audit_queue.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/phase7c_v4opt_benchmark.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/prepare_email_canary_cohort.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_prepare_email_canary_cohort.py']）
+scripts/repair_cancelled_reset_items.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_research_job_cancelled.py']）
+scripts/report_article_master_exclusions.py,その他,追加確認必要,静的参照ゼロ
+scripts/reprocess_hp_name_only_mismatch.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_hp_name_only_mismatch_auto_verify.py']）
+scripts/reproject_legacy_departments.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'tests/test_reproject_legacy_departments.py', 'tests/test_normalized_departments_ssot.py']）"
+scripts/research_worker.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（21件: ['docs/supabase_migration/22_stage4d_write_inventory_gate.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+scripts/sales_ai_review_resolution.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase2_audit_and_resolution.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase3_cluster_audit_final.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task1_generic_alias_fp_review.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task3_human_review_45.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task4_d_rescue_c_confirm.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task5_d_unknown_1483_resort.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task6_7_final_v2_candidate.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task8_uuid_join_prep.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_phase4_task9_comdesk_v2_export.py,その他,追加確認必要,静的参照ゼロ（ファイル名が日付/フェーズ番号付きの一回限り運用ツールのパターンに合致。ただしCLIからの手動実行経路は静的grepでは検出できないため断定しない）
+scripts/sales_target_classification_v3_population_update.py,その他,追加確認必要,静的参照ゼロ
+scripts/sales_target_reclassification.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（17件: ['scripts/sales_target_classification_v3_population_update.py', 'scripts/export_sales_list_to_comdesk.py', 'scripts/sales_ai_review_resolution.py']）"
+scripts/setup_mac_one_click.sh,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['scripts/create_mac_desktop_launcher.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/treatment_guard_offline_dry_run.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['scripts/audit_no_new_treatment_rows.py', 'scripts/hybrid_phase3_offline_replay.py', 'tests/test_treatment_guard_offline_dry_run.py']）"
+scripts/update_and_launch_mac.sh,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['docs/EMAIL_AUTO_MAC_RUNTIME_RUNBOOK.md', 'scripts/create_mac_desktop_launcher.sh', 'tests/test_mac_one_click_launcher.py']）"
+scripts/validate_recommender_against_history.py,その他,維持確定,他ファイルから1件参照あり（['scripts/outreach_phase12_report.py']）
+scripts/verify_cloud_runtime.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['tests/test_cloud_run_config.py']）
+scripts/verify_fixed_export.py,その他,維持確定,docs配下の運用手順から参照（['docs/supabase_migration/22_stage4d_write_inventory_gate.md']）
+src/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/call_desk_ui.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['app_v2.py', 'tests/test_call_desk_ui.py']）"
+src/dental_sales_tags_ui.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['tests/test_dental_sales_tags_ui.py', 'app_v2.py']）"
+src/hp_human_review_ui.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（4件: ['tests/test_hp_human_review.py', 'tests/test_hp_human_review_fail_soft.py', 'tests/test_hp_name_only_mismatch_auto_verify.py']）"
+src/io/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/io/input_loader.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（31件: ['app.py', 'app_v2.py', 'scripts/comdesk_import_parity.py']）"
+src/io/output_writer.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（19件: ['app.py', 'app_v2.py', 'scripts/generate_samples.py']）"
+src/matching/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/matching/kouseikyoku_matcher.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['src/pipeline.py', 'tests/test_matching.py']）"
+src/pipeline.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（21件: ['src/enrichment/email_research/email_role_classifier.py', 'src/enrichment/email_research/primary_email_selector.py', 'src/enrichment/email_research/search_candidate_adapter.py']）"
+src/repository/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/repository/backend.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（73件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'src/hp_human_review_ui.py']）"
+src/repository/comdesk_preview.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（17件: ['app_v2.py', 'docs/mac_supabase_reader_launch.md', 'src/cloud_run/email_executor.py']）"
+src/repository/comdesk_snapshot_repository.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['src/master/comdesk_snapshot_import.py']）
+src/repository/comdesk_writer_safety.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（2件: ['src/repository/supabase_write_adapter.py', 'tests/test_comdesk_writer_safety.py']）"
+src/repository/connection_diagnostics.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（7件: ['app_v2.py', 'src/repository/email_database.py', 'src/repository/email_human_review_repository.py']）"
+src/repository/contracts.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（12件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+src/repository/cutover.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（17件: ['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/supabase_migration/stage4d_read_comparator.py']）"
+src/repository/dental_sales_tag_repository.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['tests/test_dental_sales_tags_ui.py', 'scripts/backfill_dental_sales_tags.py', 'src/repository/write_backend.py']）"
+src/repository/email_cohort.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['src/repository/email_database.py', 'tests/test_email_cohort.py', 'tests/test_email_db_failure_fail_soft.py']）"
+src/repository/email_database.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（17件: ['tests/test_email_db_failure_fail_soft.py', 'app_v2.py', 'scripts/outreach_mail_canary.py']）"
+src/repository/email_target_reader.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（15件: ['scripts/supabase_migration/email_research_schema.sql', 'tests/test_email_research_repository.py', 'config/email_research.env.example']）"
+src/repository/errors.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（74件: ['app_v2.py', 'data/clinics.sqlite3.before-maps-v4.bak', 'data/clinics_before_v21_20260915_211529.sqlite3']）"
+src/repository/high_range_id.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（4件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'src/repository/supabase_write_adapter.py', 'src/repository/write_contracts.py']）"
+src/repository/hp_auto_run_repository.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（8件: ['app_v2.py', 'src/cloud_run/dispatch_state.py', 'src/cloud_run/maps_collection_writer.py']）"
+src/repository/hp_human_review_repository.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['tests/test_hp_name_only_mismatch_auto_verify.py', 'src/repository/write_backend.py', 'tests/test_hp_human_review.py']）"
+src/repository/hp_sqlite_write_adapter.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/hp_write_backend.py', 'tests/test_stage4d_write_repository.py']）"
+src/repository/hp_targets.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['src/repository/hp_auto_run_repository.py', 'src/repository/runtime_store.py', 'tests/test_hp_auto_run.py']）"
+src/repository/hp_write_backend.py,その他,維持確定,app_v2.py/src/配下またはテストから参照（1件: ['src/master/hp_research_batch.py']）
+src/repository/hp_write_contracts.py,その他,維持確定,docs配下の運用手順から参照（['docs/supabase_migration/25_stage4d_final_offline_closure.md']）
+src/repository/maps_collection_tasks_repository.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（5件: ['app_v2.py', 'src/cloud_run/maps_collection_writer.py', 'tests/test_cloud_run_maps_collection_admin_ui.py']）"
+src/repository/outreach_delivery_repository.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（13件: ['docs/outreach_gas_bridge_python_client.md', 'src/outreach/gas_bridge_orchestrator.py', 'scripts/gas_outreach_readonly_canary.py']）"
+src/repository/runtime_store.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（18件: ['tests/test_cloudrun_exclusion_id_process_cache.py', 'tests/test_hp_name_only_mismatch_auto_verify.py', 'app_v2.py']）"
+src/repository/shadow.py,その他,維持確定,"Windows/Mac起動チェーンから参照（['docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'scripts/supabase_migration/shadow_read_harness.py', 'src/repository/supabase_pool.py']）"
+src/repository/sqlite_adapter.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（7件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/24_stage4d_live_cutover_readiness.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md']）"
+src/repository/sqlite_write_adapter.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（13件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/write_contracts.py']）"
+src/repository/treatment_sqlite_write_adapter.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（3件: ['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'src/repository/treatment_write_backend.py', 'tests/test_stage4d_write_repository.py']）"
+src/repository/treatment_write_backend.py,その他,維持確定,他ファイルから1件参照あり（['scripts/research_worker.py']）
+src/repository/treatment_write_contracts.py,その他,維持確定,"docs配下の運用手順から参照（['docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/research_worker.py']）"
+src/repository/write_backend.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（35件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'src/hp_human_review_ui.py', 'tests/test_dental_sales_tags.py']）"
+src/repository/write_contracts.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（7件: ['docs/supabase_migration/23_stage4d_gate2_offline_preparation.md', 'docs/supabase_migration/25_stage4d_final_offline_closure.md', 'scripts/research_worker.py']）"
+src/safety/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/safety/preview_mode.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（16件: ['app_v2.py', 'src/cloud_run/email_executor.py', 'src/cloud_run/hp_executor.py']）"
+src/utils/__init__.py,その他,維持確定,Pythonパッケージ化に必須の構造ファイル（import機構上、名前による参照は発生しないが削除するとパッケージ全体が壊れる）
+src/utils/cache.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（95件: ['.github/workflows/test.yml', '.gitignore', 'app.py']）"
+src/utils/config.py,その他,維持確定,"Windows/Mac起動チェーンから参照（['.gitignore', 'README.md', 'README_V2.md']）"
+src/utils/date_utils.py,その他,維持確定,"app_v2.py/src/配下またはテストから参照（24件: ['app.py', 'app_v2.py', 'scripts/national_append_only_import.py']）"
+src/utils/logging_utils.py,その他,追加確認必要,静的参照ゼロ
+start_windows.bat,旧v1,追加確認必要,旧v1(app.py)を直接起動するレガシーバッチ。他PCでの使用有無が未確認
+test_midday_real_clinic.py,その他,追加確認必要,update_midday_procedure_signal.pyと同じ機能トピックの手動検証スクリプト。連動して個別確認が必要
+tests/test_app.py,旧v1,追加確認必要,旧v1(app.py)専用テスト。app.py自体の要否と連動
+update_hp_research_fix.py,その他,維持確定,docs/HP_RESEARCH_FIX.mdがWindows向け適用手順として明示的に参照
+update_midday_procedure_signal.py,その他,追加確認必要,config/treatment_keywords.ymlが本worktreeに無く前提コードと不一致の未適用パッチ候補。IDEで作業中の形跡あり

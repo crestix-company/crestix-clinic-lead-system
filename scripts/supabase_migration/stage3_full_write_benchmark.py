@@ -17,8 +17,8 @@ ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.master.google_maps import MAPS_RESULT_HEADERS
-from src.repository.supabase_write_adapter import SupabaseProvenanceWriteRepository
+from src.collectors.google_maps import MAPS_RESULT_HEADERS
+from src.database.supabase_write_adapter import SupabaseProvenanceWriteRepository
 
 
 class SyntheticCursor:

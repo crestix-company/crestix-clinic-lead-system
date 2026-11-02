@@ -19,10 +19,10 @@ import time
 from dataclasses import asdict
 
 from src.io.input_loader import load_table
-from src.master.comdesk import infer_comdesk_columns, record_from_row
-from src.master.matching import match_record
-from src.repository.supabase_adapter import connect
-from src.repository.supabase_write_adapter import (
+from src.services.comdesk import infer_comdesk_columns, record_from_row
+from src.services.matching import match_record
+from src.database.supabase_adapter import connect
+from src.database.supabase_write_adapter import (
     _MatchingConnection,
     _PrefetchedMatchingConnection,
     SupabaseClinicWriteRepository,

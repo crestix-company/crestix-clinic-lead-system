@@ -38,7 +38,7 @@ Stage4-C blockerにはしない。ただし短いkeywordの既知performance edg
 
 ### Effective HP Rank View
 
-`src/master/hp_effective_rank.py`の`effective_hp_rank()`をcanonical SSOTとする。
+`src/services/hp_effective_rank.py`の`effective_hp_rank()`をcanonical SSOTとする。
 `public.clinic_effective_hp_rank_v`は全162,258件比較で11件不一致だった
 （`fetch_status='ERROR'`、machine rank空欄、legacy Aが6件・Bが5件）。
 

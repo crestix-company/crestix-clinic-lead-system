@@ -8,7 +8,7 @@ import json
 import pandas as pd
 import streamlit as st
 
-from src.master.national_maps_queue import (
+from src.collectors.national_maps_queue import (
     NATIONAL_MAPS_PARSER_VERSION, OFFICIAL_SOURCES, PREFECTURES, build_package, collect_all_official,
     load_completed_maps_ids_readonly, sha256_file, source_registry_frame, sources_for_medical_types,
 )

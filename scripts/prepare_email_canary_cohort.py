@@ -55,8 +55,8 @@ def _real_uuid(value: object) -> str:
 def _read_only_db_clinics(credential_root: Path) -> tuple[list[dict], dict, set[int]]:
     from scripts.launch_v2 import load_runtime_env
     load_runtime_env(credential_root)
-    from src.repository.email_database import build_email_repositories
-    from src.repository.email_target_reader import connect_email_target_reader
+    from src.database.email_database import build_email_repositories
+    from src.database.email_target_reader import connect_email_target_reader
     bundle, status = build_email_repositories()
     if bundle is None or bundle.email_research is None:
         raise RuntimeError(status.message)

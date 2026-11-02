@@ -14,11 +14,11 @@ from pathlib import Path
 import psycopg
 
 from scripts.launch_v2 import load_runtime_env
-from src.master.data_paths import production_db_path
-from src.master.hp_effective_rank import hp_batch_path
-from src.master.research_sidecar import research_sidecar_path
-from src.master.store import dumps
-from src.repository.write_backend import active_write_backend, build_write_repositories
+from src.services.data_paths import production_db_path
+from src.services.hp_effective_rank import hp_batch_path
+from src.services.research_sidecar import research_sidecar_path
+from src.services.store import dumps
+from src.database.write_backend import active_write_backend, build_write_repositories
 
 
 ROOT = Path(__file__).resolve().parents[2]

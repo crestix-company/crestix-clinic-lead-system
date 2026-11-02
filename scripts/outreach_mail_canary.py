@@ -58,7 +58,7 @@ def load_links(path):
 
 
 def read_emails(ids):
-    from src.repository.email_database import build_email_repositories
+    from src.database.email_database import build_email_repositories
     bundle, status = build_email_repositories()
     if bundle is None:
         raise ReadOnlyAccessError(f"Email調査DBに接続できません: {status.message}")
@@ -110,8 +110,8 @@ def main(argv=None, *, connect_fn=None, email_reader=read_emails):
         return stop(EXIT_PERMISSION, str(exc))
 
     try:
-        from src.master.filters import Filters
-        from src.master.scope import SCOPE_ALL
+        from src.services.filters import Filters
+        from src.services.scope import SCOPE_ALL
         records = repository.query(Filters(
             active_only=True, hp_only=False, prefectures=args.prefecture, municipalities=args.municipality,
             departments=args.department, effective_ranks=args.rank, scope=SCOPE_ALL), args.scan)

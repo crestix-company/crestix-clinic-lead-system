@@ -13,50 +13,50 @@ import streamlit as st
 from src.utils.config import ROOT,read_config
 from src.utils.date_utils import today_japan,within_years
 from src.io.input_loader import load_table,sheet_names
-from src.master.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
-from src.master.clinic_identity import project_export_rows
-from src.master.fixed_export import fixed_row
-from src.io.output_writer import csv_bytes
-from src.enrichment.kouseikyoku_source import load_master
-from src.enrichment.doctor_license import DoctorLicenseCache,parse_license_html
-from src.enrichment.profiles import estimate_profile_age
-from src.enrichment.search_provider import TavilySearchProvider,SearchError,CachedSearch
-from src.enrichment.safe_web import WebError
+from src.services.comdesk import COMDESK_HEADERS, COMDESK_EXPORT_HEADERS, infer_comdesk_columns, new_export_row
+from src.services.clinic_identity import project_export_rows
+from src.exporters.fixed_export import fixed_row
+from src.exporters.output_writer import csv_bytes
+from src.collectors.kouseikyoku_source import load_master
+from src.research.doctor_license import DoctorLicenseCache,parse_license_html
+from src.research.profiles import estimate_profile_age
+from src.research.search_provider import TavilySearchProvider,SearchError,CachedSearch
+from src.research.safe_web import WebError
 from src.normalizer.departments import DEPARTMENTS
-from src.master.store import ClinicStore,mhlw_sidecar_available,mhlw_official_department_options,MhlwSidecarUnavailableError
-from src.master.research_sidecar import research_sidecar_available,clinic_research_status_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
-from src.master.filters import Filters
-from src.master.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
-from src.master.jobs import JobRunner,job_status,recent_jobs
-from src.master.hp_auto_run import AutoHpRunner
-from src.master.hp_auto_state import controller_lease_health
-from src.repository.write_backend import write_repositories_for
+from src.services.store import ClinicStore,mhlw_sidecar_available,mhlw_official_department_options,MhlwSidecarUnavailableError
+from src.services.research_sidecar import research_sidecar_available,clinic_research_status_available,treatment_research_category_options,ResearchSidecarUnavailableError,RESEARCH_STATUS_UI_OPTIONS
+from src.services.filters import Filters
+from src.services.scope import SCOPE_ALL,SCOPE_LEGACY_PRE_NATIONAL,SCOPE_LABELS
+from src.services.jobs import JobRunner,job_status,recent_jobs
+from src.services.hp_auto_run import AutoHpRunner
+from src.services.hp_auto_state import controller_lease_health
+from src.database.write_backend import write_repositories_for
 from src.cloud_run.hp_executor import (
     hp_executor_mode, is_cloud_run_executor, max_single_job_count,
     allow_unlimited_auto_run, dispatch_hp_job,
 )
-from src.repository.connection_diagnostics import (
+from src.database.connection_diagnostics import (
     connection_error_category, is_database_connection_exception, safe_connection_message,
 )
-from src.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
-from src.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
-from src.email_research_ui import (
+from src.ui.hp_human_review_ui import (hp_human_review_card, hp_human_review_page, hp_human_review_sidebar, hp_human_review_dialog)
+from src.ui.email_human_review_ui import (email_human_review_card, email_human_review_page, email_human_review_sidebar, email_human_review_dialog)
+from src.ui.email_research_ui import (
     email_research_page, email_clinic_status_panel, email_auto_research_card,
     email_research_sidebar_status,
 )
-from src.dental_sales_tags_ui import dental_sales_tags_page
-from src.master.samples import load_demo
+from src.ui.dental_sales_tags_ui import dental_sales_tags_page
+from src.services.samples import load_demo
 from src.scoring.research_scoring import SIGNAL_NAMES,AD_SIGNAL_LABELS
-from src.master.filters import AD_COUNT_SQL
-from src.master.sales_treatments import sales_treatment_master
-from src.enrichment.treatment_taxonomy import treatment_category_names
-from src.master.sales_classification import (
+from src.services.filters import AD_COUNT_SQL
+from src.services.sales_treatments import sales_treatment_master
+from src.research.treatment_taxonomy import treatment_category_names
+from src.services.sales_classification import (
     sales_classification_summary,
     SalesClassificationUnavailableError,
 )
-from src.master.hp_batch_metrics import web_research_metrics, BatchMetricInvariantError
-from src.master.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
-from src.master.data_paths import production_db_path
+from src.services.hp_batch_metrics import web_research_metrics, BatchMetricInvariantError
+from src.services.hp_site_type import SITE_TYPE_LABELS, SITE_OFFICIAL, SITE_PORTAL, SITE_OTHER
+from src.services.data_paths import production_db_path
 
 NAV = ["かんたん操作","営業対象・出力","コール","Email調査","メール送付文章","詳細設定"]
 READ_ONLY_UI_ENV_VAR = "CLINIC_READ_ONLY_UI"
@@ -120,22 +120,22 @@ def comdesk_preview_only_mode():
 @st.cache_resource(max_entries=2)
 def comdesk_preview_repository_for(runtime_config_key):
     # runtime_config_key is a process-local HMAC, never the URL itself.
-    from src.repository.comdesk_preview import build_comdesk_preview_repository
+    from src.database.comdesk_preview import build_comdesk_preview_repository
     return build_comdesk_preview_repository()
 
 
 @st.cache_resource(max_entries=2)
 def store_for(path=None, runtime_config_key=None):
-    from src.repository.backend import active_backend, BACKEND_SUPABASE
+    from src.database.backend import active_backend, BACKEND_SUPABASE
     if active_backend() == BACKEND_SUPABASE:
-        from src.repository.runtime_store import SupabaseRuntimeStore
+        from src.database.runtime_store import SupabaseRuntimeStore
         return SupabaseRuntimeStore()
     store = ClinicStore(path)
     # Stage4-B Shadow Read: default is off (CLINIC_SHADOW_READ_ENABLED unset/0), in which case
     # this returns the exact same ClinicStore as before -- no wrapper, no behavior change.
-    from src.repository.shadow import shadow_read_enabled
+    from src.database.shadow import shadow_read_enabled
     if shadow_read_enabled():
-        from src.repository.shadow import ShadowClinicStore
+        from src.database.shadow import ShadowClinicStore
         return ShadowClinicStore(store)
     return store
 
@@ -209,7 +209,7 @@ def show_web_research_metrics(store, *, read_only=False, compact=False):
 
 def show_email_research_metrics(store):
     """Compact operational Email KPIs; values are intentionally distinct from raw candidates."""
-    from src.repository.email_database import email_repositories_for_ui, email_database_ui_status
+    from src.database.email_database import email_repositories_for_ui, email_database_ui_status
 
     repositories = email_repositories_for_ui()
     labels = [
@@ -806,7 +806,7 @@ def listing(store,filters,prefix="list", *, read_only=False):
         for r in records:
             r["treatment_status"] = statuses.get(r["id"])
         if not read_only:
-            from src.repository.email_database import email_repositories_for_ui
+            from src.database.email_database import email_repositories_for_ui
             email_repos = email_repositories_for_ui()
             email_repo = email_repos.email_research if email_repos is not None else None
             email_statuses = email_repo.status_for_ids([r["id"] for r in records]) if email_repo is not None and email_repo.available() else {}
@@ -1467,7 +1467,7 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
 def render_comdesk_clinic_sync(store, write_disabled):
     """Step7's separate preview/apply path for formal Comdesk return files."""
     import pandas as pd
-    from src.master.comdesk_sync import plan_sync, apply_sync
+    from src.services.comdesk_sync import plan_sync, apply_sync
 
     sync_labels = {
         "hp_rank": "HPランク", "hp_url": "公式ホームページURL", "email": "メールアドレス",
@@ -1538,8 +1538,8 @@ def render_comdesk_preview_only(repository):
     from src.safety.preview_mode import comdesk_preview_only_enabled
     if not comdesk_preview_only_enabled():
         raise RuntimeError("Comdesk Preview専用モードが有効ではありません。")
-    from src.master.comdesk import COMDESK_EXPORT_HEADERS
-    from src.master.comdesk_sync import FIELD_HEADERS, plan_sync
+    from src.services.comdesk import COMDESK_EXPORT_HEADERS
+    from src.services.comdesk_sync import FIELD_HEADERS, plan_sync
 
     st.header("Comdesk Step7 — Preview専用")
     st.warning("READ ONLYです。差分確認のみ実行できます。Apply・保存・Job・Email/Gmail・HP処理は無効です。")
@@ -1708,7 +1708,7 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
     what a multi-operator Cloud deployment needs beyond local Mac usage: an
     IAP-identified AND separately-authorized operator (allowlist-checked,
     not "any IAP login"), a read-only preview before any write, and a
-      same-session double-submit guard (src.master.comdesk_cloud_import) --
+      same-session double-submit guard (src.services.comdesk_cloud_import) --
     defense in depth on top of import_comdesk()'s own data-level UUID
     idempotency, which is what actually prevents duplication across
     sessions/restarts/multiple users (the session guard only avoids an
@@ -1717,8 +1717,8 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
 
     KNOWN GAP, deliberately not built in this round: the preview below shows
     row/column counts and raw file content only, not a NEW/UPDATE/HOLD
-    matching-outcome breakdown like src.master.comdesk_snapshot_import's
-    preview_comdesk_snapshot_pair() provides. src.master.matching.match_record()
+    matching-outcome breakdown like src.services.comdesk_snapshot_import's
+    preview_comdesk_snapshot_pair() provides. src.services.matching.match_record()
     is SQLite-specific (uses `?` placeholders against a sqlite3 connection)
     and is not safe to call against the Postgres/Supabase connection this
     path actually uses -- building a correct Postgres-compatible dry-run
@@ -1731,7 +1731,7 @@ def cloud_comdesk_import_ui(store, *, key_prefix):
     from src.cloud_run.deployment_context import is_cloud_run_deployment
     from src.cloud_run.feature_flags import cloud_write_feature_enabled
     from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
-    from src.master.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
+    from src.services.comdesk_cloud_import import comdesk_import_idempotency_key, preview_comdesk_import
 
     if read_only_ui_mode() or not is_cloud_run_deployment():
         return
@@ -1813,7 +1813,7 @@ def cloud_maps_import_ui(store, *, key_prefix):
     Comdesk/厚生局 cloud panels' KNOWN GAP: the Google Maps matcher
     (SupabaseProvenanceWriteRepository._prefetch_maps_targets /
     _find_target_prefetched) is already Postgres-native, so
-    src.master.maps_cloud_import.preview_maps_import() runs that exact
+    src.services.maps_cloud_import.preview_maps_import() runs that exact
     matching logic -- plus the same classify_match_status()/build_maps_
     update() pure functions import_maps_results() itself calls -- read-only
     (SELECT-only, always rolled back even on a mid-way exception) to return
@@ -1837,7 +1837,7 @@ def cloud_maps_import_ui(store, *, key_prefix):
         MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
     )
     from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
-    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+    from src.services.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
 
     if read_only_ui_mode() or not is_cloud_run_deployment():
         return
@@ -1970,7 +1970,7 @@ def cloud_maps_collection_admin_ui(store, *, key_prefix):
     Scope boundary, deliberate and explicit (this is the single most
     important thing to understand about this function): it only tracks
     *which clinics are assigned to which PC slot, in what state* --
-    PENDING/ASSIGNED/ON_HOLD/FAILED/COMPLETED (src.master.
+    PENDING/ASSIGNED/ON_HOLD/FAILED/COMPLETED (src.services.
     maps_collection_tasks). It never performs, scripts, or automates any
     Google Maps interaction. A human still manually loads the exported
     queue CSV into the unchanged Chrome extension on their own PC, manually
@@ -2005,12 +2005,12 @@ def cloud_maps_collection_admin_ui(store, *, key_prefix):
         MapsImportWriterNotConfiguredError, maps_import_writer_repositories,
     )
     from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
-    from src.master.maps_collection_tasks import (
+    from src.services.maps_collection_tasks import (
         PC_SLOTS, TaskTransitionError, build_collection_candidates,
         covered_clinic_ids, export_task_queue_rows,
     )
-    from src.master.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
-    from src.master.store import now
+    from src.services.maps_cloud_import import maps_import_idempotency_key, preview_maps_import
+    from src.services.store import now
 
     if read_only_ui_mode() or not is_cloud_run_deployment():
         return
@@ -2227,7 +2227,7 @@ def cloud_kouseikyoku_import_ui(store):
         KouseikyokuImportWriterNotConfiguredError, kouseikyoku_import_writer_repositories,
     )
     from src.cloud_run.operator_identity import operator_authorized_for_cloud_write, operator_email_from_headers
-    from src.master.kouseikyoku_cloud_import import kouseikyoku_import_idempotency_key, preview_kouseikyoku_import
+    from src.services.kouseikyoku_cloud_import import kouseikyoku_import_idempotency_key, preview_kouseikyoku_import
 
     if read_only_ui_mode() or not is_cloud_run_deployment():
         return
@@ -2916,17 +2916,17 @@ def main():
         st.warning("Cloud Run環境のため、既存の取込・HP Job・Email・設定機能は既定で無効です。個別に承認・実装されたCloud専用機能のみ利用できます。")
 
     if nav == "Comdesk UUID照合プレビュー" and comdesk_preview_enabled:
-        from src.comdesk_uuid_preview_ui import render_comdesk_uuid_preview
-        from src.master.samples import sample_records
+        from src.ui.comdesk_uuid_preview_ui import render_comdesk_uuid_preview
+        from src.services.samples import sample_records
         render_comdesk_uuid_preview(sample_records(), master_label="合成Clinic Master（実DB未接続）")
         return
     if nav == "Comdesk HOLD確認" and comdesk_review_enabled:
-        from src.comdesk_hold_review_ui import render_comdesk_hold_review_page
+        from src.ui.comdesk_hold_review_ui import render_comdesk_hold_review_page
         render_comdesk_hold_review_page()
         return
 
-    from src.repository.backend import active_backend, BACKEND_SUPABASE
-    from src.repository.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
+    from src.database.backend import active_backend, BACKEND_SUPABASE
+    from src.database.write_backend import active_write_backend, WRITE_BACKEND_SUPABASE
     if demo:
         path = Path(os.getenv("CLINIC_DEMO_DB_PATH", str(ROOT/"data/demo.sqlite3")))
     elif active_backend() != BACKEND_SUPABASE:
@@ -2974,7 +2974,7 @@ def main():
         st.info("架空サンプル4医院を表示しています。実データとは別に保存されます。")
 
     if nav == "コール":
-        from src.call_desk_ui import call_desk_page
+        from src.ui.call_desk_ui import call_desk_page
         call_desk_page(store, read_only=read_only)
     elif nav == "かんたん操作":
         simple_workflow_ui(store, demo, read_only=read_only)
@@ -2983,7 +2983,7 @@ def main():
     elif nav == "Email調査":
         email_research_page(store)
     elif nav == "メール送付文章":
-        from src.outreach_ui import outreach_email_page
+        from src.ui.outreach_ui import outreach_email_page
         outreach_email_page(store, demo, read_only=read_only)
     else:
         advanced_ui(store, demo)

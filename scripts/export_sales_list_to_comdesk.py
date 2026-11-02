@@ -30,7 +30,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from src.master.comdesk import COMDESK_HEADERS  # noqa: E402
+from src.services.comdesk import COMDESK_HEADERS  # noqa: E402
 
 CLASSIFICATION_CSV = ROOT / "artifacts" / "sales_target_reclassification" / "sales_target_classification_final.csv"
 CLINIC_DB = Path("/Users/maekawahiroyuki/CrestixData/clinic-lead/clinics.sqlite3")
