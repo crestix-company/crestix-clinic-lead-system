@@ -1557,6 +1557,129 @@ class SupabaseClinicWriteRepository:
                             (batch_id, "comdesk_sync", Jsonb(result), now()))
         return result
 
+    def _plan_comdesk_uuid_only_tx(self, cur, records):
+        """Read and match UUID-empty clinics; caller controls the transaction."""
+        from src.services.comdesk_uuid_reimport import build_uuid_only_plan, normalized
+        phone_keys = sorted({normalized(r["phone"], phone=True) for r in records
+                             if normalized(r["phone"], phone=True)})
+        uids = sorted({r["uuid"] for r in records if r["uuid"]})
+        candidates = {}
+        if phone_keys:
+            cur.execute(
+                "SELECT id,uuid,clinic_name,phone,address FROM public.clinics "
+                "WHERE merged_into IS NULL AND "
+                "regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') = ANY(%s::text[])",
+                (phone_keys,),
+            )
+            for cid, uid, name, phone, address in cur.fetchall():
+                candidates.setdefault(normalized(phone, phone=True), []).append({
+                    "id": cid, "uuid": uid, "clinic_name": name,
+                    "phone": phone, "address": address,
+                })
+        existing = set()
+        if uids:
+            cur.execute("SELECT DISTINCT uuid FROM public.clinics WHERE uuid=ANY(%s::text[])", (uids,))
+            existing.update(str(row[0]) for row in cur.fetchall())
+            if self._common_identity_schema_available(cur):
+                cur.execute(
+                    "SELECT DISTINCT comdesk_uuid FROM public.sales_entity_comdesk_identity "
+                    "WHERE comdesk_uuid=ANY(%s::text[])", (uids,),
+                )
+                existing.update(str(row[0]) for row in cur.fetchall())
+        plan = build_uuid_only_plan(records, candidates, existing)
+        counts = {}
+        for row in plan:
+            if row["status"] == "UPDATE":
+                counts[row["clinic_id"]] = counts.get(row["clinic_id"], 0) + 1
+        for row in plan:
+            if row["status"] == "UPDATE" and counts[row["clinic_id"]] > 1:
+                row.update(status="HOLD", clinic_id=None, reason="同一医院に複数のUUID候補があります")
+        return plan
+
+    def preview_comdesk_uuid_only(self, table):
+        from src.services.comdesk_uuid_reimport import records_from_table
+        records = records_from_table(table)
+        try:
+            with self._conn.cursor() as cur:
+                plan = self._plan_comdesk_uuid_only_tx(cur, records)
+            return plan
+        finally:
+            self._conn.rollback()
+
+    def apply_comdesk_uuid_only(self, table, expected_plan):
+        """Assign Comdesk-provided UUID to existing UUID-empty clinics only."""
+        from src.services.comdesk_uuid_reimport import records_from_table, normalized
+        from src.services.store import digest
+        from psycopg.types.json import Jsonb
+        records = records_from_table(table)
+        batch_id = "comdesk_uuid_only:" + digest([table.headers, table.data.values.tolist()])
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                existing_batch = cur.fetchone()
+                if existing_batch:
+                    return {"already_imported": True, **existing_batch[0]}
+                plan = self._plan_comdesk_uuid_only_tx(cur, records)
+                if plan != expected_plan:
+                    raise ValueError("UUID照合結果がプレビュー後に変わりました。再確認してください。")
+                updated = 0
+                linked = []
+                for row in plan:
+                    if row["status"] != "UPDATE":
+                        continue
+                    cid, uid = row["clinic_id"], row["uuid"]
+                    cur.execute(
+                        "SELECT uuid,clinic_name,phone,address FROM public.clinics "
+                        "WHERE id=%s AND merged_into IS NULL FOR UPDATE", (cid,),
+                    )
+                    current = cur.fetchone()
+                    if not current or str(current[0] or "").strip():
+                        raise ValueError("既存UUIDが変更されました。再確認してください。")
+                    if normalized(current[2], phone=True) != normalized(row["phone"], phone=True):
+                        raise ValueError("電話番号の照合結果が変更されました。")
+                    if not (
+                        normalized(current[1]) == normalized(row["clinic_name"])
+                        or (normalized(row["address"]) and normalized(current[3]) == normalized(row["address"]))
+                    ):
+                        raise ValueError("医院名と住所の照合結果が変更されました。")
+                    # Serialise concurrent imports assigning the same UUID.
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("comdesk_uuid_only:" + uid,))
+                    cur.execute("SELECT id FROM public.clinics WHERE uuid=%s LIMIT 1", (uid,))
+                    if cur.fetchone():
+                        raise ValueError("Comdesk UUIDはすでに別の医院で使われています。")
+                    if self._common_identity_schema_available(cur):
+                        cur.execute(
+                            "SELECT common_clinic_id FROM public.sales_entity_comdesk_identity "
+                            "WHERE comdesk_uuid=%s LIMIT 1", (uid,),
+                        )
+                        if cur.fetchone():
+                            raise ValueError("Comdesk UUIDはすでに共通医院IDへ紐付いています。")
+                    cur.execute(
+                        "UPDATE public.clinics SET uuid=%s,last_seen_at=%s "
+                        "WHERE id=%s AND COALESCE(btrim(uuid),'')=''",
+                        (uid, now(), cid),
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError("UUID更新対象が変わりました。処理を取り消しました。")
+                    cur.execute(
+                        "INSERT INTO provenance.change_history"
+                        "(clinic_id,action,before_json,after_json,note,created_at) "
+                        "VALUES(%s,%s,%s,%s,%s,%s)",
+                        (cid, "Comdesk UUID付与", dumps({"uuid": ""}), dumps({"uuid": uid}),
+                         "Step7 UUID-only reimport", now()),
+                    )
+                    linked.append(cid)
+                    updated += 1
+                if linked:
+                    self._ensure_comdesk_common_identities(cur, linked)
+                result = {"updated": updated, "held": len(plan) - updated}
+                cur.execute(
+                    "INSERT INTO provenance.import_batches(id,source,result_json,created_at) "
+                    "VALUES(%s,%s,%s,%s)",
+                    (batch_id, "comdesk_uuid_only", Jsonb(result), now()),
+                )
+                return result
+
     def import_comdesk(self, table, mapping=None):
         """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
 
