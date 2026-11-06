@@ -1163,8 +1163,10 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     st.header("上から順に進めるだけ")
     st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
 
-    st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
+    st.subheader("Step1：Comdesk最新データを取り込む")
+    st.caption("Comdeskの営業情報・HP評価を正本として扱います。医院情報CSVと営業履歴CSVは既存の取込形式に合わせて入力します。")
     import_ui_comdesk_step(store, write_disabled)
+    render_comdesk_clinic_sync(store, write_disabled)
 
     st.subheader("現在のデータ状況")
     show_web_research_metrics(store, compact=True)
@@ -1403,10 +1405,12 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.warning(f"Step6の内訳を確認できません：{exc}")
     render_comdesk_sync_export(store, demo)
 
-    st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
-    st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
-    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
-    render_comdesk_clinic_sync(store, write_disabled)
+    st.subheader("Step7：UUID未付与医院へのComdesk UUID紐付け")
+    st.caption("Step6でUUIDが未付与の医院だけをCSV出力 → Comdeskに登録してUUIDを付与 → 付与後CSVを再取込します。既存UUIDを上書きしません。")
+    import_ui_comdesk_step(
+        store, write_disabled, key_prefix="simple_comdesk_reimport",
+        button_label="UUID付与後CSVを再取り込む", show_extra_panels=False,
+    )
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1423,7 +1427,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     )
 
 
-def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録", show_extra_panels=True):
     upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled)
     if upload:
         table = upload_table(upload, key_prefix)
@@ -1460,8 +1464,9 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     # (checked at its own entry), so gating it on write_disabled as well
     # would make it dead code -- its own flag/operator/writer-connection
     # checks are the real, independent gate for that path.
-    render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
-    cloud_comdesk_import_ui(store, key_prefix=key_prefix)
+    if show_extra_panels:
+        render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
+        cloud_comdesk_import_ui(store, key_prefix=key_prefix)
 
 
 def render_comdesk_clinic_sync(store, write_disabled):
