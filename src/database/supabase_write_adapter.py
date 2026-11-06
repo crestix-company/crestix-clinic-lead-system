@@ -1416,6 +1416,60 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
+    def preview_comdesk_step1(self, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                              clinic_table):
+        """Preview paired CRM snapshot + authoritative HP ranks without writes."""
+        from src.services.comdesk_step1 import rank_only_table
+        from src.services.comdesk_sync import plan_sync
+        sales_summary = self.preview_comdesk_snapshot_pair(
+            sales_bytes, clinic_bytes, sales_name, clinic_name)
+        rank_plan = plan_sync(rank_only_table(clinic_table), self)
+        return {"sales": sales_summary, "rank": rank_plan}
+
+    def apply_comdesk_step1(self, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                            clinic_table, expected_preview):
+        """All-or-nothing snapshot and rank application on an approved development DB."""
+        from src.services.comdesk_snapshot_import import (
+            _ensure_development_import_enabled, _plan_pair, _summary,
+        )
+        from src.database.comdesk_snapshot_repository import persist_snapshot_batch
+        from src.services.comdesk_step1 import rank_only_table
+        from src.services.comdesk_sync import plan_sync
+        from src.services.store import digest
+
+        _ensure_development_import_enabled(self._conn)
+        self._conn.rollback()
+        rank_plan = plan_sync(rank_only_table(clinic_table), self)
+        if rank_plan != expected_preview["rank"]:
+            raise ValueError("HPランクのプレビュー結果が変更されました。再確認してください。")
+        with self._conn.transaction():
+            plans, sales_digest, clinic_digest, snapshot_at = _plan_pair(
+                self._conn, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                lock_snapshots=True)
+            sales_summary = _summary(plans)
+            if sales_summary != expected_preview["sales"]:
+                raise ValueError("営業履歴のプレビュー結果が変更されました。再確認してください。")
+            supported_uuid = {p.comdesk_uuid for p in plans if p.action != "HOLD"}
+            changes = []
+            for row in rank_plan["rows"]:
+                if row["status"] != "AUTO_UPDATE" or "hp_rank" not in row["changes"]:
+                    continue
+                if row["comdesk_uuid"] not in supported_uuid:
+                    raise ValueError("営業側でHOLDとなった医院のHPランクは同期しません。")
+                changes.append({**row, "source_snapshot_at": snapshot_at})
+            # The snapshot history and the HP rank share one outer transaction.
+            sales_result = persist_snapshot_batch(
+                self._conn, plans, sales_file_sha256=sales_digest,
+                clinic_file_sha256=clinic_digest, source_snapshot_at=snapshot_at,
+            )
+            with self._conn.cursor() as cur:
+                cur.execute("RESET ROLE")
+            rank_result = self.apply_comdesk_sync(
+                changes,
+                digest(["step1_hp", snapshot_at, sales_digest, clinic_digest]),
+            ) if changes else {"updated": 0}
+        return {"sales": sales_result, "rank": rank_result}
+
     def import_comdesk_snapshot_pair(self, sales_bytes, clinic_bytes,
                                      sales_filename, clinic_filename):
         """Apply an explicitly enabled development snapshot import in one transaction."""
