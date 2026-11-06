@@ -1588,6 +1588,19 @@ class SupabaseClinicWriteRepository:
                             hours[field] = pair["after"]
                             base["comdesk_sync_hours"] = effective["comdesk_sync_hours"] = hours
                         elif field == "hp_rank":
+                            if item.get("source_snapshot_at"):
+                                from datetime import datetime
+                                incoming_at = datetime.fromisoformat(
+                                    item["source_snapshot_at"].replace("Z", "+00:00"))
+                                previous_at = base.get("comdesk_hp_rank_snapshot_at")
+                                if previous_at:
+                                    previous_dt = datetime.fromisoformat(
+                                        str(previous_at).replace("Z", "+00:00"))
+                                    if incoming_at <= previous_dt:
+                                        raise ValueError(
+                                            "過去または同日時のComdesk CSVではHPランクを更新できません。")
+                                base["comdesk_hp_rank_snapshot_at"] = item["source_snapshot_at"]
+                                effective["comdesk_hp_rank_snapshot_at"] = item["source_snapshot_at"]
                             # Comdesk is the approved HP-rank source of truth. Remove the
                             # now-obsolete manual override only for this exact clinic/field,
                             # so subsequent projection refreshes cannot resurrect its value.
