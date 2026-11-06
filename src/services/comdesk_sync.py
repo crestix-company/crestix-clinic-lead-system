@@ -59,7 +59,7 @@ class SyncChange:
 
 
 def plan_sync(table, repository):
-    """Create a stable preview. Unimplemented/unsafe destinations are explicitly HOLD."""
+    """Create a stable preview. Comdesk HP rank is authoritative; unsafe destinations stay HOLD."""
     if not {"UUID", "HPランク", "URL", "メールアドレス"}.issubset(table.headers):
         raise ValueError("Step7同期にはComdesk 30列形式（UUID・HPランク・メールアドレス）が必要です。")
     rows = table.data.values.tolist()
@@ -106,7 +106,7 @@ def plan_sync(table, repository):
                     held.append(field)
                     continue
                 if field == "hp_rank":
-                    if clinic.get("hp_rank_manual") or value.upper() not in {"A", "B", "C", "D", "NO_HP", "UNKNOWN"}:
+                    if value.upper() not in {"A", "B", "C", "D", "NO_HP", "UNKNOWN"}:
                         held.append(field)
                         continue
                     value = value.upper()

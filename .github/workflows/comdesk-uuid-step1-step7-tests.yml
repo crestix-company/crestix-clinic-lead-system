@@ -1,0 +1,33 @@
+name: Comdesk Step1 and Step7 unit tests
+
+on:
+  pull_request:
+    paths:
+      - 'app_v2.py'
+      - 'src/services/comdesk*.py'
+      - 'src/database/supabase_write_adapter.py'
+      - 'tests/test_comdesk*.py'
+      - '.github/workflows/comdesk-uuid-step1-step7-tests.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comdesk-unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test prerequisites
+        run: python -m pip install pandas openpyxl
+      - name: Run Comdesk pure unit tests (no database)
+        env:
+          PYTHONPATH: .
+        run: |
+          python -m unittest discover -s tests -p 'test_comdesk_authoritative_hp_sync.py' -v
+          python -m unittest discover -s tests -p 'test_comdesk_uuid_only_reimport.py' -v
+          python -m unittest discover -s tests -p 'test_comdesk_step1_unified.py' -v

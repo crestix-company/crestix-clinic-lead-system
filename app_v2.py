@@ -1163,8 +1163,9 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     st.header("上から順に進めるだけ")
     st.caption("Comdesk・厚生局・Google Maps・HP/Email調査を順番に進めます。")
 
-    st.subheader("Step1：既存Comdesk CSV・Excelを取り込む")
-    import_ui_comdesk_step(store, write_disabled)
+    st.subheader("Step1：Comdesk最新データを取り込む")
+    st.caption("Comdeskの営業情報・HP評価を正本として扱います。医院情報CSVと営業履歴CSVは既存の取込形式に合わせて入力します。")
+    render_comdesk_step1_unified(store, write_disabled)
 
     st.subheader("現在のデータ状況")
     show_web_research_metrics(store, compact=True)
@@ -1403,10 +1404,9 @@ def simple_workflow_ui(store, demo, *, read_only=False):
         st.warning(f"Step6の内訳を確認できません：{exc}")
     render_comdesk_sync_export(store, demo)
 
-    st.subheader("Step7：UUID付与後のComdesk CSVを再取り込む")
-    st.caption("ComdeskでUUIDを付与したCSVをStep1と同じ既存取込処理で再取り込みできます。UUIDは既存値を上書きしません。")
-    import_ui_comdesk_step(store, write_disabled, key_prefix="simple_comdesk_reimport", button_label="UUID付与後CSVを再取り込む")
-    render_comdesk_clinic_sync(store, write_disabled)
+    st.subheader("Step7：UUID未付与医院へのComdesk UUID紐付け")
+    st.caption("Step6でUUIDが未付与の医院だけをCSV出力 → Comdeskに登録してUUIDを付与 → 付与後CSVを再取込します。既存UUIDを上書きしません。")
+    render_comdesk_uuid_only_reimport(store, write_disabled)
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1423,7 +1423,87 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     )
 
 
-def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録"):
+def render_comdesk_step1_unified(store, write_disabled):
+    """Single Step1 preview/apply action for paired Comdesk exports."""
+    st.caption("営業データCSVと医院情報CSVを1回の操作で照合し、営業履歴とHP評価をまとめて保存します。")
+    enabled = (
+        (os.environ.get("CLINIC_ENVIRONMENT") or "").casefold() == "development"
+        and (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED") or "").casefold()
+            in {"1", "true", "yes", "on"}
+        and bool(os.environ.get("CLINIC_COMDESK_SNAPSHOT_DEVELOPMENT_DB_NAME"))
+    )
+    if not enabled:
+        st.info("開発DBでのみ使用できます。専用設定・DB権限が確認できるまで取込を停止します。")
+        return
+    if write_disabled:
+        st.info("現在の画面は書き込み禁止モードです。")
+        return
+    repo = write_repositories_for(store).clinics
+    if not hasattr(repo, "preview_comdesk_step1"):
+        st.error("現在のDBバックエンドはStep1一括同期に対応していません。")
+        return
+    sales = st.file_uploader(
+        "営業データ（データ_YYYYMMDDHHMMSS.csv）",
+        type=["csv"], key="step1_unified_sales",
+    )
+    clinic = st.file_uploader(
+        "医院情報（エクスポート_YYYYMMDDHHMMSS.csv・HPランク含む）",
+        type=["csv"], key="step1_unified_clinic",
+    )
+    if not sales or not clinic:
+        return
+    fingerprint = hashlib.sha256(sales.getvalue() + b"\\0" + clinic.getvalue()).hexdigest()
+    try:
+        clinic_table = upload_table(clinic, "step1_unified_clinic")
+    except Exception as exc:
+        st.error(f"CSVを読み込めません：{exc}")
+        return
+    if st.button("営業情報・HPランクの差分を一括プレビュー",
+                 key="step1_unified_preview"):
+        try:
+            plan = repo.preview_comdesk_step1(
+                sales.getvalue(), clinic.getvalue(), sales.name, clinic.name,
+                clinic_table,
+            )
+            st.session_state["step1_unified_plan"] = {
+                "fingerprint": fingerprint, "plan": plan,
+            }
+        except Exception as exc:
+            st.session_state.pop("step1_unified_plan", None)
+            st.error(f"プレビューに失敗しました：{exc}")
+    saved = st.session_state.get("step1_unified_plan")
+    if not saved or saved["fingerprint"] != fingerprint:
+        return
+    plan = saved["plan"]
+    sales_summary = plan["sales"]
+    hp_plan = plan["rank"]
+    st.write(
+        f"営業状態：新規 {sales_summary['insert']:,}件／更新 {sales_summary['update']:,}件／"
+        f"変更なし {sales_summary['unchanged']:,}件／保留 {sales_summary['hold']:,}件"
+    )
+    st.write(
+        f"HP評価：更新候補 {hp_plan['item_counts']['hp_rank']:,}件／"
+        f"保留 {hp_plan['counts']['HOLD']:,}件"
+    )
+    if st.button("プレビュー内容を一括反映", type="primary",
+                 key="step1_unified_apply",
+                 disabled=sales_summary["insert"] + sales_summary["update"] +
+                     hp_plan["counts"]["AUTO_UPDATE"] == 0):
+        try:
+            result = repo.apply_comdesk_step1(
+                sales.getvalue(), clinic.getvalue(), sales.name, clinic.name,
+                clinic_table, plan,
+            )
+            st.success(
+                f"一括同期完了：営業 {result['sales'].get('updated', 0):,}件、"
+                f"HP評価 {result['rank'].get('updated', 0):,}件"
+            )
+            st.session_state.pop("step1_unified_plan", None)
+        except Exception as exc:
+            st.error(f"取込を中止しました（まとめてロールバック）：{exc}")
+
+
+def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録", show_extra_panels=True):
     upload = st.file_uploader("Comdesk CSV・Excel", type=["csv", "xlsx", "xls"], key=key_prefix+"_upload", disabled=write_disabled)
     if upload:
         table = upload_table(upload, key_prefix)
@@ -1460,8 +1540,66 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     # (checked at its own entry), so gating it on write_disabled as well
     # would make it dead code -- its own flag/operator/writer-connection
     # checks are the real, independent gate for that path.
-    render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
-    cloud_comdesk_import_ui(store, key_prefix=key_prefix)
+    if show_extra_panels:
+        render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
+        cloud_comdesk_import_ui(store, key_prefix=key_prefix)
+
+
+def render_comdesk_uuid_only_reimport(store, write_disabled):
+    """UUID-only upload. Never calls import_comdesk() or creates clinics."""
+    from src.services.comdesk_uuid_reimport import records_from_table
+
+    st.caption("医院名と電話番号に加え、医院名または住所が一致した既存医院のみ対象です。曖昧な行は確認待ちとなります。")
+    upload = st.file_uploader(
+        "ComdeskでUUID付与後のCSV・Excel",
+        type=["csv", "xlsx", "xls"],
+        key="step7_uuid_only_upload",
+        disabled=write_disabled,
+    )
+    if upload is None:
+        return
+    table = upload_table(upload, "step7_uuid_only")
+    fingerprint = hashlib.sha256(
+        json.dumps([table.headers, table.data.values.tolist()],
+                   ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+    if st.button("UUID未付与医院だけを照合（プレビュー）",
+                 key="step7_uuid_only_preview", disabled=write_disabled):
+        try:
+            repository = write_repositories_for(store).clinics
+            records_from_table(table)
+            plan = repository.preview_comdesk_uuid_only(table)
+            st.session_state["step7_uuid_only_plan"] = {
+                "fingerprint": fingerprint, "plan": plan,
+            }
+        except Exception as exc:
+            st.session_state.pop("step7_uuid_only_plan", None)
+            st.error(f"照合を停止しました：{exc}")
+            return
+    saved = st.session_state.get("step7_uuid_only_plan")
+    if not saved or saved.get("fingerprint") != fingerprint:
+        return
+    plan = saved["plan"]
+    updates = sum(item["status"] == "UPDATE" for item in plan)
+    holds = len(plan) - updates
+    st.write(f"UUID更新候補：{updates:,}件 ／ 要確認（自動更新しない）：{holds:,}件")
+    st.dataframe(pd.DataFrame([{
+        "CSV行": item["row_number"], "医院ID": item["clinic_id"],
+        "Comdesk UUID": item["uuid"], "判定": item["status"],
+        "理由": item["reason"],
+    } for item in plan]), hide_index=True, use_container_width=True)
+    if st.button("UUID更新候補だけをDBへ反映", type="primary",
+                 disabled=write_disabled or updates == 0, key="step7_uuid_only_apply"):
+        try:
+            repository = write_repositories_for(store).clinics
+            result = repository.apply_comdesk_uuid_only(table, plan)
+            if result.get("already_imported"):
+                st.info("同じCSVはすでに取込済みです。重複更新しません。")
+            else:
+                st.success(f"UUID付与：{result['updated']:,}件 ／ 保留：{result['held']:,}件")
+            st.session_state.pop("step7_uuid_only_plan", None)
+        except Exception as exc:
+            st.error(f"UUID付与を中断しました：{exc}")
 
 
 def render_comdesk_clinic_sync(store, write_disabled):

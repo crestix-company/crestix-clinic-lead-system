@@ -1416,6 +1416,60 @@ class SupabaseClinicWriteRepository:
             self._conn, sales_bytes, clinic_bytes, sales_filename, clinic_filename,
         )
 
+    def preview_comdesk_step1(self, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                              clinic_table):
+        """Preview paired CRM snapshot + authoritative HP ranks without writes."""
+        from src.services.comdesk_step1 import rank_only_table
+        from src.services.comdesk_sync import plan_sync
+        sales_summary = self.preview_comdesk_snapshot_pair(
+            sales_bytes, clinic_bytes, sales_name, clinic_name)
+        rank_plan = plan_sync(rank_only_table(clinic_table), self)
+        return {"sales": sales_summary, "rank": rank_plan}
+
+    def apply_comdesk_step1(self, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                            clinic_table, expected_preview):
+        """All-or-nothing snapshot and rank application on an approved development DB."""
+        from src.services.comdesk_snapshot_import import (
+            _ensure_development_import_enabled, _plan_pair, _summary,
+        )
+        from src.database.comdesk_snapshot_repository import persist_snapshot_batch
+        from src.services.comdesk_step1 import rank_only_table
+        from src.services.comdesk_sync import plan_sync
+        from src.services.store import digest
+
+        _ensure_development_import_enabled(self._conn)
+        self._conn.rollback()
+        rank_plan = plan_sync(rank_only_table(clinic_table), self)
+        if rank_plan != expected_preview["rank"]:
+            raise ValueError("HPランクのプレビュー結果が変更されました。再確認してください。")
+        with self._conn.transaction():
+            plans, sales_digest, clinic_digest, snapshot_at = _plan_pair(
+                self._conn, sales_bytes, clinic_bytes, sales_name, clinic_name,
+                lock_snapshots=True)
+            sales_summary = _summary(plans)
+            if sales_summary != expected_preview["sales"]:
+                raise ValueError("営業履歴のプレビュー結果が変更されました。再確認してください。")
+            supported_uuid = {p.comdesk_uuid for p in plans if p.action != "HOLD"}
+            changes = []
+            for row in rank_plan["rows"]:
+                if row["status"] != "AUTO_UPDATE" or "hp_rank" not in row["changes"]:
+                    continue
+                if row["comdesk_uuid"] not in supported_uuid:
+                    raise ValueError("営業側でHOLDとなった医院のHPランクは同期しません。")
+                changes.append({**row, "source_snapshot_at": snapshot_at})
+            # The snapshot history and the HP rank share one outer transaction.
+            sales_result = persist_snapshot_batch(
+                self._conn, plans, sales_file_sha256=sales_digest,
+                clinic_file_sha256=clinic_digest, source_snapshot_at=snapshot_at,
+            )
+            with self._conn.cursor() as cur:
+                cur.execute("RESET ROLE")
+            rank_result = self.apply_comdesk_sync(
+                changes,
+                digest(["step1_hp", snapshot_at, sales_digest, clinic_digest]),
+            ) if changes else {"updated": 0}
+        return {"sales": sales_result, "rank": rank_result}
+
     def import_comdesk_snapshot_pair(self, sales_bytes, clinic_bytes,
                                      sales_filename, clinic_filename):
         """Apply an explicitly enabled development snapshot import in one transaction."""
@@ -1516,10 +1570,6 @@ class SupabaseClinicWriteRepository:
                     for field, pair in item["changes"].items():
                         if field not in SUPPORTED_FIELDS:
                             raise ValueError("未対応項目が反映計画に含まれています。")
-                        if field == "hp_rank":
-                            cur.execute("SELECT 1 FROM provenance.manual_overrides WHERE clinic_id=%s AND field='hp_rank' LIMIT 1", (item["clinic_id"],))
-                            if cur.fetchone():
-                                raise ValueError("反映前にHPランクの手動確定値が登録されました。HOLDとして再確認してください。")
                         current = str((base.get("comdesk_unverified_email", "") if field == "email"
                                        else hours.get(field, original_by_header.get(source_hours[field], effective.get(field, base.get(field, "")))) if field in HOURS_FIELDS
                                        else row[1 if field == "hp_url" else 2]) or "").strip()
@@ -1538,6 +1588,27 @@ class SupabaseClinicWriteRepository:
                             hours[field] = pair["after"]
                             base["comdesk_sync_hours"] = effective["comdesk_sync_hours"] = hours
                         elif field == "hp_rank":
+                            if item.get("source_snapshot_at"):
+                                from datetime import datetime
+                                incoming_at = datetime.fromisoformat(
+                                    item["source_snapshot_at"].replace("Z", "+00:00"))
+                                previous_at = base.get("comdesk_hp_rank_snapshot_at")
+                                if previous_at:
+                                    previous_dt = datetime.fromisoformat(
+                                        str(previous_at).replace("Z", "+00:00"))
+                                    if incoming_at <= previous_dt:
+                                        raise ValueError(
+                                            "過去または同日時のComdesk CSVではHPランクを更新できません。")
+                                base["comdesk_hp_rank_snapshot_at"] = item["source_snapshot_at"]
+                                effective["comdesk_hp_rank_snapshot_at"] = item["source_snapshot_at"]
+                            # Comdesk is the approved HP-rank source of truth. Remove the
+                            # now-obsolete manual override only for this exact clinic/field,
+                            # so subsequent projection refreshes cannot resurrect its value.
+                            # The before/after values are kept in provenance.change_history.
+                            cur.execute(
+                                "DELETE FROM provenance.manual_overrides WHERE clinic_id=%s AND field='hp_rank'",
+                                (item["clinic_id"],),
+                            )
                             base["comdesk_sync_hp_rank"] = effective["comdesk_sync_hp_rank"] = pair["after"]
                             base[field] = effective[field] = pair["after"]
                         else:
@@ -1552,6 +1623,129 @@ class SupabaseClinicWriteRepository:
                 cur.execute("INSERT INTO provenance.import_batches(id,source,result_json,created_at) VALUES(%s,%s,%s,%s)",
                             (batch_id, "comdesk_sync", Jsonb(result), now()))
         return result
+
+    def _plan_comdesk_uuid_only_tx(self, cur, records):
+        """Read and match UUID-empty clinics; caller controls the transaction."""
+        from src.services.comdesk_uuid_reimport import build_uuid_only_plan, normalized
+        phone_keys = sorted({normalized(r["phone"], phone=True) for r in records
+                             if normalized(r["phone"], phone=True)})
+        uids = sorted({r["uuid"] for r in records if r["uuid"]})
+        candidates = {}
+        if phone_keys:
+            cur.execute(
+                "SELECT id,uuid,clinic_name,phone,address FROM public.clinics "
+                "WHERE merged_into IS NULL AND "
+                "regexp_replace(COALESCE(phone,''), '[^0-9]', '', 'g') = ANY(%s::text[])",
+                (phone_keys,),
+            )
+            for cid, uid, name, phone, address in cur.fetchall():
+                candidates.setdefault(normalized(phone, phone=True), []).append({
+                    "id": cid, "uuid": uid, "clinic_name": name,
+                    "phone": phone, "address": address,
+                })
+        existing = set()
+        if uids:
+            cur.execute("SELECT DISTINCT uuid FROM public.clinics WHERE uuid=ANY(%s::text[])", (uids,))
+            existing.update(str(row[0]) for row in cur.fetchall())
+            if self._common_identity_schema_available(cur):
+                cur.execute(
+                    "SELECT DISTINCT comdesk_uuid FROM public.sales_entity_comdesk_identity "
+                    "WHERE comdesk_uuid=ANY(%s::text[])", (uids,),
+                )
+                existing.update(str(row[0]) for row in cur.fetchall())
+        plan = build_uuid_only_plan(records, candidates, existing)
+        counts = {}
+        for row in plan:
+            if row["status"] == "UPDATE":
+                counts[row["clinic_id"]] = counts.get(row["clinic_id"], 0) + 1
+        for row in plan:
+            if row["status"] == "UPDATE" and counts[row["clinic_id"]] > 1:
+                row.update(status="HOLD", clinic_id=None, reason="同一医院に複数のUUID候補があります")
+        return plan
+
+    def preview_comdesk_uuid_only(self, table):
+        from src.services.comdesk_uuid_reimport import records_from_table
+        records = records_from_table(table)
+        try:
+            with self._conn.cursor() as cur:
+                plan = self._plan_comdesk_uuid_only_tx(cur, records)
+            return plan
+        finally:
+            self._conn.rollback()
+
+    def apply_comdesk_uuid_only(self, table, expected_plan):
+        """Assign Comdesk-provided UUID to existing UUID-empty clinics only."""
+        from src.services.comdesk_uuid_reimport import records_from_table, normalized
+        from src.services.store import digest
+        from psycopg.types.json import Jsonb
+        records = records_from_table(table)
+        batch_id = "comdesk_uuid_only:" + digest([table.headers, table.data.values.tolist()])
+        with self._conn.transaction():
+            with self._conn.cursor() as cur:
+                cur.execute("SELECT result_json FROM provenance.import_batches WHERE id=%s FOR UPDATE", (batch_id,))
+                existing_batch = cur.fetchone()
+                if existing_batch:
+                    return {"already_imported": True, **existing_batch[0]}
+                plan = self._plan_comdesk_uuid_only_tx(cur, records)
+                if plan != expected_plan:
+                    raise ValueError("UUID照合結果がプレビュー後に変わりました。再確認してください。")
+                updated = 0
+                linked = []
+                for row in plan:
+                    if row["status"] != "UPDATE":
+                        continue
+                    cid, uid = row["clinic_id"], row["uuid"]
+                    cur.execute(
+                        "SELECT uuid,clinic_name,phone,address FROM public.clinics "
+                        "WHERE id=%s AND merged_into IS NULL FOR UPDATE", (cid,),
+                    )
+                    current = cur.fetchone()
+                    if not current or str(current[0] or "").strip():
+                        raise ValueError("既存UUIDが変更されました。再確認してください。")
+                    if normalized(current[2], phone=True) != normalized(row["phone"], phone=True):
+                        raise ValueError("電話番号の照合結果が変更されました。")
+                    if not (
+                        normalized(current[1]) == normalized(row["clinic_name"])
+                        or (normalized(row["address"]) and normalized(current[3]) == normalized(row["address"]))
+                    ):
+                        raise ValueError("医院名と住所の照合結果が変更されました。")
+                    # Serialise concurrent imports assigning the same UUID.
+                    cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", ("comdesk_uuid_only:" + uid,))
+                    cur.execute("SELECT id FROM public.clinics WHERE uuid=%s LIMIT 1", (uid,))
+                    if cur.fetchone():
+                        raise ValueError("Comdesk UUIDはすでに別の医院で使われています。")
+                    if self._common_identity_schema_available(cur):
+                        cur.execute(
+                            "SELECT common_clinic_id FROM public.sales_entity_comdesk_identity "
+                            "WHERE comdesk_uuid=%s LIMIT 1", (uid,),
+                        )
+                        if cur.fetchone():
+                            raise ValueError("Comdesk UUIDはすでに共通医院IDへ紐付いています。")
+                    cur.execute(
+                        "UPDATE public.clinics SET uuid=%s,last_seen_at=%s "
+                        "WHERE id=%s AND COALESCE(btrim(uuid),'')=''",
+                        (uid, now(), cid),
+                    )
+                    if cur.rowcount != 1:
+                        raise ValueError("UUID更新対象が変わりました。処理を取り消しました。")
+                    cur.execute(
+                        "INSERT INTO provenance.change_history"
+                        "(clinic_id,action,before_json,after_json,note,created_at) "
+                        "VALUES(%s,%s,%s,%s,%s,%s)",
+                        (cid, "Comdesk UUID付与", dumps({"uuid": ""}), dumps({"uuid": uid}),
+                         "Step7 UUID-only reimport", now()),
+                    )
+                    linked.append(cid)
+                    updated += 1
+                if linked:
+                    self._ensure_comdesk_common_identities(cur, linked)
+                result = {"updated": updated, "held": len(plan) - updated}
+                cur.execute(
+                    "INSERT INTO provenance.import_batches(id,source,result_json,created_at) "
+                    "VALUES(%s,%s,%s,%s)",
+                    (batch_id, "comdesk_uuid_only", Jsonb(result), now()),
+                )
+                return result
 
     def import_comdesk(self, table, mapping=None):
         """Import existing Comdesk cases with canonical matching and batched PostgreSQL I/O.
