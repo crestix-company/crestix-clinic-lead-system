@@ -1516,10 +1516,6 @@ class SupabaseClinicWriteRepository:
                     for field, pair in item["changes"].items():
                         if field not in SUPPORTED_FIELDS:
                             raise ValueError("未対応項目が反映計画に含まれています。")
-                        if field == "hp_rank":
-                            cur.execute("SELECT 1 FROM provenance.manual_overrides WHERE clinic_id=%s AND field='hp_rank' LIMIT 1", (item["clinic_id"],))
-                            if cur.fetchone():
-                                raise ValueError("反映前にHPランクの手動確定値が登録されました。HOLDとして再確認してください。")
                         current = str((base.get("comdesk_unverified_email", "") if field == "email"
                                        else hours.get(field, original_by_header.get(source_hours[field], effective.get(field, base.get(field, "")))) if field in HOURS_FIELDS
                                        else row[1 if field == "hp_url" else 2]) or "").strip()
@@ -1538,6 +1534,14 @@ class SupabaseClinicWriteRepository:
                             hours[field] = pair["after"]
                             base["comdesk_sync_hours"] = effective["comdesk_sync_hours"] = hours
                         elif field == "hp_rank":
+                            # Comdesk is the approved HP-rank source of truth. Remove the
+                            # now-obsolete manual override only for this exact clinic/field,
+                            # so subsequent projection refreshes cannot resurrect its value.
+                            # The before/after values are kept in provenance.change_history.
+                            cur.execute(
+                                "DELETE FROM provenance.manual_overrides WHERE clinic_id=%s AND field='hp_rank'",
+                                (item["clinic_id"],),
+                            )
                             base["comdesk_sync_hp_rank"] = effective["comdesk_sync_hp_rank"] = pair["after"]
                             base[field] = effective[field] = pair["after"]
                         else:
