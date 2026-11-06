@@ -1165,8 +1165,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
     st.subheader("Step1：Comdesk最新データを取り込む")
     st.caption("Comdeskの営業情報・HP評価を正本として扱います。医院情報CSVと営業履歴CSVは既存の取込形式に合わせて入力します。")
-    import_ui_comdesk_step(store, write_disabled)
-    render_comdesk_clinic_sync(store, write_disabled)
+    render_comdesk_step1_unified(store, write_disabled)
 
     st.subheader("現在のデータ状況")
     show_web_research_metrics(store, compact=True)
@@ -1422,6 +1421,86 @@ def simple_workflow_ui(store, demo, *, read_only=False):
     st.caption(
         "営業対象・Comdesk出力は従来どおり「営業対象・出力」から利用できます。"
     )
+
+
+def render_comdesk_step1_unified(store, write_disabled):
+    """Single Step1 preview/apply action for paired Comdesk exports."""
+    st.caption("営業データCSVと医院情報CSVを1回の操作で照合し、営業履歴とHP評価をまとめて保存します。")
+    enabled = (
+        (os.environ.get("CLINIC_ENVIRONMENT") or "").casefold() == "development"
+        and (os.environ.get("CLINIC_COMDESK_SNAPSHOT_DIFF_ENABLED") or "").casefold()
+            in {"1", "true", "yes", "on"}
+        and bool(os.environ.get("CLINIC_COMDESK_SNAPSHOT_DEVELOPMENT_DB_NAME"))
+    )
+    if not enabled:
+        st.info("開発DBでのみ使用できます。専用設定・DB権限が確認できるまで取込を停止します。")
+        return
+    if write_disabled:
+        st.info("現在の画面は書き込み禁止モードです。")
+        return
+    repo = write_repositories_for(store).clinics
+    if not hasattr(repo, "preview_comdesk_step1"):
+        st.error("現在のDBバックエンドはStep1一括同期に対応していません。")
+        return
+    sales = st.file_uploader(
+        "営業データ（データ_YYYYMMDDHHMMSS.csv）",
+        type=["csv"], key="step1_unified_sales",
+    )
+    clinic = st.file_uploader(
+        "医院情報（エクスポート_YYYYMMDDHHMMSS.csv・HPランク含む）",
+        type=["csv"], key="step1_unified_clinic",
+    )
+    if not sales or not clinic:
+        return
+    fingerprint = hashlib.sha256(sales.getvalue() + b"\\0" + clinic.getvalue()).hexdigest()
+    try:
+        clinic_table = upload_table(clinic, "step1_unified_clinic")
+    except Exception as exc:
+        st.error(f"CSVを読み込めません：{exc}")
+        return
+    if st.button("営業情報・HPランクの差分を一括プレビュー",
+                 key="step1_unified_preview"):
+        try:
+            plan = repo.preview_comdesk_step1(
+                sales.getvalue(), clinic.getvalue(), sales.name, clinic.name,
+                clinic_table,
+            )
+            st.session_state["step1_unified_plan"] = {
+                "fingerprint": fingerprint, "plan": plan,
+            }
+        except Exception as exc:
+            st.session_state.pop("step1_unified_plan", None)
+            st.error(f"プレビューに失敗しました：{exc}")
+    saved = st.session_state.get("step1_unified_plan")
+    if not saved or saved["fingerprint"] != fingerprint:
+        return
+    plan = saved["plan"]
+    sales_summary = plan["sales"]
+    hp_plan = plan["rank"]
+    st.write(
+        f"営業状態：新規 {sales_summary['insert']:,}件／更新 {sales_summary['update']:,}件／"
+        f"変更なし {sales_summary['unchanged']:,}件／保留 {sales_summary['hold']:,}件"
+    )
+    st.write(
+        f"HP評価：更新候補 {hp_plan['item_counts']['hp_rank']:,}件／"
+        f"保留 {hp_plan['counts']['HOLD']:,}件"
+    )
+    if st.button("プレビュー内容を一括反映", type="primary",
+                 key="step1_unified_apply",
+                 disabled=sales_summary["insert"] + sales_summary["update"] +
+                     hp_plan["counts"]["AUTO_UPDATE"] == 0):
+        try:
+            result = repo.apply_comdesk_step1(
+                sales.getvalue(), clinic.getvalue(), sales.name, clinic.name,
+                clinic_table, plan,
+            )
+            st.success(
+                f"一括同期完了：営業 {result['sales'].get('updated', 0):,}件、"
+                f"HP評価 {result['rank'].get('updated', 0):,}件"
+            )
+            st.session_state.pop("step1_unified_plan", None)
+        except Exception as exc:
+            st.error(f"取込を中止しました（まとめてロールバック）：{exc}")
 
 
 def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_import", button_label="既存Comdesk案件を登録", show_extra_panels=True):
