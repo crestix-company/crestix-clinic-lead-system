@@ -1407,10 +1407,7 @@ def simple_workflow_ui(store, demo, *, read_only=False):
 
     st.subheader("Step7：UUID未付与医院へのComdesk UUID紐付け")
     st.caption("Step6でUUIDが未付与の医院だけをCSV出力 → Comdeskに登録してUUIDを付与 → 付与後CSVを再取込します。既存UUIDを上書きしません。")
-    import_ui_comdesk_step(
-        store, write_disabled, key_prefix="simple_comdesk_reimport",
-        button_label="UUID付与後CSVを再取り込む", show_extra_panels=False,
-    )
+    render_comdesk_uuid_only_reimport(store, write_disabled)
 
     with st.expander("HP調査の詳細（通常は触らなくてOK）", expanded=False):
         st.write("Google MapsでHP取得済み医院だけを直接調査します。")
@@ -1467,6 +1464,63 @@ def import_ui_comdesk_step(store, write_disabled, *, key_prefix="simple_comdesk_
     if show_extra_panels:
         render_comdesk_snapshot_diff_import(store, write_disabled, key_prefix=key_prefix)
         cloud_comdesk_import_ui(store, key_prefix=key_prefix)
+
+
+def render_comdesk_uuid_only_reimport(store, write_disabled):
+    """UUID-only upload. Never calls import_comdesk() or creates clinics."""
+    from src.services.comdesk_uuid_reimport import records_from_table
+
+    st.caption("医院名と電話番号に加え、医院名または住所が一致した既存医院のみ対象です。曖昧な行は確認待ちとなります。")
+    upload = st.file_uploader(
+        "ComdeskでUUID付与後のCSV・Excel",
+        type=["csv", "xlsx", "xls"],
+        key="step7_uuid_only_upload",
+        disabled=write_disabled,
+    )
+    if upload is None:
+        return
+    table = upload_table(upload, "step7_uuid_only")
+    fingerprint = hashlib.sha256(
+        json.dumps([table.headers, table.data.values.tolist()],
+                   ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()
+    if st.button("UUID未付与医院だけを照合（プレビュー）",
+                 key="step7_uuid_only_preview", disabled=write_disabled):
+        try:
+            repository = write_repositories_for(store).clinics
+            records_from_table(table)
+            plan = repository.preview_comdesk_uuid_only(table)
+            st.session_state["step7_uuid_only_plan"] = {
+                "fingerprint": fingerprint, "plan": plan,
+            }
+        except Exception as exc:
+            st.session_state.pop("step7_uuid_only_plan", None)
+            st.error(f"照合を停止しました：{exc}")
+            return
+    saved = st.session_state.get("step7_uuid_only_plan")
+    if not saved or saved.get("fingerprint") != fingerprint:
+        return
+    plan = saved["plan"]
+    updates = sum(item["status"] == "UPDATE" for item in plan)
+    holds = len(plan) - updates
+    st.write(f"UUID更新候補：{updates:,}件 ／ 要確認（自動更新しない）：{holds:,}件")
+    st.dataframe(pd.DataFrame([{
+        "CSV行": item["row_number"], "医院ID": item["clinic_id"],
+        "Comdesk UUID": item["uuid"], "判定": item["status"],
+        "理由": item["reason"],
+    } for item in plan]), hide_index=True, use_container_width=True)
+    if st.button("UUID更新候補だけをDBへ反映", type="primary",
+                 disabled=write_disabled or updates == 0, key="step7_uuid_only_apply"):
+        try:
+            repository = write_repositories_for(store).clinics
+            result = repository.apply_comdesk_uuid_only(table, plan)
+            if result.get("already_imported"):
+                st.info("同じCSVはすでに取込済みです。重複更新しません。")
+            else:
+                st.success(f"UUID付与：{result['updated']:,}件 ／ 保留：{result['held']:,}件")
+            st.session_state.pop("step7_uuid_only_plan", None)
+        except Exception as exc:
+            st.error(f"UUID付与を中断しました：{exc}")
 
 
 def render_comdesk_clinic_sync(store, write_disabled):
